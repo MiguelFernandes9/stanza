@@ -1,0 +1,11 @@
+node_modules/
+dist/
+out/
+*.log
+.DS_Store
+.env
+
+# Claude/agent machinery never goes in git
+.claude/
+CLAUDE.local.md
+CLAUDE.md
