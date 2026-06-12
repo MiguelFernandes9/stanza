@@ -1,0 +1,99 @@
+/* ============================================================
+   Stanza — Color system
+   Ink on warm parchment, with a single Claude-clay accent and calm
+   "printer's ink" diff semantics. Light is the only theme — this is
+   a paper tool. Base ramps first, semantic aliases at the bottom
+   (reference the aliases in components).
+   ============================================================ */
+
+:root {
+  /* ---- Ink ramp: warm near-black → warm gray ---- */
+  --ink-900: #211e19;  /* primary text */
+  --ink-800: #322d26;  /* body text */
+  --ink-700: #463f35;  /* strong text on tint */
+  --ink-600: #5c5345;
+  --ink-500: #756a59;  /* secondary text */
+  --ink-400: #968b78;  /* muted / icons */
+  --ink-300: #b3a893;  /* placeholder / disabled */
+  --ink-200: #cfc6b5;  /* faintest text / hairline on ink */
+
+  /* ---- Paper ramp: canvas → page (ascending as it lifts) ---- */
+  --paper-sunken: #ece6da;  /* wells, gutters */
+  --paper-base:   #f4efe6;  /* the canvas behind everything */
+  --paper-0:      #f8f4ec;  /* panels / chrome */
+  --paper-1:      #fcfaf5;  /* raised surfaces, popovers */
+  --paper-2:      #ffffff;  /* the page — PDF, cards, inputs */
+
+  /* ---- Clay: the one accent (terracotta) ---- */
+  --clay-50:  #faf0ea;
+  --clay-100: #f4e1d6;
+  --clay-200: #e8c3ae;
+  --clay-300: #dca384;
+  --clay-400: #d07e58;
+  --clay-500: #c25c39;  /* primary action, selection, brand mid-line */
+  --clay-600: #a94b2e;  /* hover */
+  --clay-700: #8a3c25;  /* press */
+
+  /* ---- Scholarly ink-blue: quiet secondary (links, .bib, commands) ---- */
+  --blue-50:  #eef3f8;
+  --blue-100: #dce8f1;
+  --blue-500: #3d6e9c;
+  --blue-600: #2f587e;
+  --blue-700: #244461;
+
+  /* ---- Diff semantics — muted printer's ink, paper-compatible ---- */
+  --add-600: #3b7a55;  /* addition text / +count */
+  --add-700: #2d5e41;
+  --add-bg:  #e7f0e9;  /* added-line wash */
+  --add-line:#b6d6c1;  /* added gutter edge */
+
+  --del-600: #b23a3a;  /* deletion text / −count */
+  --del-700: #8e2c2c;
+  --del-bg:  #f6e5e2;  /* removed-line wash */
+  --del-line:#e3bdb6;  /* removed gutter edge */
+
+  --warn-500: #c0892e;
+  --warn-600: #9a6a1c;
+  --warn-bg:  #f6ecd6;
+
+  /* ---- Warm hairlines ---- */
+  --line:        #e1d9c9;  /* default border */
+  --line-strong: #d2c7b2;  /* emphasized border */
+  --line-ink:    #b9ad96;  /* hover/active border */
+
+  /* ============================================================
+     Semantic aliases — reference THESE in components
+     ============================================================ */
+
+  /* Surfaces */
+  --surface-canvas:  var(--paper-base);  /* body background */
+  --surface-app:     var(--paper-0);     /* chrome: toolbars, headers */
+  --surface-card:    var(--paper-2);     /* page / input / card */
+  --surface-well:    var(--paper-sunken);/* inset wells, code gutter */
+  --surface-overlay: var(--paper-1);     /* popovers, toasts, menus */
+
+  /* Borders */
+  --border-faint:   #ece5d7;
+  --border-default: var(--line);
+  --border-strong:  var(--line-strong);
+
+  /* Text */
+  --text-strong:    var(--ink-900);
+  --text-body:      var(--ink-800);
+  --text-muted:     var(--ink-500);
+  --text-faint:     var(--ink-400);
+  --text-disabled:  var(--ink-300);
+  --text-link:      var(--blue-600);
+  --text-on-accent: #fbf3ee;
+  --text-select:    rgba(61, 110, 156, 0.20);  /* native ::selection */
+
+  /* Accent / interactive */
+  --accent:      var(--clay-500);
+  --accent-ring: rgba(194, 92, 57, 0.30);
+
+  /* Block interaction in the PDF pane */
+  --select-fill: rgba(194, 92, 57, 0.13);
+  --select-edge: rgba(194, 92, 57, 0.55);
+  --hover-fill:  rgba(33, 30, 25, 0.045);
+  --hover-edge:  rgba(33, 30, 25, 0.12);
+}

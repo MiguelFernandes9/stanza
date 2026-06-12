@@ -1,0 +1,11 @@
+/* ============================================================
+   Stanza Design System — global entry point (port of design/styles.css).
+   Consumers import THIS file only. Keep it a list of @imports.
+   Order matters: tokens → elevation (uses tokens) → base (reset).
+   ============================================================ */
+@import "./tokens/fonts.css";
+@import "./tokens/colors.css";
+@import "./tokens/typography.css";
+@import "./tokens/spacing.css";
+@import "./tokens/elevation.css";
+@import "./tokens/base.css";

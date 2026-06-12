@@ -1,0 +1,44 @@
+/* ============================================================
+   Stanza — Typography
+   Three voices:
+     serif (Newsreader)     → the paper: display, headings, prose,
+                               rendered-PDF body  (--font-paper too)
+     sans  (Hanken Grotesk) → the chrome: labels, controls, UI body
+     mono  (JetBrains Mono) → the source: .tex, diffs, paths, spans
+   Scale is a ~1.20 minor third; UI body sits at 13–14px (desktop
+   density), paper body reads at ~1.62 line-height.
+   ============================================================ */
+
+:root {
+  /* ---- Families ---- */
+  --font-serif: "Newsreader", "Iowan Old Style", Georgia, serif;
+  --font-paper: "Newsreader", "Iowan Old Style", Georgia, serif;
+  --font-sans:  "Hanken Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono:  "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* ---- Weights ---- */
+  --weight-regular:  400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+  --weight-bold:     700;
+
+  /* ---- Type scale (rem; 16px root) ---- */
+  --text-2xs: 0.6875rem;  /* 11 — micro labels, gutter numbers */
+  --text-xs:  0.75rem;    /* 12 — eyebrows, captions, counts */
+  --text-sm:  0.8125rem;  /* 13 — secondary UI */
+  --text-base:0.875rem;   /* 14 — default UI text */
+  --text-md:  1rem;       /* 16 — paper body, large inputs */
+  --text-lg:  1.1875rem;  /* 19 — h3 */
+  --text-xl:  1.4375rem;  /* 23 — h2 */
+  --text-2xl: 1.75rem;    /* 28 — h1 */
+  --text-3xl: 2.5rem;     /* 40 — display / brand */
+
+  /* ---- Line-height ---- */
+  --leading-tight:   1.16;  /* headings */
+  --leading-normal:  1.5;   /* UI body */
+  --leading-relaxed: 1.62;  /* paper / reading */
+
+  /* ---- Letter-spacing ---- */
+  --tracking-tight: -0.011em;  /* display & headings */
+  --tracking-caps:  0.08em;    /* uppercase eyebrow labels */
+}
