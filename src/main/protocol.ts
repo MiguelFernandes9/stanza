@@ -12,7 +12,9 @@ export function registerDocScheme(): void {
   protocol.registerSchemesAsPrivileged([
     {
       scheme: DOC_SCHEME,
-      privileges: { supportFetchAPI: true, stream: true }
+      // corsEnabled: pdf.js fetches via XHR — without it the request is
+      // CORS-blocked in the built app (manager live-gate finding, PR #12).
+      privileges: { supportFetchAPI: true, stream: true, corsEnabled: true }
     }
   ])
 }
