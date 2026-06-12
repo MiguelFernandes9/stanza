@@ -114,6 +114,33 @@ describe('taskReducer — lifecycle', () => {
   })
 })
 
+describe('taskReducer — restore-proposal (crash recovery)', () => {
+  it('creates an unanchored review task for an unknown opId', () => {
+    const s = run(initialTaskState, { type: 'restore-proposal', proposal })
+    expect(s.tasks).toHaveLength(1)
+    expect(s.tasks[0]).toMatchObject({
+      phase: 'review',
+      blockIds: [],
+      opId: 'op-1',
+      instruction: 'tighten'
+    })
+    expect(s.tasks[0].proposal).toEqual(proposal)
+  })
+
+  it('attaches to an existing task with the same opId instead of duplicating', () => {
+    let s = run(
+      initialTaskState,
+      { type: 'toggle-block', ids: ['p1'], additive: false },
+      { type: 'update-instruction', taskId: 1, instruction: 'x' },
+      { type: 'submit', taskId: 1 },
+      { type: 'op-started', taskId: 1, opId: 'op-1' }
+    )
+    s = run(s, { type: 'restore-proposal', proposal })
+    expect(s.tasks).toHaveLength(1)
+    expect(s.tasks[0].phase).toBe('review')
+  })
+})
+
 describe('taskReducer — locks', () => {
   it('lockedBlockIds covers busy and review tasks only', () => {
     let s = run(
