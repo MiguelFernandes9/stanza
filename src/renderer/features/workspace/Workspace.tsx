@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useReducer, useState } from 'react'
 import type { JSX } from 'react'
+import { Toast } from '@renderer/components'
 import { client } from '@renderer/lib/client'
 import type { BlockNode } from '@shared/blocks/types'
 import type { CommitInfo, DocumentInfo, FileEntry } from '@shared/ipc'
@@ -55,7 +56,14 @@ export function Workspace({ doc }: Props): JSX.Element {
   const [sourceOpen, setSourceOpen] = useState(false)
   const [chatOpen, setChatOpen] = useState(false)
   const [compile, setCompile] = useState<CompileInfo>({ state: 'idle', errors: 0, warnings: 0 })
+  const [toast, setToast] = useState<{ title: string; message: string; tone: 'danger' | 'success' } | null>(null)
   const [state, dispatch] = useReducer(taskReducer, initialTaskState)
+
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(null), 6000)
+    return () => clearTimeout(t)
+  }, [toast])
 
   const loadHistory = useCallback(() => {
     void client.documentHistory().then(setHistory, () => setHistory([]))
@@ -124,7 +132,16 @@ export function Workspace({ doc }: Props): JSX.Element {
     const opId = task?.proposal?.opId ?? task?.opId
     if (!opId) return
     void client.reviewResolve({ opId, accept }).then(
-      () => {
+      (resolution) => {
+        if (resolution.conflicts && resolution.conflicts.length > 0) {
+          // FD5.4: merge conflicted — proposal stays pending, surface the files.
+          setToast({
+            title: 'Accept failed — merge conflict',
+            message: `Conflicting files: ${resolution.conflicts.join(', ')}. The proposal is still pending.`,
+            tone: 'danger'
+          })
+          return
+        }
         dispatch({ type: 'resolve', taskId })
         if (accept) {
           runCompile()
@@ -182,6 +199,11 @@ export function Workspace({ doc }: Props): JSX.Element {
         />
         {chatOpen && <PanePlaceholder eyebrow="Assistant" note="Session history lands with FD6" width={428} />}
       </div>
+      {toast && (
+        <div style={{ position: 'fixed', top: 50, right: 16, zIndex: 120 }}>
+          <Toast title={toast.title} message={toast.message} tone={toast.tone} onDismiss={() => setToast(null)} />
+        </div>
+      )}
     </div>
   )
 }
