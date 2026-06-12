@@ -7,6 +7,7 @@ import type {
   RecentProject,
   ReviewProposal
 } from '../../shared/ipc'
+import type { BlockNode } from '../../shared/blocks/types'
 import type { StanzaClient } from './ipc'
 
 /** In-memory stand-in for the IPC client while backend handlers are stubs.
@@ -46,6 +47,48 @@ const MOCK_HISTORY: CommitInfo[] = [
   { subject: 'claude: tighten the abstract', iso: '2026-06-12T18:02:00Z', kind: 'claude' },
   { subject: 'wip: manual edits', iso: '2026-06-12T17:40:00Z', kind: 'wip' },
   { subject: 'Initial import', iso: '2026-06-11T10:00:00Z', kind: 'other' }
+]
+
+const span = (startLine: number, endLine: number): { file: string; startLine: number; endLine: number } => ({
+  file: 'main.tex',
+  startLine,
+  endLine
+})
+
+export const MOCK_BLOCKS: BlockNode[] = [
+  { id: 'preamble#a1f2', kind: 'preamble', span: span(1, 12), children: [] },
+  {
+    id: 'sec1#b3c4',
+    kind: 'section',
+    name: 'Introduction',
+    span: span(14, 40),
+    children: [
+      { id: 'sec1/par1#c5d6', kind: 'paragraph', span: span(16, 23), children: [] },
+      { id: 'sec1/par2#d7e8', kind: 'paragraph', span: span(25, 33), children: [] },
+      { id: 'sec1/eq1#e9f0', kind: 'environment', name: 'equation', span: span(35, 40), children: [] }
+    ]
+  },
+  {
+    id: 'sec2#f1a2',
+    kind: 'section',
+    name: 'Method',
+    span: span(42, 68),
+    children: [
+      { id: 'sec2/par1#a3b4', kind: 'paragraph', span: span(44, 52), children: [] },
+      { id: 'sec2/fig1#b5c6', kind: 'environment', name: 'figure', span: span(54, 60), children: [] },
+      { id: 'sec2/par2#c7d8', kind: 'paragraph', span: span(62, 68), children: [] }
+    ]
+  },
+  {
+    id: 'sec3#d9e0',
+    kind: 'section',
+    name: 'Results',
+    span: span(70, 92),
+    children: [
+      { id: 'sec3/par1#e1f2', kind: 'paragraph', span: span(72, 80), children: [] },
+      { id: 'sec3/par2#f3a4', kind: 'paragraph', span: span(82, 92), children: [] }
+    ]
+  }
 ]
 
 const PRIME_DETAILS: Record<PrimeStep['step'], string> = {
@@ -91,7 +134,7 @@ export const mockClient: StanzaClient = {
     { relPath: 'figs/plot.pdf', kind: 'image' as const },
     { relPath: 'style/thesis.sty', kind: 'style' as const }
   ],
-  documentBlocks: async () => [],
+  documentBlocks: async () => MOCK_BLOCKS,
   compileRun: async () => {
     compileEmitter.emit('running')
     await sleep(900)
