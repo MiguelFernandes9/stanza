@@ -143,12 +143,32 @@ export const mockClient: StanzaClient = {
   },
   synctexInverse: async () => null,
   synctexForward: async () => [],
-  claudeRun: async () => {
+  claudeRun: async (req) => {
     const opId = `mock-${Math.random().toString(36).slice(2, 8)}`
     claudeEmitter.emit({ opId, state: 'running' })
-    await sleep(1600)
+    await sleep(1800)
     claudeEmitter.emit({ opId, state: 'done' })
-    return { opId, note: 'Mocked: tightened the paragraph and fixed two awkward phrasings.', proposal: null }
+    const target = req.spans[0] ?? { file: 'main.tex', startLine: 1, endLine: 3 }
+    const proposal: ReviewProposal = {
+      opId,
+      instruction: req.instruction,
+      branch: `stanza/op-${opId}`,
+      files: [target.file],
+      outsideSpan: [],
+      diff: [
+        `@@ -${target.startLine},3 +${target.startLine},2 @@`,
+        '-Block-addressable editing treats a manuscript as a tree of structural units',
+        '-rather than a stream of characters, which the prior draft stated twice.',
+        '+Block-addressable editing treats a manuscript as a tree of structural units.',
+        ' Each unit carries its source span, so an instruction can be scoped precisely.'
+      ].join('\n')
+    }
+    proposalEmitter.emit(proposal)
+    return {
+      opId,
+      note: 'Tightened the passage: merged the duplicated opening, kept the span citation intact.',
+      proposal
+    }
   },
   claudeHistory: async () => [],
   reviewResolve: async () => ({ committed: true, commitSubject: 'claude: mocked accept' }),

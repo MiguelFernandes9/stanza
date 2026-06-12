@@ -1,8 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useReducer, useState } from 'react'
 import type { JSX } from 'react'
 import { client } from '@renderer/lib/client'
 import type { BlockNode } from '@shared/blocks/types'
 import type { CommitInfo, DocumentInfo, FileEntry } from '@shared/ipc'
+import { PaperPane } from '../paper/PaperPane'
+import { expandIds, flattenBlocks, taskSpans } from '../paper/paperModel'
+import { initialTaskState, taskReducer } from '../tasks/taskStore'
 import { Sidebar } from './Sidebar'
 import { TitleBar } from './TitleBar'
 import type { CompileInfo } from './TitleBar'
@@ -11,19 +14,19 @@ interface Props {
   doc: DocumentInfo
 }
 
-function PanePlaceholder({ eyebrow, note, width }: { eyebrow: string; note: string; width?: number }): JSX.Element {
+function PanePlaceholder({ eyebrow, note, width }: { eyebrow: string; note: string; width: number }): JSX.Element {
   return (
     <section
       style={{
-        width: width ?? 'auto',
-        flex: width ? '0 0 auto' : 1,
+        width,
+        flex: '0 0 auto',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
         gap: 6,
-        background: width ? 'var(--surface-app)' : 'var(--surface-canvas)',
-        borderLeft: width ? '1px solid var(--border-default)' : 'none',
+        background: 'var(--surface-app)',
+        borderLeft: '1px solid var(--border-default)',
         minWidth: 0
       }}
     >
@@ -42,23 +45,27 @@ function PanePlaceholder({ eyebrow, note, width }: { eyebrow: string; note: stri
   )
 }
 
-/** Workspace chrome — design §2: TitleBar, 240px sidebar, panes.
- *  The paper pane (FD4), source editor (F4) and chat pane (FD6) plug into
- *  the placeholders here. ⌘R compile · ⌘E source · ⌘J assistant. */
+/** Workspace — design §2: TitleBar, sidebar, paper pane with the margin-rail
+ *  edit loop (FD4). Source editor (F4) and chat pane (FD6) still plug into
+ *  placeholders. ⌘R compile · ⌘E source · ⌘J assistant. */
 export function Workspace({ doc }: Props): JSX.Element {
   const [files, setFiles] = useState<FileEntry[]>([])
   const [blocks, setBlocks] = useState<BlockNode[]>([])
   const [history, setHistory] = useState<CommitInfo[]>([])
-  const [activeBlock, setActiveBlock] = useState<string | null>(null)
   const [sourceOpen, setSourceOpen] = useState(false)
   const [chatOpen, setChatOpen] = useState(false)
   const [compile, setCompile] = useState<CompileInfo>({ state: 'idle', errors: 0, warnings: 0 })
+  const [state, dispatch] = useReducer(taskReducer, initialTaskState)
+
+  const loadHistory = useCallback(() => {
+    void client.documentHistory().then(setHistory, () => setHistory([]))
+  }, [])
 
   useEffect(() => {
     void client.documentFiles().then(setFiles, () => setFiles([]))
     void client.documentBlocks(doc.mainFile).then(setBlocks, () => setBlocks([]))
-    void client.documentHistory().then(setHistory, () => setHistory([]))
-  }, [doc])
+    loadHistory()
+  }, [doc, loadHistory])
 
   useEffect(
     () =>
@@ -95,7 +102,42 @@ export function Workspace({ doc }: Props): JSX.Element {
     return () => window.removeEventListener('keydown', onKey)
   }, [runCompile])
 
+  const pageBlocks = flattenBlocks(blocks)
+
+  const submitTask = (taskId: number): void => {
+    const task = state.tasks.find((t) => t.id === taskId)
+    if (!task || !task.instruction.trim()) return
+    dispatch({ type: 'submit', taskId })
+    void client.claudeRun({ instruction: task.instruction.trim(), spans: taskSpans(task.blockIds, blocks) }).then(
+      (res) => {
+        dispatch({ type: 'op-started', taskId, opId: res.opId })
+        if (res.proposal) dispatch({ type: 'proposal', taskId, proposal: res.proposal, note: res.note })
+        else dispatch({ type: 'resolve', taskId }) // no file changes — nothing to review
+      },
+      (err: unknown) =>
+        dispatch({ type: 'op-failed', taskId, error: err instanceof Error ? err.message : String(err) })
+    )
+  }
+
+  const resolveTask = (taskId: number, accept: boolean): void => {
+    const task = state.tasks.find((t) => t.id === taskId)
+    const opId = task?.proposal?.opId ?? task?.opId
+    if (!opId) return
+    void client.reviewResolve({ opId, accept }).then(
+      () => {
+        dispatch({ type: 'resolve', taskId })
+        if (accept) {
+          runCompile()
+          loadHistory()
+        }
+      },
+      (err: unknown) =>
+        dispatch({ type: 'op-failed', taskId, error: err instanceof Error ? err.message : String(err) })
+    )
+  }
+
   const projectName = doc.root.split('/').pop() ?? doc.root
+  const activeTask = state.tasks.find((t) => t.id === state.activeTask)
 
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--surface-canvas)' }}>
@@ -115,16 +157,30 @@ export function Workspace({ doc }: Props): JSX.Element {
           files={files}
           blocks={blocks}
           history={history}
-          activeBlock={activeBlock}
-          onPickBlock={setActiveBlock}
+          activeBlock={activeTask?.blockIds[0] ?? null}
+          onPickBlock={(id) => {
+            dispatch({ type: 'set-view', view: 'select' })
+            dispatch({ type: 'toggle-block', ids: expandIds(blocks, id), additive: false })
+          }}
         />
-        {sourceOpen && (
-          <PanePlaceholder eyebrow="Source" note="CodeMirror editor lands with F4" width={420} />
-        )}
-        <PanePlaceholder eyebrow="Preview" note="Paper pane + margin rail land with FD4" />
-        {chatOpen && (
-          <PanePlaceholder eyebrow="Assistant" note="Session history lands with FD6" width={428} />
-        )}
+        {sourceOpen && <PanePlaceholder eyebrow="Source" note="CodeMirror editor lands with F4" width={420} />}
+        <PaperPane
+          mainFile={doc.mainFile}
+          pageBlocks={pageBlocks}
+          state={state}
+          onToggleBlock={(id, additive) =>
+            dispatch({ type: 'toggle-block', ids: expandIds(blocks, id), additive })
+          }
+          onActivateTask={(taskId) => dispatch({ type: 'activate', taskId })}
+          onToggleAdding={() => dispatch({ type: 'set-adding', adding: !state.adding })}
+          onRemoveBlock={(taskId, blockId) => dispatch({ type: 'remove-block', taskId, blockId })}
+          onUpdateInstruction={(taskId, instruction) => dispatch({ type: 'update-instruction', taskId, instruction })}
+          onSubmitTask={submitTask}
+          onDismissTask={(taskId) => dispatch({ type: 'dismiss', taskId })}
+          onResolveTask={resolveTask}
+          onView={(view) => dispatch({ type: 'set-view', view })}
+        />
+        {chatOpen && <PanePlaceholder eyebrow="Assistant" note="Session history lands with FD6" width={428} />}
       </div>
     </div>
   )
