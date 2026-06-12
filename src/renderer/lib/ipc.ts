@@ -43,6 +43,8 @@ export const api = {
   documentHistory: () => invoke<CommitInfo[]>(IpcChannels.documentHistory),
   documentSave: (req: { relPath: string; content: string }) =>
     invoke<void>(IpcChannels.documentSave, req.relPath, req.content),
+  /** Working-tree file content (F4 editor). Contract addition, flagged at gate. */
+  documentRead: (relPath: string) => invoke<string>(IpcChannels.documentRead, relPath),
   documentFiles: () => invoke<FileEntry[]>(IpcChannels.documentFiles),
   documentBlocks: (file: string) => invoke<BlockNode[]>(IpcChannels.documentBlocks, file),
   compileRun: (req: CompileRequest) => invoke<CompileResult>(IpcChannels.compileRun, req),

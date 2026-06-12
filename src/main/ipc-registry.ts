@@ -98,6 +98,10 @@ export function registerIpcHandlers(): void {
     atomicWrite(join(requireSession().info.root, relPath), content)
   })
 
+  ipcMain.handle(IpcChannels.documentRead, (_e, relPath: string) =>
+    readFileSync(join(requireSession().info.root, relPath), 'utf8'),
+  )
+
   ipcMain.handle(IpcChannels.compileRun, async (_e, req: CompileRequest) => {
     const doc = requireSession()
     sendToAll(IpcChannels.compileStatus, 'running' satisfies CompileStatus)
@@ -200,6 +204,11 @@ async function reEmitPendingProposals(doc: DocumentSession): Promise<void> {
 function requireSession(): DocumentSession {
   if (!session) throw new Error('NO_DOCUMENT')
   return session
+}
+
+/** Root of the open document, for the stanza-doc:// protocol (F5). */
+export function currentDocRoot(): string | null {
+  return session?.info.root ?? null
 }
 
 function appendOpRecord(root: string, record: OpRecord): void {

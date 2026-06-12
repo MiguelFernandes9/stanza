@@ -52,6 +52,16 @@ First complete interaction design. Spec: `design_handoff_edit_loop/README.md`.
 - FD6 chat pane rebuilds history from claude:history op records; user
   messages show no block chips (OpRecord carries no spans). Composer chips
   reflect live compose tasks only.
+- F5 supersedes the filler-page note: the pane renders the real compiled
+  PDF (pdf.js) with BlockOverlay hit-areas from synctex:forward rects; the
+  filler page survives only as the pre-first-compile fallback. Changed-page
+  detection is visible-page virtualization (operator-list hashing skipped).
+  Zoom control is live (50–200%). Synctex rect y-origin assumed top-left —
+  verify against the fixture in the E2E pass.
+- F4 editor: codemirror-lang-latex (lezer) over legacy stex; design's
+  pending-edit line wash not implemented (needs review-state line ranges).
+- Contract additions this lane: document:read (working-tree content — the
+  editor cannot load files otherwise) alongside the earlier prime:cancel.
 
 ## Unreleased / open design questions
 - Multi-file proposals: per-file diff tabs in review overlay?

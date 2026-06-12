@@ -1,6 +1,9 @@
 import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'node:path'
-import { registerIpcHandlers } from './ipc-registry'
+import { currentDocRoot, registerIpcHandlers } from './ipc-registry'
+import { handleDocProtocol, registerDocScheme } from './protocol'
+
+registerDocScheme() // must precede app ready
 
 // Test seam (T6 E2E): an isolated userData dir keeps Playwright runs
 // out of the real per-project store. No effect outside tests.
@@ -41,6 +44,7 @@ function createWindow(): void {
 
 void app.whenReady().then(() => {
   registerIpcHandlers()
+  handleDocProtocol(currentDocRoot)
   createWindow()
 
   app.on('activate', () => {
