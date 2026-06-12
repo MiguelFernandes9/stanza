@@ -29,9 +29,14 @@ chapter is written and edited end-to-end in Stanza.
 
 ## 3. Functional requirements
 
-- **FR1 Open project.** Pick a folder; detect the main .tex (ask when
-  ambiguous). Must handle a full thesis: `\input`/`\include` tree,
-  bibtex/biblatex, figures, custom `.sty`/`.cls`.
+- **FR1 Open project.** Open screen per design v0.1: recents with three
+  states (working project / plain folder / new), "New document" creates
+  a minimal article-template project. Opening a plain folder runs the
+  one-time blocking priming flow (read sources → parse blocks →
+  `git init` → prime Claude session) with progress checklist; working
+  projects open instantly. Detect the main .tex (ask when ambiguous).
+  Must handle a full thesis: `\input`/`\include` tree, bibtex/biblatex,
+  figures, custom `.sty`/`.cls`.
 - **FR2 Edit.** CodeMirror 6 editor with LaTeX syntax highlighting and
   full manual editing. Primary surface, left pane.
 - **FR3 Live compile.** Debounced auto-compile (~1.5 s idle) plus a
@@ -41,22 +46,39 @@ chapter is written and edited end-to-end in Stanza.
 - **FR4 PDF view.** pdf.js in the right pane. Only changed pages
   re-render; scroll position is preserved. SyncTeX click-to-source in
   both directions.
-- **FR5 Select → instruct.** Three selection paths, all resolving to a
-  `BlockSpan {file, startLine, endLine}`:
-  PDF block (synctex point → enclosing block in the block tree),
-  PDF text range (approximate, via synctex line range),
-  editor text range (exact). An instruction box is bound to the
-  current selection.
-- **FR6 Claude ops.** Per-document Claude Code session; each op sends
-  the instruction scoped to the selection span. Claude edits the files
-  directly; the app watches for changes. Claude's response text shows
-  as a note in the chat pane.
-- **FR7 Diff gate.** Every op: clean-tree guard (pending manual edits
-  auto-committed as `wip: manual edits`) → op runs → `git diff` is the
-  proposal → diff view → accept (commit `claude: <instruction>`) or
-  reject (restore). Document folder is auto-`git init`-ed on first
-  open if needed. Edits outside the selection span are flagged in the
-  diff view but remain Miguel's accept/reject call.
+- **FR5 Select → instruct (task model, design v0.1).** Every edit is a
+  task `{opId, spans[], instruction, phase}` rendered as a margin-rail
+  card aligned to its first block. Selection paths, all resolving to
+  `BlockSpan {file, startLine, endLine}` lists: click block (PDF
+  select mode), click section heading = whole section, ⇧/⌘-click or
+  "+ blocks" = multi-block, editor text range (exact). Arbitrary PDF
+  text-range selection is NOT v1 (future). Blocks owned by a
+  busy/review task are locked — enforced in the main process (op
+  rejected if spans overlap an unresolved task), mirrored in the UI.
+- **FR6 Claude ops.** Per-document Claude Code session, primed on
+  open — the long-lived context holder. Each op sends the instruction
+  scoped to the selection span. Claude edits the files directly; the
+  app watches for changes. Claude's response text shows as a note in
+  the chat pane. v1 runs ops through a single queue (one at a time);
+  every interface carries an `opId` and is designed so v1.1 can run
+  ops concurrently by `--fork-session`-ing the project session into an
+  isolated git worktree of the document repo (one forked session + one
+  worktree per op, accept = cherry-pick). Within a single op, Claude
+  may fan out its own subagents (e.g. whole-document instructions) —
+  invisible to the app.
+- **FR7 Diff gate (proposal-branch model).** Every op: clean-tree
+  guard (pending manual edits auto-committed as `wip: manual edits`)
+  → op runs in the working tree → resulting diff is committed to a
+  temp branch `stanza/op-<opId>` → working tree restored clean (next
+  op can start). Each unresolved branch is one pending proposal —
+  several may await review simultaneously while at most one op
+  executes. Accept = merge the op branch (commit `claude:
+  <instruction>`; conflicts surfaced in the review UI); reject =
+  delete the branch. Review UI offers Source view (per-file diff) and
+  Compiled view (current vs proposed rendered side-by-side — the
+  proposal is compiled in a transient git worktree of the document
+  repo). Edits outside the selection span are flagged. Document folder
+  is auto-`git init`-ed during priming.
 - **FR8 Persistence.** Reopening a project resumes its Claude session
   (session id stored per project) and shows prior op history in the
   chat pane.
@@ -170,9 +192,32 @@ commit / restore → recompile → re-render changed pages.
 
 ## 11. Future requirements (recorded, not v1)
 
+- **Parallel Claude ops (v1.1, designed-for now):** N concurrent ops —
+  each op forks the project session (`--fork-session`, inherits primed
+  context) and runs in its own git worktree of the document repo;
+  each produces an independently reviewable diff; accept =
+  cherry-pick into the working checkout, conflicts surfaced in the
+  review UI. v1 contracts (`opId` everywhere, ReviewProposal per op)
+  must not assume serial execution.
 - Shared workspace / labmate collaboration (workspace sync).
 - Packaging for non-developers (signing, installer, bundled tectonic).
 - Windows/Linux.
-- New-project templates wizard.
+- Template wizard (v1 ships exactly one minimal article template
+  behind "New document", per design v0.1).
 - Preset operation buttons (formalize, expand, fix grammar) — UI layer
-  on top of FR6, pending Miguel's design.
+  on top of FR6, pending design.
+- Arbitrary PDF text-range selection (v1 selection granularity is
+  block / section / multi-block in the PDF; exact ranges via the
+  editor only).
+
+## 12. Visual source of truth
+
+`design/` (committed) holds the design system: tokens
+(`design/tokens/*.css` — port verbatim), component kit
+(`design/components/`), app mocks (`design/ui_kits/stanza/`), and the
+interaction contract `design/design_handoff_edit_loop/README.md`,
+versioned by `design/DESIGN_CHANGELOG.md`. Implement against **v0.1**;
+record drift or constraints as implementation notes under that version
+in the changelog. Precedence: the design README wins on look/feel and
+interaction gestures; this spec wins on mechanics (git, sessions,
+processes, contracts).
