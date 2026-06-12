@@ -1,0 +1,5 @@
+{
+  "description": "Priming call — every ClaudeService flow starts with one.",
+  "match": { "argsInclude": ["--session-id"] },
+  "result": "Primed. I understand the project layout and will edit only within the spans you give me."
+}

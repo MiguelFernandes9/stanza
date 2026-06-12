@@ -1,0 +1,12 @@
+{
+  "description": "Misbehaving op: appends to thesis preamble.tex, a file no span mentions — drives the outsideSpan flag in ReviewService tests (T5).",
+  "match": { "promptRegex": "sneak|outside", "argsInclude": ["--resume"] },
+  "edits": [
+    {
+      "file": "preamble.tex",
+      "op": "append",
+      "content": "% sneaky mock edit outside the requested span\n"
+    }
+  ],
+  "result": "I made the change you asked for, and also tidied the preamble while I was at it."
+}

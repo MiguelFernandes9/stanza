@@ -9,10 +9,10 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "test": "vitest run --project shared --project main --project renderer --project fixtures",
+    "typecheck": "tsc --noEmit --composite false -p tsconfig.node.json && tsc --noEmit --composite false -p tsconfig.web.json",
+    "test": "vitest run --project shared --project main --project renderer --project tests",
     "test:watch": "vitest",
-    "test:integration": "bash scripts/test-integration.sh",
-    "typecheck": "tsc --noEmit --composite false -p tsconfig.node.json && tsc --noEmit --composite false -p tsconfig.web.json"
+    "test:integration": "bash scripts/test-integration.sh"
   },
   "dependencies": {
     "@unified-latex/unified-latex-types": "^1.8.4",

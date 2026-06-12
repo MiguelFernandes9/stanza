@@ -1,0 +1,12 @@
+{
+  "description": "Simple rewrite confined to the requested span. '@span' targets whatever file the op prompt's first span names, so this works on any fixture.",
+  "match": { "promptRegex": "formalize|rewrite", "argsInclude": ["--resume"] },
+  "edits": [
+    {
+      "file": "@span",
+      "op": "replaceSpan",
+      "content": "This paragraph was rewritten by the mock, staying strictly\nwithin the requested span.\n"
+    }
+  ],
+  "result": "I rewrote the selected passage in a more formal register, keeping the edit inside the requested span."
+}

@@ -1,7 +1,7 @@
-import { defineConfig } from 'vitest/config'
+import { configDefaults, defineConfig } from 'vitest/config'
 
 // One project per src layer (plan T2.1) plus two cross-cutting ones:
-// `fixtures` guards the fixture contracts (fixtures/README.md);
+// `tests` covers tests/ (fixture contracts, mock harness);
 // `integration` needs real tectonic and only runs via
 // scripts/test-integration.sh — never part of plain `npm test`.
 export default defineConfig({
@@ -33,9 +33,10 @@ export default defineConfig({
       },
       {
         test: {
-          name: 'fixtures',
+          name: 'tests',
           environment: 'node',
-          include: ['tests/fixtures/**/*.test.ts'],
+          include: ['tests/**/*.test.ts'],
+          exclude: [...configDefaults.exclude, 'tests/integration/**'],
         },
       },
       {
