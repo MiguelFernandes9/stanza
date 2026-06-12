@@ -2,10 +2,13 @@ import { useLayoutEffect, useRef, useState } from 'react'
 import type { JSX } from 'react'
 import { ZoomIn, ZoomOut } from 'lucide-react'
 import { IconButton, SegmentedControl } from '@renderer/components'
-import { RAIL, RAIL_GAP, TaskCard } from '../tasks/TaskCard'
+import { client } from '@renderer/lib/client'
+import { ReviewOverlay } from '../review/ReviewOverlay'
+import { blockLabel, RAIL, RAIL_GAP, TaskCard, tagKind } from '../tasks/TaskCard'
 import type { PaneView, TaskState } from '../tasks/taskStore'
 import { PaperBlock } from './PaperBlock'
 import type { BlockMark } from './PaperBlock'
+import { combinedSpanLabel, spanLabel } from './paperModel'
 import type { PageBlock } from './paperModel'
 
 const PAGE = 564
@@ -43,6 +46,7 @@ export function PaperPane({
   onView
 }: Props): JSX.Element {
   const [hover, setHover] = useState<string | null>(null)
+  const [reviewId, setReviewId] = useState<number | null>(null)
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const blockEls = useRef<Record<string, HTMLDivElement | null>>({})
   const cardEls = useRef<Record<number, HTMLDivElement | null>>({})
@@ -170,6 +174,7 @@ export function PaperPane({
                 onSubmit={() => onSubmitTask(t.id)}
                 onDismiss={() => onDismissTask(t.id)}
                 onResolve={(accept) => onResolveTask(t.id, accept)}
+                onOpenReview={() => setReviewId(t.id)}
               />
             </div>
           ))}
@@ -212,6 +217,36 @@ export function PaperPane({
           </div>
         </div>
       </div>
+
+      {(() => {
+        const reviewTask = state.tasks.find((t) => t.id === reviewId && t.phase === 'review')
+        if (!reviewTask?.proposal) return null
+        const blocks = blocksOf(reviewTask.blockIds)
+        const tag =
+          blocks.length === 0
+            ? null
+            : {
+                kind: blocks.length > 1 ? ('section' as const) : tagKind(blocks[0]),
+                label: blockLabel(blocks.find((b) => b.kind === 'heading') ?? blocks[0]),
+                span:
+                  blocks.length > 1
+                    ? combinedSpanLabel(blocks.map((b) => b.span))
+                    : spanLabel(blocks[0].span)
+              }
+        return (
+          <ReviewOverlay
+            proposal={reviewTask.proposal}
+            note={reviewTask.note}
+            blockTag={tag}
+            loadFileAt={(file) => client.reviewFileAt({ opId: reviewTask.proposal!.opId, file })}
+            onClose={() => setReviewId(null)}
+            onResolve={(accept) => {
+              setReviewId(null)
+              onResolveTask(reviewTask.id, accept)
+            }}
+          />
+        )
+      })()}
     </div>
   )
 }

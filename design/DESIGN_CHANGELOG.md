@@ -39,6 +39,19 @@ First complete interaction design. Spec: `design_handoff_edit_loop/README.md`.
   the inline DiffHunk on the card carries review until then.
 - `document:open` gained an optional `{root}` request payload so recents
   rows can open a specific project (additive; channel name unchanged).
+- FD5 review overlay: the Compiled view is HTML-typeset prose from
+  review:fileAt before/after with word-level `diffWords` marks — NOT a real
+  second PDF. Non-prose hunks (LaTeX environments) auto-fall back to Source.
+- Multi-file proposals (open question above): answered by stacking one
+  DiffHunk per file in the Source view, split from the unified diff.
+- Card "Review" button now opens the FD5 overlay (earlier deferral lifted).
+- Priming cancel (earlier note): `prime:cancel` channel added to the
+  contract, manager-approved; the UI calls it best-effort — the handler is
+  a backend follow-up. Plain-folder opens also emit no prime:status events
+  yet (only document:create wires them) — backend follow-up flagged.
+- FD6 chat pane rebuilds history from claude:history op records; user
+  messages show no block chips (OpRecord carries no spans). Composer chips
+  reflect live compose tasks only.
 
 ## Unreleased / open design questions
 - Multi-file proposals: per-file diff tabs in review overlay?

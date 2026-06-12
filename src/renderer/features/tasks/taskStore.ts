@@ -46,6 +46,7 @@ export type TaskAction =
   | { type: 'op-started'; taskId: number; opId: string }
   | { type: 'proposal'; taskId: number; proposal: ReviewProposal; note: string }
   | { type: 'op-failed'; taskId: number; error: string }
+  | { type: 'restore-proposal'; proposal: ReviewProposal }
   | { type: 'resolve'; taskId: number }
   | { type: 'dismiss'; taskId: number }
   | { type: 'activate'; taskId: number }
@@ -127,6 +128,30 @@ export function taskReducer(s: TaskState, a: TaskAction): TaskState {
       }
     case 'op-failed':
       return patchTask(s, a.taskId, { phase: 'compose', error: a.error })
+    case 'restore-proposal': {
+      // Crash recovery / re-emitted pending proposals (FR7): attach to the
+      // owning task when present, else surface an unanchored review card.
+      const existing = s.tasks.find(
+        (t) => t.opId === a.proposal.opId || t.proposal?.opId === a.proposal.opId
+      )
+      if (existing) return patchTask(s, existing.id, { phase: 'review', proposal: a.proposal })
+      const id = s.nextId
+      return {
+        ...s,
+        nextId: id + 1,
+        tasks: [
+          ...s.tasks,
+          {
+            id,
+            opId: a.proposal.opId,
+            blockIds: [],
+            instruction: a.proposal.instruction,
+            phase: 'review',
+            proposal: a.proposal
+          }
+        ]
+      }
+    }
     case 'resolve':
       return removeTask(s, a.taskId)
     case 'dismiss': {

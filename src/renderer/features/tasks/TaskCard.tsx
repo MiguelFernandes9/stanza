@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { JSX } from 'react'
-import { ArrowUp, Check, Plus, Sparkles, X } from 'lucide-react'
+import { ArrowUp, Check, Maximize2, Plus, Sparkles, X } from 'lucide-react'
 import { BlockTag, Button, DiffHunk, IconButton, Kbd } from '@renderer/components'
 import type { BlockTagKind } from '@renderer/components'
 import { combinedSpanLabel, spanLabel } from '../paper/paperModel'
@@ -22,10 +22,11 @@ interface Props {
   onSubmit: () => void
   onDismiss: () => void
   onResolve: (accept: boolean) => void
+  onOpenReview: () => void
   refCb: (el: HTMLDivElement | null) => void
 }
 
-const tagKind = (b: PageBlock): BlockTagKind =>
+export const tagKind = (b: PageBlock): BlockTagKind =>
   b.kind === 'heading'
     ? 'section'
     : b.kind === 'environment'
@@ -36,7 +37,7 @@ const tagKind = (b: PageBlock): BlockTagKind =>
           : 'equation'
       : 'paragraph'
 
-const blockLabel = (b: PageBlock): string =>
+export const blockLabel = (b: PageBlock): string =>
   b.kind === 'heading'
     ? b.name ?? 'Section'
     : b.kind === 'environment'
@@ -44,8 +45,8 @@ const blockLabel = (b: PageBlock): string =>
       : 'Paragraph'
 
 /** One margin card = one Claude task (design "Card states"). Only the active
- *  task expands; others collapse to 32px chips. The full-screen review
- *  overlay arrives with FD5 — the card's inline diff carries review until then. */
+ *  task expands; others collapse to 32px chips. The Review button opens the
+ *  full-screen overlay (FD5). */
 export function TaskCard({
   task,
   blocks,
@@ -58,6 +59,7 @@ export function TaskCard({
   onSubmit,
   onDismiss,
   onResolve,
+  onOpenReview,
   refCb
 }: Props): JSX.Element {
   const taRef = useRef<HTMLTextAreaElement | null>(null)
@@ -306,6 +308,10 @@ export function TaskCard({
               </Button>
               <Button size="sm" variant="secondary" iconLeft={<X size={13} />} onClick={() => onResolve(false)}>
                 Reject
+              </Button>
+              <div style={{ flex: 1 }} />
+              <Button size="sm" variant="subtle" iconLeft={<Maximize2 size={12} />} onClick={onOpenReview}>
+                Review
               </Button>
             </div>
           </div>

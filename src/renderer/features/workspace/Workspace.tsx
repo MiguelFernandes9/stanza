@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useReducer, useState } from 'react'
 import type { JSX } from 'react'
+import { Toast } from '@renderer/components'
 import { client } from '@renderer/lib/client'
 import type { BlockNode } from '@shared/blocks/types'
-import type { CommitInfo, DocumentInfo, FileEntry } from '@shared/ipc'
+import type { CommitInfo, DocumentInfo, FileEntry, OpRecord } from '@shared/ipc'
+import { ChatPane } from '../chat/ChatPane'
+import type { ChatMessage, ComposeChip } from '../chat/ChatPane'
 import { PaperPane } from '../paper/PaperPane'
-import { expandIds, flattenBlocks, taskSpans } from '../paper/paperModel'
+import { expandIds, flattenBlocks, spanLabel, taskSpans } from '../paper/paperModel'
+import { blockLabel, tagKind } from '../tasks/TaskCard'
 import { initialTaskState, taskReducer } from '../tasks/taskStore'
 import { Sidebar } from './Sidebar'
 import { TitleBar } from './TitleBar'
@@ -55,17 +59,37 @@ export function Workspace({ doc }: Props): JSX.Element {
   const [sourceOpen, setSourceOpen] = useState(false)
   const [chatOpen, setChatOpen] = useState(false)
   const [compile, setCompile] = useState<CompileInfo>({ state: 'idle', errors: 0, warnings: 0 })
+  const [toast, setToast] = useState<{ title: string; message: string; tone: 'danger' | 'success' } | null>(null)
   const [state, dispatch] = useReducer(taskReducer, initialTaskState)
+
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(null), 6000)
+    return () => clearTimeout(t)
+  }, [toast])
+
+  const [opRecords, setOpRecords] = useState<OpRecord[]>([])
 
   const loadHistory = useCallback(() => {
     void client.documentHistory().then(setHistory, () => setHistory([]))
+  }, [])
+
+  const loadOps = useCallback(() => {
+    void client.claudeHistory().then(setOpRecords, () => setOpRecords([]))
   }, [])
 
   useEffect(() => {
     void client.documentFiles().then(setFiles, () => setFiles([]))
     void client.documentBlocks(doc.mainFile).then(setBlocks, () => setBlocks([]))
     loadHistory()
-  }, [doc, loadHistory])
+    loadOps()
+  }, [doc, loadHistory, loadOps])
+
+  // Pending proposals re-emitted on open (crash recovery, FR7).
+  useEffect(
+    () => client.onReviewProposal((proposal) => dispatch({ type: 'restore-proposal', proposal })),
+    []
+  )
 
   useEffect(
     () =>
@@ -104,15 +128,20 @@ export function Workspace({ doc }: Props): JSX.Element {
 
   const pageBlocks = flattenBlocks(blocks)
 
-  const submitTask = (taskId: number): void => {
+  /** instructionOverride: the chat composer writes the text and submits in
+   *  one step — state updates are async, so the text travels explicitly. */
+  const submitTask = (taskId: number, instructionOverride?: string): void => {
     const task = state.tasks.find((t) => t.id === taskId)
-    if (!task || !task.instruction.trim()) return
+    const instruction = (instructionOverride ?? task?.instruction ?? '').trim()
+    if (!task || !instruction) return
+    if (instructionOverride) dispatch({ type: 'update-instruction', taskId, instruction })
     dispatch({ type: 'submit', taskId })
-    void client.claudeRun({ instruction: task.instruction.trim(), spans: taskSpans(task.blockIds, blocks) }).then(
+    void client.claudeRun({ instruction, spans: taskSpans(task.blockIds, blocks) }).then(
       (res) => {
         dispatch({ type: 'op-started', taskId, opId: res.opId })
         if (res.proposal) dispatch({ type: 'proposal', taskId, proposal: res.proposal, note: res.note })
         else dispatch({ type: 'resolve', taskId }) // no file changes — nothing to review
+        loadOps()
       },
       (err: unknown) =>
         dispatch({ type: 'op-failed', taskId, error: err instanceof Error ? err.message : String(err) })
@@ -124,8 +153,18 @@ export function Workspace({ doc }: Props): JSX.Element {
     const opId = task?.proposal?.opId ?? task?.opId
     if (!opId) return
     void client.reviewResolve({ opId, accept }).then(
-      () => {
+      (resolution) => {
+        if (resolution.conflicts && resolution.conflicts.length > 0) {
+          // FD5.4: merge conflicted — proposal stays pending, surface the files.
+          setToast({
+            title: 'Accept failed — merge conflict',
+            message: `Conflicting files: ${resolution.conflicts.join(', ')}. The proposal is still pending.`,
+            tone: 'danger'
+          })
+          return
+        }
         dispatch({ type: 'resolve', taskId })
+        loadOps()
         if (accept) {
           runCompile()
           loadHistory()
@@ -138,6 +177,39 @@ export function Workspace({ doc }: Props): JSX.Element {
 
   const projectName = doc.root.split('/').pop() ?? doc.root
   const activeTask = state.tasks.find((t) => t.id === state.activeTask)
+  const pageById = new Map(pageBlocks.map((b) => [b.id, b]))
+
+  // Chat stream: one user+claude pair per op record; unresolved ops carry
+  // their proposal (from the live task) for inline accept/reject.
+  const messages: ChatMessage[] = opRecords.flatMap((r): ChatMessage[] => {
+    const owner = state.tasks.find((t) => t.opId === r.opId || t.proposal?.opId === r.opId)
+    return [
+      { role: 'user', text: r.instruction },
+      {
+        role: 'claude',
+        text: r.note,
+        proposal: r.accepted === null ? owner?.proposal ?? undefined : undefined,
+        resolved: r.accepted === null ? null : r.accepted ? 'accept' : 'reject'
+      }
+    ]
+  })
+  const chatBusy = state.tasks.some((t) => t.phase === 'busy')
+  const chips: ComposeChip[] = state.tasks
+    .filter((t) => t.phase === 'compose')
+    .flatMap((t) => t.blockIds)
+    .map((id) => pageById.get(id))
+    .filter((b): b is NonNullable<typeof b> => b != null)
+    .map((b) => ({ blockId: b.id, kind: tagKind(b), label: blockLabel(b), span: spanLabel(b.span) }))
+
+  const chatSubmit = (instruction: string): void => {
+    const compose = state.tasks.filter((t) => t.phase === 'compose').at(-1)
+    if (compose) submitTask(compose.id, instruction)
+  }
+
+  const resolveByOp = (opId: string, accept: boolean): void => {
+    const owner = state.tasks.find((t) => t.opId === opId || t.proposal?.opId === opId)
+    if (owner) resolveTask(owner.id, accept)
+  }
 
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--surface-canvas)' }}>
@@ -180,8 +252,22 @@ export function Workspace({ doc }: Props): JSX.Element {
           onResolveTask={resolveTask}
           onView={(view) => dispatch({ type: 'set-view', view })}
         />
-        {chatOpen && <PanePlaceholder eyebrow="Assistant" note="Session history lands with FD6" width={428} />}
+        {chatOpen && (
+          <ChatPane
+            messages={messages}
+            busy={chatBusy}
+            chips={chips}
+            onRemoveChip={(blockId) => dispatch({ type: 'toggle-block', ids: [blockId], additive: true })}
+            onSubmit={chatSubmit}
+            onResolveOp={resolveByOp}
+          />
+        )}
       </div>
+      {toast && (
+        <div style={{ position: 'fixed', top: 50, right: 16, zIndex: 120 }}>
+          <Toast title={toast.title} message={toast.message} tone={toast.tone} onDismiss={() => setToast(null)} />
+        </div>
+      )}
     </div>
   )
 }

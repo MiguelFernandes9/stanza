@@ -1,10 +1,7 @@
 import { api } from './ipc'
-import { mockClient } from './mock'
 import type { StanzaClient } from './ipc'
 
-/** Mocked while the main-process handlers are M0 NOT_IMPLEMENTED stubs.
- *  The backend wiring pass flips the default (set VITE_STANZA_MOCK=0 to
- *  hit real IPC early). All features import `client`, never `api`. */
-export const MOCKED = import.meta.env.VITE_STANZA_MOCK !== '0'
-
-export const client: StanzaClient = MOCKED ? mockClient : api
+/** The renderer's IPC client. Real handlers landed with feat/backend-core;
+ *  the FD2-FD4 mock layer is gone. All features import `client`, never
+ *  `api` directly — keep this indirection for future test doubles. */
+export const client: StanzaClient = api
