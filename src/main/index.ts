@@ -30,6 +30,14 @@ function createWindow(): void {
 
   win.on('ready-to-show', () => win.show())
 
+  // Renderer-crash safety net (L6): a GPU/OOM crash leaves a blank window.
+  // Reload it — the open document survives in the main process, so the
+  // reloaded renderer restores into the workspace via document:current.
+  win.webContents.on('render-process-gone', (_e, details) => {
+    console.error(`[stanza] renderer gone: ${details.reason} (exit ${details.exitCode})`)
+    if (!win.isDestroyed() && details.reason !== 'clean-exit') win.reload()
+  })
+
   // External links open in the system browser, never in-app.
   win.webContents.setWindowOpenHandler(({ url }) => {
     void shell.openExternal(url)

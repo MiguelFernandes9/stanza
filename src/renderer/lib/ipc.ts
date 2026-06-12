@@ -47,6 +47,9 @@ export const api = {
   documentRead: (relPath: string) => invoke<string>(IpcChannels.documentRead, relPath),
   documentFiles: () => invoke<FileEntry[]>(IpcChannels.documentFiles),
   documentBlocks: (file: string) => invoke<BlockNode[]>(IpcChannels.documentBlocks, file),
+  /** The currently-open document, or null. Lets a reloaded renderer (after a
+   *  crash) restore into the workspace. Contract addition, flagged at gate. */
+  documentCurrent: () => invoke<DocumentInfo | null>(IpcChannels.documentCurrent),
   /** Pick a parent directory for New document (no project opened). Null = cancelled. */
   dialogPickDirectory: () => invoke<string | null>(IpcChannels.dialogPickDirectory),
   compileRun: (req: CompileRequest) => invoke<CompileResult>(IpcChannels.compileRun, req),

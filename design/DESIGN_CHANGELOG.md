@@ -79,6 +79,17 @@ First complete interaction design. Spec: `design_handoff_edit_loop/README.md`.
   its block is not locked. The ⌘J assistant toggle carries a clay badge dot
   while notes are unread (cleared on open). Design addition beyond v0.1 —
   the mock had no terminal-no-change card.
+- Stale PDF after compile (L5): the pane held the previous render because the
+  page-proxy cache was keyed only by page number, so a recompile's new
+  document reused stale proxies. The cache is now dropped when the pdf swaps,
+  and the cache-busting nonce bumps on every compile:status ok (not only the
+  ⌘R path). Acceptance: edit → debounce → pane updates with no reload.
+- Fast-scroll renderer white-out (L6): virtualized pages now hold a bounded
+  window — proxies/canvases outside visible ±1 are evicted (proxy.cleanup +
+  zeroed canvas backing store), dpr capped at 2, scroll coalesced to one
+  range update per frame. Main process catches render-process-gone and
+  reloads; the open document survives in main, so the renderer restores into
+  the workspace via document:current (contract addition).
 
 ## Unreleased / open design questions
 - Multi-file proposals: per-file diff tabs in review overlay?
