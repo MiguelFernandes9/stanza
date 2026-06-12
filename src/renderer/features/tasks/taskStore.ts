@@ -2,10 +2,13 @@ import type { ReviewProposal } from '../../../shared/ipc'
 
 /** Margin-rail task model — design "Task model": every edit is a task
  *  rendered as a card; phases compose → busy → review; accept/reject
- *  removes it. Blocks owned by a busy/review task are locked (UI mirror
- *  of the backend SPANS_LOCKED check). */
+ *  removes it. An op that produces no proposal (Claude refused as
+ *  out-of-span, or made no changes) lands in the terminal `noop` phase so
+ *  its note is visible on the card instead of vanishing. Blocks owned by a
+ *  busy/review task are locked (UI mirror of the backend SPANS_LOCKED
+ *  check); noop holds its blocks but does not lock them. */
 
-export type TaskPhase = 'compose' | 'busy' | 'review'
+export type TaskPhase = 'compose' | 'busy' | 'review' | 'noop'
 export type PaneView = 'read' | 'select'
 
 export interface EditTask {
@@ -45,6 +48,7 @@ export type TaskAction =
   | { type: 'submit'; taskId: number }
   | { type: 'op-started'; taskId: number; opId: string }
   | { type: 'proposal'; taskId: number; proposal: ReviewProposal; note: string }
+  | { type: 'op-noop'; taskId: number; note: string }
   | { type: 'op-failed'; taskId: number; error: string }
   | { type: 'restore-proposal'; proposal: ReviewProposal }
   | { type: 'resolve'; taskId: number }
@@ -126,6 +130,9 @@ export function taskReducer(s: TaskState, a: TaskAction): TaskState {
         ...patchTask(s, a.taskId, { phase: 'review', proposal: a.proposal, note: a.note }),
         activeTask: a.taskId
       }
+    case 'op-noop':
+      // No proposal (refusal / no changes) — surface the note on the card.
+      return { ...patchTask(s, a.taskId, { phase: 'noop', note: a.note }), activeTask: a.taskId }
     case 'op-failed':
       return patchTask(s, a.taskId, { phase: 'compose', error: a.error })
     case 'restore-proposal': {
