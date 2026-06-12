@@ -10,6 +10,7 @@ import { AUTO_COMPILE_MS, createDebounce } from '../editor/autoCompile'
 import { EditorPane } from '../editor/EditorPane'
 import type { EditorApi } from '../editor/EditorPane'
 import { PaperPane } from '../paper/PaperPane'
+import type { PdfFlash } from '../paper/PaperPane'
 import { expandIds, flattenBlocks, spanLabel, taskSpans } from '../paper/paperModel'
 import { blockLabel, tagKind } from '../tasks/TaskCard'
 import { initialTaskState, taskReducer } from '../tasks/taskStore'
@@ -43,9 +44,19 @@ export function Workspace({ doc }: Props): JSX.Element {
   const [opRecords, setOpRecords] = useState<OpRecord[]>([])
   const [activeFile, setActiveFile] = useState(doc.mainFile)
   const [compileErrors, setCompileErrors] = useState<CompileError[]>([])
+  const [pdfState, setPdfState] = useState<{ path: string; nonce: number } | null>(null)
+  const [pdfFlash, setPdfFlash] = useState<PdfFlash | null>(null)
   const editorApi = useRef<EditorApi | null>(null)
 
   useEffect(() => setActiveFile(doc.mainFile), [doc])
+
+  // FR4 stale-PDF rule: a failed compile keeps the last good render — the
+  // nonce only bumps on ok, which busts the stanza-doc:// cache.
+  const pdfUrl = pdfState
+    ? `stanza-doc://doc/${encodeURI(
+        pdfState.path.startsWith(doc.root) ? pdfState.path.slice(doc.root.length + 1) : pdfState.path
+      )}?v=${pdfState.nonce}`
+    : null
 
   const loadHistory = useCallback(() => {
     void client.documentHistory().then(setHistory, () => setHistory([]))
@@ -82,6 +93,10 @@ export function Workspace({ doc }: Props): JSX.Element {
       (res) => {
         setCompile({ state: res.ok ? 'ok' : 'failed', errors: res.errors.length, warnings: 0 })
         setCompileErrors(res.errors)
+        if (res.ok && res.pdfPath) {
+          const path = res.pdfPath
+          setPdfState((prev) => ({ path, nonce: (prev?.nonce ?? 0) + 1 }))
+        }
       },
       () => setCompile((c) => ({ ...c, state: 'failed' }))
     )
@@ -93,6 +108,34 @@ export function Workspace({ doc }: Props): JSX.Element {
   }, [runCompile])
   const debounce = useMemo(() => createDebounce(AUTO_COMPILE_MS, saveAndCompile), [saveAndCompile])
   useEffect(() => () => debounce.cancel(), [debounce])
+
+  // First compile on open, so the real PDF replaces the filler page (F5).
+  useEffect(() => {
+    runCompile()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc])
+
+  // F7 — synctex both directions.
+  const forwardSearch = (line: number): void => {
+    void client.synctexForward({ file: activeFile, startLine: line, endLine: line }).then(
+      (rects) => {
+        const r = rects[0]
+        if (r) setPdfFlash({ page: r.page, y: r.y, height: r.height, nonce: Date.now() })
+      },
+      () => undefined
+    )
+  }
+
+  const inverseSearch = (page: number, x: number, y: number): void => {
+    void client.synctexInverse({ page, x, y }).then(
+      (loc) => {
+        if (!loc) return
+        setSourceOpen(true)
+        editorApi.current?.jumpTo(loc.file, loc.line)
+      },
+      () => undefined
+    )
+  }
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -229,7 +272,7 @@ export function Workspace({ doc }: Props): JSX.Element {
             onSelectFile={setActiveFile}
             onDocChanged={() => debounce.trigger()}
             errors={compileErrors}
-            onForwardSearch={() => undefined /* wired in F7 */}
+            onForwardSearch={forwardSearch}
             register={(api) => {
               editorApi.current = api
             }}
@@ -239,6 +282,9 @@ export function Workspace({ doc }: Props): JSX.Element {
           mainFile={doc.mainFile}
           pageBlocks={pageBlocks}
           state={state}
+          pdfUrl={pdfUrl}
+          onInverseSearch={inverseSearch}
+          flash={pdfFlash}
           onToggleBlock={(id, additive) =>
             dispatch({ type: 'toggle-block', ids: expandIds(blocks, id), additive })
           }

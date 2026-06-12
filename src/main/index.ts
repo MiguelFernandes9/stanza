@@ -1,6 +1,9 @@
 import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'node:path'
-import { registerIpcHandlers } from './ipc-registry'
+import { currentDocRoot, registerIpcHandlers } from './ipc-registry'
+import { handleDocProtocol, registerDocScheme } from './protocol'
+
+registerDocScheme() // must precede app ready
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -35,6 +38,7 @@ function createWindow(): void {
 
 void app.whenReady().then(() => {
   registerIpcHandlers()
+  handleDocProtocol(currentDocRoot)
   createWindow()
 
   app.on('activate', () => {

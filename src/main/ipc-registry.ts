@@ -188,6 +188,11 @@ function requireSession(): DocumentSession {
   return session
 }
 
+/** Root of the open document, for the stanza-doc:// protocol (F5). */
+export function currentDocRoot(): string | null {
+  return session?.info.root ?? null
+}
+
 function appendOpRecord(root: string, record: OpRecord): void {
   const ops = store.getProject(root).ops ?? []
   store.setProject(root, { ops: [...ops, record] })
