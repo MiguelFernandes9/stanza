@@ -47,8 +47,10 @@ export class ReviewService {
   }
 
   /** Pending proposals rebuilt from op branches — also the crash
-   *  recovery path (spec §7): branches outlive the process. */
+   *  recovery path (spec §7): branches outlive the process. A folder
+   *  without a repo (e.g. .git deleted by hand) just has none. */
   async list(): Promise<ReviewProposal[]> {
+    if (!(await this.git.isRepo())) return []
     const branches = await this.git.listBranches(`${BRANCH_PREFIX}*`)
     return Promise.all(
       branches.map(async (branch) => {

@@ -8,6 +8,7 @@ import type {
   ClaudeResult,
   CompileRequest,
   CompileStatus,
+  DocumentInfo,
   FileEntry,
   InversePoint,
   IpcChannel,
@@ -35,40 +36,38 @@ export function registerIpcHandlers(): void {
   documents = new DocumentService({
     store,
     makeGit: (root) => new GitClient(runner, root),
-    primeSession: (doc) => new ClaudeService(runner, store, doc).prime(),
+    primeSession: (doc, signal) => new ClaudeService(runner, store, doc).prime(signal),
   })
 
   ipcMain.handle(IpcChannels.documentOpen, async (_e, root?: string) => {
     const folder = root ?? (await pickFolder())
     if (!folder) return null
-    const info = await documents.open(folder)
+
+    // Plain folder (never primed): run the blocking priming pipeline
+    // with the overlay events; working projects open instantly (FR1).
+    let info: DocumentInfo | null
+    if (store.getProject(folder).sessionId) {
+      info = await documents.open(folder)
+      if (info) store.setProject(folder, { lastOpened: new Date().toISOString() })
+    } else {
+      info = await primeWithCancel(folder)
+    }
     if (!info) return null
+
     session = new DocumentSession(info, runner, store)
-    store.setProject(info.root, { lastOpened: new Date().toISOString() })
     await reEmitPendingProposals(session) // crash recovery (spec §7)
     return info
   })
 
   ipcMain.handle(IpcChannels.documentCreate, async (_e, args: { name: string; dir: string }) => {
     const created = await documents.create(args)
-    const controller = new AbortController()
-    priming = controller
-    try {
-      const info = await documents.prime(
-        created.root,
-        (step) => sendToAll(IpcChannels.primeStatus, step),
-        controller.signal,
-      )
-      session = new DocumentSession(info, runner, store)
-      return info
-    } finally {
-      if (priming === controller) priming = null
-    }
+    const info = await primeWithCancel(created.root)
+    if (!info) return null
+    session = new DocumentSession(info, runner, store)
+    return info
   })
 
-  // Literal channel: the typed primeCancel constant lands with the
-  // frontend's review-chat lane; the name is fixed in that contract.
-  ipcMain.handle('prime:cancel', () => {
+  ipcMain.handle(IpcChannels.primeCancel, () => {
     priming?.abort()
   })
 
@@ -171,6 +170,25 @@ async function runClaudeOp(req: ClaudeRequest): Promise<ClaudeResult> {
   })
   if (proposal) sendToAll(IpcChannels.reviewProposal, proposal)
   return { opId: op.opId, note: op.note, proposal }
+}
+
+/** Run the priming pipeline with prime:status events and prime:cancel
+ *  support. Null when cancelled — callers treat it as "not opened". */
+async function primeWithCancel(root: string): Promise<DocumentInfo | null> {
+  const controller = new AbortController()
+  priming = controller
+  try {
+    return await documents.prime(
+      root,
+      (step) => sendToAll(IpcChannels.primeStatus, step),
+      controller.signal,
+    )
+  } catch (err) {
+    if (err instanceof Error && err.message === 'PRIME_CANCELED') return null
+    throw err
+  } finally {
+    if (priming === controller) priming = null
+  }
 }
 
 async function reEmitPendingProposals(doc: DocumentSession): Promise<void> {
