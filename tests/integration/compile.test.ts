@@ -1,10 +1,11 @@
 import { beforeAll, describe, expect, it } from 'vitest'
-import { existsSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
+import { isAbsolute } from 'node:path'
 import { DefaultProcessRunner } from '../../src/main/infra/ProcessRunner'
 import { CompileService } from '../../src/main/services/CompileService'
 import type { DocumentInfo } from '../../src/shared/ipc/document'
 import type { CompileResult } from '../../src/shared/ipc/compile'
-import { copyFixture } from './fixtureCopy'
+import { copyFixture, copyFixtureRaw } from './fixtureCopy'
 
 // T3: CompileService against real tectonic + synctex on the fixture
 // projects. Runs only via `npm run test:integration` (tectonic gate).
@@ -62,5 +63,31 @@ describe('CompileService on fixtures/thesis-broken (real tectonic)', () => {
     expect(result.errors[0].file).toBe('chapters/ch1.tex')
     expect(result.errors[0].line).toBe(12)
     expect(result.errors[0].message).toContain('Undefined control sequence')
+  })
+})
+
+// Regression caught live (manager, 2026-06-12): inverse leaked an
+// ABSOLUTE realpath when doc.root was the un-realpathed /var spelling,
+// so the renderer never matched the file and never jumped. Contract:
+// SourceLocation.file is RELATIVE to doc root. The roundtrip test above
+// pre-realpaths root and so can't see this; here root is the RAW path.
+describe('synctex:inverse returns a root-relative file (raw doc.root)', () => {
+  it('strips the root even when doc.root is not pre-realpathed', async () => {
+    const root = copyFixtureRaw('single')
+    // Test is only meaningful where tmp is symlinked (macOS /var); on
+    // platforms where it is not, this still asserts the contract holds.
+    const symlinked = realpathSync(root) !== root
+
+    const service = new CompileService(runner, { root, mainFile: 'main.tex', texFiles: ['main.tex'] })
+    expect((await service.compile({})).ok).toBe(true)
+
+    const rects = await service.forward({ file: 'main.tex', startLine: 13, endLine: 14 })
+    expect(rects.length).toBeGreaterThan(0)
+    const r = rects[0]
+    const loc = await service.inverse({ page: r.page, x: r.x + r.width / 2, y: r.y + r.height / 2 })
+
+    expect(loc, symlinked ? 'symlinked tmp: real repro' : 'plain tmp: contract check').not.toBeNull()
+    expect(isAbsolute(loc!.file)).toBe(false)
+    expect(loc!.file).toBe('main.tex')
   })
 })
