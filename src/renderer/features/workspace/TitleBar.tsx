@@ -18,6 +18,8 @@ interface Props {
   sourceOpen: boolean
   onToggleSource: () => void
   chatOpen: boolean
+  /** Unread Claude notes while the assistant is closed → badge dot. */
+  chatUnread: boolean
   onToggleChat: () => void
 }
 
@@ -31,6 +33,7 @@ export function TitleBar({
   sourceOpen,
   onToggleSource,
   chatOpen,
+  chatUnread,
   onToggleChat
 }: Props): JSX.Element {
   return (
@@ -98,9 +101,27 @@ export function TitleBar({
           </IconButton>
         </Tooltip>
         <Tooltip label="Assistant panel" hint="⌘J" side="bottom">
-          <IconButton label="Assistant panel" active={chatOpen} onClick={onToggleChat}>
-            <Sparkles size={17} />
-          </IconButton>
+          <span style={{ position: 'relative', display: 'inline-flex' }}>
+            <IconButton label="Assistant panel" active={chatOpen} onClick={onToggleChat}>
+              <Sparkles size={17} />
+            </IconButton>
+            {chatUnread && (
+              <span
+                aria-label="unread assistant notes"
+                style={{
+                  position: 'absolute',
+                  top: 1,
+                  right: 1,
+                  width: 7,
+                  height: 7,
+                  borderRadius: '50%',
+                  background: 'var(--clay-500)',
+                  border: '1.5px solid var(--surface-app)',
+                  pointerEvents: 'none'
+                }}
+              />
+            )}
+          </span>
         </Tooltip>
         <IconButton label="Settings">
           <Settings size={17} />

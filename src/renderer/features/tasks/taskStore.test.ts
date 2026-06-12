@@ -99,6 +99,30 @@ describe('taskReducer — lifecycle', () => {
     expect(s.tasks[0]).toMatchObject({ phase: 'compose', error: 'timeout', instruction: 'tighten this' })
   })
 
+  it('op-noop moves busy → noop with the note, keeping the task visible', () => {
+    let s = run(composed(), { type: 'submit', taskId: 1 }, { type: 'toggle-block', ids: ['p2'], additive: false })
+    s = run(s, { type: 'op-noop', taskId: 1, note: 'That edit is out of the selected span; no changes made.' })
+    expect(s.tasks[0]).toMatchObject({
+      phase: 'noop',
+      note: 'That edit is out of the selected span; no changes made.'
+    })
+    expect(s.tasks[0].proposal).toBeNull()
+    expect(s.activeTask).toBe(1) // surfaced, not silently removed
+  })
+
+  it('a noop task is dismissible', () => {
+    let s = run(composed(), { type: 'submit', taskId: 1 })
+    s = run(s, { type: 'op-noop', taskId: 1, note: 'no changes' }, { type: 'dismiss', taskId: 1 })
+    expect(s.tasks).toHaveLength(0)
+  })
+
+  it('noop blocks are not locked (nothing pending review)', () => {
+    let s = run(composed(), { type: 'submit', taskId: 1 })
+    s = run(s, { type: 'op-noop', taskId: 1, note: 'n' })
+    const locked = s.tasks.filter((t) => t.phase === 'busy' || t.phase === 'review').flatMap((t) => t.blockIds)
+    expect(locked).toEqual([])
+  })
+
   it('resolve removes the task and falls back to the last remaining task', () => {
     let s = run(composed(), { type: 'submit', taskId: 1 })
     s = run(s, { type: 'toggle-block', ids: ['p9'], additive: false })

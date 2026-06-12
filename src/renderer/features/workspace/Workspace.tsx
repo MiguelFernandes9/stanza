@@ -32,6 +32,7 @@ export function Workspace({ doc }: Props): JSX.Element {
   const [history, setHistory] = useState<CommitInfo[]>([])
   const [sourceOpen, setSourceOpen] = useState(false)
   const [chatOpen, setChatOpen] = useState(false)
+  const [unreadNotes, setUnreadNotes] = useState(0)
   const [compile, setCompile] = useState<CompileInfo>({ state: 'idle', errors: 0, warnings: 0 })
   const [toast, setToast] = useState<{ title: string; message: string; tone: 'danger' | 'success' } | null>(null)
   const [state, dispatch] = useReducer(taskReducer, initialTaskState)
@@ -41,6 +42,11 @@ export function Workspace({ doc }: Props): JSX.Element {
     const t = setTimeout(() => setToast(null), 6000)
     return () => clearTimeout(t)
   }, [toast])
+
+  // Opening the assistant marks its notes as read.
+  useEffect(() => {
+    if (chatOpen) setUnreadNotes(0)
+  }, [chatOpen])
 
   const [opRecords, setOpRecords] = useState<OpRecord[]>([])
   const [activeFile, setActiveFile] = useState(doc.mainFile)
@@ -181,7 +187,10 @@ export function Workspace({ doc }: Props): JSX.Element {
       (res) => {
         dispatch({ type: 'op-started', taskId, opId: res.opId })
         if (res.proposal) dispatch({ type: 'proposal', taskId, proposal: res.proposal, note: res.note })
-        else dispatch({ type: 'resolve', taskId }) // no file changes — nothing to review
+        // No proposal: Claude refused (out-of-span) or made no changes — keep
+        // the task as a noop card showing the note instead of removing it.
+        else dispatch({ type: 'op-noop', taskId, note: res.note })
+        if (!chatOpen) setUnreadNotes((n) => n + 1)
         loadOps()
       },
       (err: unknown) =>
@@ -262,6 +271,7 @@ export function Workspace({ doc }: Props): JSX.Element {
         sourceOpen={sourceOpen}
         onToggleSource={() => setSourceOpen((v) => !v)}
         chatOpen={chatOpen}
+        chatUnread={unreadNotes > 0}
         onToggleChat={() => setChatOpen((v) => !v)}
       />
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>

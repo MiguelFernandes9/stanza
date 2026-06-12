@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { JSX } from 'react'
-import { ArrowUp, Check, Maximize2, Plus, Sparkles, X } from 'lucide-react'
+import { ArrowUp, Check, CircleSlash, Maximize2, Plus, Sparkles, X } from 'lucide-react'
 import { BlockTag, Button, DiffHunk, IconButton, Kbd } from '@renderer/components'
 import type { BlockTagKind } from '@renderer/components'
 import { combinedSpanLabel, spanLabel } from '../paper/paperModel'
@@ -68,7 +68,13 @@ export function TaskCard({
   }, [task.phase, expanded])
 
   const phaseColor =
-    task.phase === 'review' ? 'var(--clay-500)' : task.phase === 'busy' ? 'var(--clay-400)' : 'var(--line-ink)'
+    task.phase === 'review'
+      ? 'var(--clay-500)'
+      : task.phase === 'busy'
+        ? 'var(--clay-400)'
+        : task.phase === 'noop'
+          ? 'var(--ink-300)'
+          : 'var(--line-ink)'
   const spans = blocks.map((b) => b.span)
   const isSection = blocks.length > 1 && blocks[0]?.kind === 'heading'
   const spanRef = blocks.length ? (blocks.length > 1 ? combinedSpanLabel(spans) : spanLabel(spans[0])) : ''
@@ -92,6 +98,8 @@ export function TaskCard({
         >
           {task.phase === 'busy' ? (
             <span style={{ width: 6, height: 6, flex: '0 0 auto', borderRadius: '50%', background: 'var(--clay-400)', animation: 'stz-pulse 1s var(--ease-in-out) infinite' }} />
+          ) : task.phase === 'noop' ? (
+            <CircleSlash size={12} style={{ color: 'var(--ink-400)', flex: '0 0 auto' }} />
           ) : (
             <Sparkles size={12} style={{ color: phaseColor, flex: '0 0 auto' }} />
           )}
@@ -102,7 +110,13 @@ export function TaskCard({
               whiteSpace: 'nowrap'
             }}
           >
-            {task.phase === 'review' ? 'Proposal ready' : task.phase === 'busy' ? 'Editing…' : 'Draft edit'}
+            {task.phase === 'review'
+              ? 'Proposal ready'
+              : task.phase === 'busy'
+                ? 'Editing…'
+                : task.phase === 'noop'
+                  ? 'No changes'
+                  : 'Draft edit'}
           </span>
           <span
             style={{
@@ -140,7 +154,11 @@ export function TaskCard({
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-          <Sparkles size={13} style={{ color: phaseColor, flex: '0 0 auto' }} />
+          {task.phase === 'noop' ? (
+            <CircleSlash size={13} style={{ color: 'var(--ink-400)', flex: '0 0 auto' }} />
+          ) : (
+            <Sparkles size={13} style={{ color: phaseColor, flex: '0 0 auto' }} />
+          )}
           <span
             style={{
               font: 'var(--weight-semibold) var(--text-2xs)/1 var(--font-sans)',
@@ -149,7 +167,13 @@ export function TaskCard({
               textTransform: 'uppercase'
             }}
           >
-            {task.phase === 'review' ? 'Proposed change' : task.phase === 'busy' ? 'Editing' : 'Edit with Claude'}
+            {task.phase === 'review'
+              ? 'Proposed change'
+              : task.phase === 'busy'
+                ? 'Editing'
+                : task.phase === 'noop'
+                  ? 'No changes'
+                  : 'Edit with Claude'}
           </span>
           <div style={{ flex: 1 }} />
           {task.phase !== 'busy' && (
@@ -312,6 +336,32 @@ export function TaskCard({
               <div style={{ flex: 1 }} />
               <Button size="sm" variant="subtle" iconLeft={<Maximize2 size={12} />} onClick={onOpenReview}>
                 Review
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {task.phase === 'noop' && (
+          <div>
+            <div
+              style={{
+                font: 'var(--text-sm)/1.5 var(--font-sans)',
+                color: 'var(--ink-600)',
+                background: 'var(--surface-well)',
+                border: '1px solid var(--border-faint)',
+                borderRadius: 'var(--radius-md)',
+                padding: '8px 10px',
+                margin: '0 0 9px'
+              }}
+            >
+              <span style={{ color: 'var(--ink-800)', fontWeight: 'var(--weight-semibold)' as 'bold' }}>
+                Claude made no changes.
+              </span>{' '}
+              {task.note || 'The instruction did not apply to the selected block.'}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <Button size="sm" variant="secondary" iconLeft={<X size={13} />} onClick={onDismiss}>
+                Dismiss
               </Button>
             </div>
           </div>

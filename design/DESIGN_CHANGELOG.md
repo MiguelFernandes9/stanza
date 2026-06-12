@@ -71,6 +71,14 @@ First complete interaction design. Spec: `design_handoff_edit_loop/README.md`.
 - Defensive file-match: synctex-inverse and compile-error paths are resolved
   to known project files by suffix, so an absolute/realpath regression still
   jumps and still marks the gutter rather than silently missing.
+- No-op ops (real-claude finding): an op that returns no proposal (Claude
+  refused as out-of-span, or made no changes) used to remove the task
+  silently — the note reached only the hidden chat pane, so working span
+  discipline read as "app did nothing". New terminal task phase `noop`: the
+  card auto-expands showing "Claude made no changes" + the note + Dismiss;
+  its block is not locked. The ⌘J assistant toggle carries a clay badge dot
+  while notes are unread (cleared on open). Design addition beyond v0.1 —
+  the mock had no terminal-no-change card.
 
 ## Unreleased / open design questions
 - Multi-file proposals: per-file diff tabs in review overlay?
