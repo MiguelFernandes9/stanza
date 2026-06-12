@@ -1,7 +1,26 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'vitest'
 import { parseCompileLog } from '../log'
 
 const MAIN = 'main.tex'
+
+const fixtureLog = (name: string) =>
+  readFileSync(new URL(`../../../../fixtures/logs/${name}`, import.meta.url), 'utf8')
+
+describe('parseCompileLog on real captured tectonic logs (T1.1 fixtures)', () => {
+  test('thesis-broken: undefined control sequence at chapters/ch1.tex:12', () => {
+    const errors = parseCompileLog(fixtureLog('thesis-broken.log'), MAIN)
+    expect(errors).toContainEqual({
+      file: 'chapters/ch1.tex',
+      line: 12,
+      message: 'Undefined control sequence.',
+    })
+  })
+
+  test('thesis-ok: no errors', () => {
+    expect(parseCompileLog(fixtureLog('thesis-ok.log'), MAIN)).toEqual([])
+  })
+})
 
 describe('parseCompileLog', () => {
   test('clean log has no errors', () => {
@@ -66,6 +85,33 @@ describe('parseCompileLog', () => {
       ')',
     ].join('\n')
     expect(parseCompileLog(log, MAIN)).toEqual([])
+  })
+
+  test('prose parentheses do not pop real files off the stack', () => {
+    const log = [
+      '(./chapters/ch1.tex',
+      'Package: foo 2021 (see the manual)', // '(see' must not unbalance the stack
+      '! Missing $ inserted.',
+      'l.3 x^2',
+      ')',
+    ].join('\n')
+    expect(parseCompileLog(log, MAIN)).toEqual([
+      { file: 'chapters/ch1.tex', line: 3, message: 'Missing $ inserted.' },
+    ])
+  })
+
+  test('extensionless file opens absorb their own close paren', () => {
+    const log = [
+      '(main.tex',
+      '(preamble', // tectonic logs \input{preamble} without extension
+      ')',
+      '! Undefined control sequence.',
+      'l.9 \\bad',
+      ')',
+    ].join('\n')
+    expect(parseCompileLog(log, MAIN)).toEqual([
+      { file: 'main.tex', line: 9, message: 'Undefined control sequence.' },
+    ])
   })
 
   test('errors before any file is opened attribute to mainFile', () => {

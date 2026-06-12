@@ -6,14 +6,24 @@ import type { CompileError } from '../ipc/compile'
  *  Warning lines (Overfull, LaTeX Warning, ...) are not errors. */
 export function parseCompileLog(log: string, mainFile: string): CompileError[] {
   const errors: CompileError[] = []
-  const stack: string[] = []
+  // One entry per open paren: a path for file opens, null for prose
+  // parens — so every ')' pops exactly one and files stay aligned.
+  const stack: (string | null)[] = []
   let pending: CompileError | null = null
+
+  const currentFile = (): string => {
+    for (let i = stack.length - 1; i >= 0; i--) {
+      const entry = stack[i]
+      if (entry !== null && entry !== undefined) return entry
+    }
+    return mainFile
+  }
 
   for (const line of log.split('\n')) {
     const errorMatch = /^!\s*(.+)$/.exec(line)
     if (errorMatch) {
       pending = {
-        file: normalize(stack[stack.length - 1] ?? mainFile),
+        file: normalize(currentFile()),
         line: null,
         message: errorMatch[1]!.trim(),
       }
@@ -36,11 +46,10 @@ export function parseCompileLog(log: string, mainFile: string): CompileError[] {
   return errors
 }
 
-/** Walk a log line updating the open-file paren stack.
- *  Only tokens that look like file paths are pushed; bare prose
- *  parens still pop, which mirrors TeX's own bracket accounting
- *  closely enough for error attribution. */
-function scanParens(line: string, stack: string[]): void {
+/** Walk a log line updating the open-file paren stack. Every '(' pushes
+ *  (a path when the token looks like a file, null otherwise) and every
+ *  ')' pops one entry, so prose parens can't pop real files. */
+function scanParens(line: string, stack: (string | null)[]): void {
   let i = 0
   while (i < line.length) {
     const ch = line[i]
@@ -48,12 +57,11 @@ function scanParens(line: string, stack: string[]): void {
       let j = i + 1
       while (j < line.length && !' ()'.includes(line[j]!)) j++
       const token = line.slice(i + 1, j)
-      if (looksLikeFile(token)) {
-        stack.push(token)
-        i = j
-        continue
-      }
-    } else if (ch === ')') {
+      stack.push(looksLikeFile(token) ? token : null)
+      i = j
+      continue
+    }
+    if (ch === ')') {
       stack.pop()
     }
     i++
@@ -62,6 +70,7 @@ function scanParens(line: string, stack: string[]): void {
 
 function looksLikeFile(token: string): boolean {
   if (token.startsWith('./') || token.startsWith('../') || token.startsWith('/')) return true
+  if (token.includes('/')) return true // e.g. chapters/ch1 (no extension)
   return /^[^\s()]+\.[A-Za-z][A-Za-z0-9]*$/.test(token)
 }
 
