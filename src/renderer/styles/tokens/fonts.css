@@ -1,0 +1,43 @@
+/* ============================================================
+   Stanza — webfonts (self-hosted woff2, latin subset)
+   Newsreader     → scholarly serif: the "paper" voice (display,
+                    headings, rendered-PDF body, marketing leads)
+   Hanken Grotesk → precise app-chrome sans: labels, controls, UI
+   JetBrains Mono → the "source" voice: .tex, diffs, paths, spans
+   All three are variable woff2 with a weight axis; Newsreader also
+   carries an italic file used for editorial accents (often in clay).
+   ============================================================ */
+
+/* ---- Newsreader (variable, roman + italic) ---- */
+@font-face {
+  font-family: "Newsreader";
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url("../../assets/fonts/newsreader-var.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Newsreader";
+  font-style: italic;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url("../../assets/fonts/newsreader-italic-var.woff2") format("woff2");
+}
+
+/* ---- Hanken Grotesk (variable, weight axis) ---- */
+@font-face {
+  font-family: "Hanken Grotesk";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("../../assets/fonts/hanken-var.woff2") format("woff2");
+}
+
+/* ---- JetBrains Mono (variable, weight axis) ---- */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("../../assets/fonts/jbmono-var.woff2") format("woff2");
+}
