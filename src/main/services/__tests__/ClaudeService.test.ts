@@ -183,6 +183,18 @@ describe('ClaudeService.runOp', () => {
     expect(b.note).toBe('op1')
   })
 
+  test('prime() establishes the session without running an op, idempotently', async () => {
+    const runner = new MockRunner(() => claudeJson('primed'))
+    const service = new ClaudeService(runner, store, doc)
+
+    await service.prime()
+    expect(runner.calls).toHaveLength(1)
+    expect(runner.calls[0]!.args.slice(0, 2)).toEqual(['-p', '--session-id'])
+
+    await service.prime() // session exists now — no second call
+    expect(runner.calls).toHaveLength(1)
+  })
+
   test('STANZA_CLAUDE_BIN overrides the claude binary (T6 mock harness)', async () => {
     vi.stubEnv('STANZA_CLAUDE_BIN', '/mocks/claude-mock.sh')
     store.setProject('/proj', { sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' })

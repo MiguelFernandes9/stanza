@@ -24,6 +24,11 @@ export class ClaudeService {
     private timeoutMs: number = DEFAULT_TIMEOUT_MS,
   ) {}
 
+  /** Establish the session without running an op (priming pipeline). */
+  async prime(): Promise<void> {
+    await this.ensureSession()
+  }
+
   runOp(
     req: ClaudeRequest,
     onStatus: (s: ClaudeStatus) => void,
