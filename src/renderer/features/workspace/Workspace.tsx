@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useReducer, useState } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import type { JSX } from 'react'
 import { Toast } from '@renderer/components'
 import { client } from '@renderer/lib/client'
 import type { BlockNode } from '@shared/blocks/types'
-import type { CommitInfo, DocumentInfo, FileEntry, OpRecord } from '@shared/ipc'
+import type { CommitInfo, CompileError, DocumentInfo, FileEntry, OpRecord } from '@shared/ipc'
 import { ChatPane } from '../chat/ChatPane'
 import type { ChatMessage, ComposeChip } from '../chat/ChatPane'
+import { AUTO_COMPILE_MS, createDebounce } from '../editor/autoCompile'
+import { EditorPane } from '../editor/EditorPane'
+import type { EditorApi } from '../editor/EditorPane'
 import { PaperPane } from '../paper/PaperPane'
 import { expandIds, flattenBlocks, spanLabel, taskSpans } from '../paper/paperModel'
 import { blockLabel, tagKind } from '../tasks/TaskCard'
@@ -16,37 +19,6 @@ import type { CompileInfo } from './TitleBar'
 
 interface Props {
   doc: DocumentInfo
-}
-
-function PanePlaceholder({ eyebrow, note, width }: { eyebrow: string; note: string; width: number }): JSX.Element {
-  return (
-    <section
-      style={{
-        width,
-        flex: '0 0 auto',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 6,
-        background: 'var(--surface-app)',
-        borderLeft: '1px solid var(--border-default)',
-        minWidth: 0
-      }}
-    >
-      <span
-        style={{
-          font: 'var(--weight-bold) var(--text-2xs)/1 var(--font-sans)',
-          letterSpacing: 'var(--tracking-caps)',
-          textTransform: 'uppercase',
-          color: 'var(--ink-400)'
-        }}
-      >
-        {eyebrow}
-      </span>
-      <span style={{ font: 'var(--text-sm)/1.4 var(--font-sans)', color: 'var(--ink-500)' }}>{note}</span>
-    </section>
-  )
 }
 
 /** Workspace — design §2: TitleBar, sidebar, paper pane with the margin-rail
@@ -69,6 +41,11 @@ export function Workspace({ doc }: Props): JSX.Element {
   }, [toast])
 
   const [opRecords, setOpRecords] = useState<OpRecord[]>([])
+  const [activeFile, setActiveFile] = useState(doc.mainFile)
+  const [compileErrors, setCompileErrors] = useState<CompileError[]>([])
+  const editorApi = useRef<EditorApi | null>(null)
+
+  useEffect(() => setActiveFile(doc.mainFile), [doc])
 
   const loadHistory = useCallback(() => {
     void client.documentHistory().then(setHistory, () => setHistory([]))
@@ -102,18 +79,28 @@ export function Workspace({ doc }: Props): JSX.Element {
   const runCompile = useCallback(() => {
     setCompile((c) => ({ ...c, state: 'running' }))
     void client.compileRun({}).then(
-      (res) => setCompile({ state: res.ok ? 'ok' : 'failed', errors: res.errors.length, warnings: 0 }),
+      (res) => {
+        setCompile({ state: res.ok ? 'ok' : 'failed', errors: res.errors.length, warnings: 0 })
+        setCompileErrors(res.errors)
+      },
       () => setCompile((c) => ({ ...c, state: 'failed' }))
     )
   }, [])
+
+  // F6.1: edits debounce into save → compile; ⌘R / ⌘⏎ flush immediately.
+  const saveAndCompile = useCallback(() => {
+    void (editorApi.current?.saveDirty() ?? Promise.resolve([])).then(runCompile)
+  }, [runCompile])
+  const debounce = useMemo(() => createDebounce(AUTO_COMPILE_MS, saveAndCompile), [saveAndCompile])
+  useEffect(() => () => debounce.cancel(), [debounce])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (!(e.metaKey || e.ctrlKey)) return
       const key = e.key.toLowerCase()
-      if (key === 'r') {
+      if (key === 'r' || key === 'enter') {
         e.preventDefault()
-        runCompile()
+        debounce.flush()
       } else if (key === 'e') {
         e.preventDefault()
         setSourceOpen((v) => !v)
@@ -124,7 +111,7 @@ export function Workspace({ doc }: Props): JSX.Element {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [runCompile])
+  }, [debounce])
 
   const pageBlocks = flattenBlocks(blocks)
 
@@ -217,7 +204,7 @@ export function Workspace({ doc }: Props): JSX.Element {
         title={projectName}
         mainFile={doc.mainFile}
         compile={compile}
-        onCompile={runCompile}
+        onCompile={() => debounce.flush()}
         sourceOpen={sourceOpen}
         onToggleSource={() => setSourceOpen((v) => !v)}
         chatOpen={chatOpen}
@@ -235,7 +222,19 @@ export function Workspace({ doc }: Props): JSX.Element {
             dispatch({ type: 'toggle-block', ids: expandIds(blocks, id), additive: false })
           }}
         />
-        {sourceOpen && <PanePlaceholder eyebrow="Source" note="CodeMirror editor lands with F4" width={420} />}
+        {sourceOpen && (
+          <EditorPane
+            doc={doc}
+            activeFile={activeFile}
+            onSelectFile={setActiveFile}
+            onDocChanged={() => debounce.trigger()}
+            errors={compileErrors}
+            onForwardSearch={() => undefined /* wired in F7 */}
+            register={(api) => {
+              editorApi.current = api
+            }}
+          />
+        )}
         <PaperPane
           mainFile={doc.mainFile}
           pageBlocks={pageBlocks}
