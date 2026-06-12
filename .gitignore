@@ -5,6 +5,16 @@ out/
 .DS_Store
 .env
 
+# LaTeX fixture build outputs stay untracked; captured compile logs
+# (fixtures/logs/, plan T1.1) are test data and must be tracked.
+fixtures/*/main.pdf
+fixtures/**/*.synctex.gz
+fixtures/**/*.aux
+fixtures/**/*.toc
+fixtures/**/*.bbl
+fixtures/**/*.blg
+!fixtures/logs/*.log
+
 # Claude/agent machinery never goes in git
 .claude/
 CLAUDE.local.md

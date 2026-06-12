@@ -9,7 +9,9 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "typecheck": "tsc --noEmit --composite false -p tsconfig.node.json && tsc --noEmit --composite false -p tsconfig.web.json"
+    "typecheck": "tsc --noEmit --composite false -p tsconfig.node.json && tsc --noEmit --composite false -p tsconfig.web.json",
+    "test": "vitest run --project shared --project main --project renderer --project fixtures",
+    "test:integration": "bash scripts/test-integration.sh"
   },
   "dependencies": {
     "react": "^19.2.7",
@@ -22,7 +24,9 @@
     "@vitejs/plugin-react": "^5.2.0",
     "electron": "^42.4.0",
     "electron-vite": "^5.0.0",
+    "jsdom": "^26.1.0",
     "typescript": "^6.0.3",
-    "vite": "^7.3.5"
+    "vite": "^7.3.5",
+    "vitest": "^3.2.4"
   }
 }
