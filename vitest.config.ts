@@ -1,4 +1,11 @@
+import { fileURLToPath } from 'node:url'
 import { configDefaults, defineConfig } from 'vitest/config'
+
+// Mirror electron-vite's `@shared` alias so main-process modules that
+// use it (ipc-registry) stay importable from tests.
+const sharedAlias = {
+  '@shared': fileURLToPath(new URL('./src/shared', import.meta.url)),
+}
 
 // One project per src layer (plan T2.1) plus two cross-cutting ones:
 // `tests` covers tests/ (fixture contracts, mock harness);
@@ -16,6 +23,7 @@ export default defineConfig({
         },
       },
       {
+        resolve: { alias: sharedAlias },
         test: {
           name: 'main',
           environment: 'node',
