@@ -195,6 +195,28 @@ describe('ClaudeService.runOp', () => {
     expect(runner.calls).toHaveLength(1)
   })
 
+  test('prime(signal) forwards the abort signal to the runner', async () => {
+    const controller = new AbortController()
+    const runner = new MockRunner(() => claudeJson('primed'))
+    const service = new ClaudeService(runner, store, doc)
+
+    await service.prime(controller.signal)
+
+    expect(runner.calls[0]!.signal).toBe(controller.signal)
+  })
+
+  test('an aborted prime call stores no session id', async () => {
+    const controller = new AbortController()
+    const runner = new MockRunner(() => {
+      controller.abort()
+      return { code: null, stdout: '', stderr: '', timedOut: false }
+    })
+    const service = new ClaudeService(runner, store, doc)
+
+    await expect(service.prime(controller.signal)).rejects.toThrow()
+    expect(store.getProject('/proj').sessionId).toBeUndefined()
+  })
+
   test('STANZA_CLAUDE_BIN overrides the claude binary (T6 mock harness)', async () => {
     vi.stubEnv('STANZA_CLAUDE_BIN', '/mocks/claude-mock.sh')
     store.setProject('/proj', { sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' })
