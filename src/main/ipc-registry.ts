@@ -17,6 +17,7 @@ import type {
   ReviewDecision,
 } from '@shared/ipc'
 import { parseBlocks } from '@shared/blocks/parse'
+import { armSettleWatcher } from './infra/FileWatcher'
 import { DefaultProcessRunner } from './infra/ProcessRunner'
 import { GitClient } from './infra/GitClient'
 import { Store } from './infra/Store'
@@ -149,24 +150,27 @@ export function registerIpcHandlers(): void {
   })
 }
 
-/** Diff-gated op pipeline (FR7): lock check → clean tree → run op →
- *  settle → capture to proposal branch → emit proposal. */
+/** Diff-gated op pipeline (FR7): lock check → clean tree → arm watcher →
+ *  run op → await file settle → capture to proposal branch → emit.
+ *  The watcher is armed BEFORE the op so an edit that flushes after
+ *  claude exits is still seen — a fixed grace lost that race and
+ *  stranded edits uncommitted (B11.2 original design). */
 async function runClaudeOp(req: ClaudeRequest): Promise<ClaudeResult> {
   const doc = requireSession()
   doc.review.assertSpansFree(req.spans)
   await doc.review.prepare()
 
+  const watcher = armSettleWatcher(doc.info.root, { quietMs: 400, capMs: 3000 })
   let op: { opId: string; note: string }
   try {
     op = await doc.claude.runOp(req, (status) => sendToAll(IpcChannels.claudeStatus, status))
+    await watcher.settled() // wait for claude's writes to land (and stop)
   } catch (err) {
     await doc.git.restoreAll() // failed/timed-out op never leaves edits behind
     throw err
+  } finally {
+    watcher.dispose()
   }
-
-  // claude -p exits after its writes; a short grace covers fs flush
-  // (plan B11.2 suggests the watcher here — revisit if edits ever lag).
-  await new Promise((resolve) => setTimeout(resolve, 300))
 
   const proposal = await doc.review.capture(op.opId, req.instruction, req.spans)
   appendOpRecord(doc.info.root, {
