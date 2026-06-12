@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type {
   CompileRequest,
@@ -18,6 +18,11 @@ const TECTONIC_HINT = 'tectonic not found — install with: brew install tectoni
 /** Forward queries sample at most this many lines of a span. */
 const MAX_QUERY_LINES = 40
 
+/** Chapter-scoped compiles go through a throwaway wrapper file so the
+ *  \includeonly can be injected without touching the user's sources
+ *  (B12.1). The doc .gitignore covers `.stanza-scope.*`. */
+const SCOPE_BASE = '.stanza-scope'
+
 function readLogFromDisk(absPath: string): string | null {
   try {
     return readFileSync(absPath, 'utf8')
@@ -31,31 +36,44 @@ function readLogFromDisk(absPath: string): string | null {
  *  one (aborted compiles resolve ok:false with no errors). */
 export class CompileService {
   private controller: AbortController | null = null
+  /** Base name of the last compiled target — synctex queries follow it
+   *  so clicks keep working in a chapter-scoped PDF. */
+  private lastBase: string
 
   constructor(
     private runner: ProcessRunner,
     private doc: DocumentInfo,
     private readLog: (absPath: string) => string | null = readLogFromDisk,
-  ) {}
-
-  private get baseName(): string {
-    return this.doc.mainFile.replace(/\.tex$/, '')
+  ) {
+    this.lastBase = doc.mainFile.replace(/\.tex$/, '')
   }
 
   private get pdfPath(): string {
-    return join(this.doc.root, `${this.baseName}.pdf`)
+    return join(this.doc.root, `${this.lastBase}.pdf`)
   }
 
-  async compile(_req: CompileRequest): Promise<CompileResult> {
+  async compile(req: CompileRequest): Promise<CompileResult> {
     this.controller?.abort()
     const controller = new AbortController()
     this.controller = controller
+
+    const chapters = (req.includeOnly ?? []).map((c) => c.replace(/\.tex$/, ''))
+    const scoped = chapters.length > 0
+    const target = scoped ? `${SCOPE_BASE}.tex` : this.doc.mainFile
+    const base = scoped ? SCOPE_BASE : this.doc.mainFile.replace(/\.tex$/, '')
+
+    if (scoped) {
+      writeFileSync(
+        join(this.doc.root, target),
+        `\\includeonly{${chapters.join(',')}}\n\\input{${this.doc.mainFile}}\n`,
+      )
+    }
 
     let proc
     try {
       proc = await this.runner.run({
         cmd: 'tectonic',
-        args: ['--synctex', '--keep-logs', '-X', 'compile', this.doc.mainFile],
+        args: ['-X', 'compile', '--synctex', '--keep-logs', target],
         cwd: this.doc.root,
         signal: controller.signal,
       })
@@ -65,21 +83,23 @@ export class CompileService {
         ok: false,
         errors: [{ file: '', line: null, message: missing ? TECTONIC_HINT : String(err) }],
       }
+    } finally {
+      if (scoped) rmSync(join(this.doc.root, target), { force: true })
     }
 
     if (controller.signal.aborted) {
       return { ok: false, errors: [] }
     }
     if (proc.code === 0) {
+      this.lastBase = base
       return {
         ok: true,
-        pdfPath: this.pdfPath,
-        synctexPath: join(this.doc.root, `${this.baseName}.synctex.gz`),
+        pdfPath: join(this.doc.root, `${base}.pdf`),
+        synctexPath: join(this.doc.root, `${base}.synctex.gz`),
         errors: [],
       }
     }
-    const log =
-      this.readLog(join(this.doc.root, `${this.baseName}.log`)) ?? proc.stderr
+    const log = this.readLog(join(this.doc.root, `${base}.log`)) ?? proc.stderr
     return { ok: false, errors: parseCompileLog(log, this.doc.mainFile) }
   }
 

@@ -27,6 +27,7 @@ const runner = new DefaultProcessRunner()
 let store: Store
 let documents: DocumentService
 let session: DocumentSession | null = null
+let priming: AbortController | null = null
 
 /** The only place channels bind to services (spec §5). */
 export function registerIpcHandlers(): void {
@@ -50,11 +51,25 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IpcChannels.documentCreate, async (_e, args: { name: string; dir: string }) => {
     const created = await documents.create(args)
-    const info = await documents.prime(created.root, (step) =>
-      sendToAll(IpcChannels.primeStatus, step),
-    )
-    session = new DocumentSession(info, runner, store)
-    return info
+    const controller = new AbortController()
+    priming = controller
+    try {
+      const info = await documents.prime(
+        created.root,
+        (step) => sendToAll(IpcChannels.primeStatus, step),
+        controller.signal,
+      )
+      session = new DocumentSession(info, runner, store)
+      return info
+    } finally {
+      if (priming === controller) priming = null
+    }
+  })
+
+  // Literal channel: the typed primeCancel constant lands with the
+  // frontend's review-chat lane; the name is fixed in that contract.
+  ipcMain.handle('prime:cancel', () => {
+    priming?.abort()
   })
 
   ipcMain.handle(IpcChannels.documentRecents, (): RecentProject[] =>

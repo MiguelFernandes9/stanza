@@ -24,9 +24,10 @@ export class ClaudeService {
     private timeoutMs: number = DEFAULT_TIMEOUT_MS,
   ) {}
 
-  /** Establish the session without running an op (priming pipeline). */
-  async prime(): Promise<void> {
-    await this.ensureSession()
+  /** Establish the session without running an op (priming pipeline).
+   *  The signal aborts the underlying CLI call (prime:cancel). */
+  async prime(signal?: AbortSignal): Promise<void> {
+    await this.ensureSession(signal)
   }
 
   runOp(
@@ -70,32 +71,36 @@ export class ClaudeService {
 
   /** Returns the persisted session id, priming a new session first
    *  when this project has none yet. */
-  private async ensureSession(): Promise<string> {
+  private async ensureSession(signal?: AbortSignal): Promise<string> {
     const existing = this.store.getProject(this.doc.root).sessionId
     if (existing) return existing
 
     const sessionId = randomUUID()
-    const proc = await this.claude([
-      '-p',
-      '--session-id',
-      sessionId,
-      '--add-dir',
-      this.doc.root,
-      '--output-format',
-      'json',
-      primePrompt(this.doc),
-    ])
+    const proc = await this.claude(
+      [
+        '-p',
+        '--session-id',
+        sessionId,
+        '--add-dir',
+        this.doc.root,
+        '--output-format',
+        'json',
+        primePrompt(this.doc),
+      ],
+      signal,
+    )
     assertCompleted(proc, this.timeoutMs)
     this.store.setProject(this.doc.root, { sessionId })
     return sessionId
   }
 
-  private claude(args: string[]): Promise<ProcResult> {
+  private claude(args: string[], signal?: AbortSignal): Promise<ProcResult> {
     return this.runner.run({
       cmd: process.env.STANZA_CLAUDE_BIN ?? 'claude',
       args,
       cwd: this.doc.root,
       timeoutMs: this.timeoutMs,
+      ...(signal ? { signal } : {}),
     })
   }
 }
