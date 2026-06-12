@@ -1,0 +1,19 @@
+<!-- @dsCard group="Spacing" viewport="700x180" name="Elevation & Shadows" subtitle="Warm umber lift — paper off paper" -->
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8" /><link rel="stylesheet" href="../styles.css" />
+<style>
+  body { margin:0; background:var(--surface-app); padding:26px 20px; }
+  .row { display:flex; gap:26px; align-items:center; }
+  .item { display:flex; flex-direction:column; align-items:center; gap:12px; }
+  .box { width:96px; height:60px; background:var(--paper-1); border:1px solid var(--border-faint); border-radius:var(--radius-lg); }
+  .n { font:var(--weight-semibold) var(--text-xs)/1 var(--font-sans); color:var(--ink-700); }
+  .v { font:var(--text-2xs)/1 var(--font-mono); color:var(--ink-400); margin-top:-6px; }
+</style></head><body>
+  <div class="row">
+    <div class="item"><div class="box" style="box-shadow:var(--shadow-xs)"></div><div class="n">xs</div><div class="v">--shadow-xs</div></div>
+    <div class="item"><div class="box" style="box-shadow:var(--shadow-sm)"></div><div class="n">sm</div><div class="v">--shadow-sm</div></div>
+    <div class="item"><div class="box" style="box-shadow:var(--shadow-md)"></div><div class="n">md</div><div class="v">--shadow-md</div></div>
+    <div class="item"><div class="box" style="box-shadow:var(--shadow-lg)"></div><div class="n">lg</div><div class="v">--shadow-lg</div></div>
+    <div class="item"><div class="box" style="box-shadow:var(--shadow-xl)"></div><div class="n">xl</div><div class="v">--shadow-xl</div></div>
+  </div>
+</body></html>

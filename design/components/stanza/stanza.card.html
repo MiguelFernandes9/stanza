@@ -1,0 +1,48 @@
+<!-- @dsCard group="Components" viewport="700x420" name="Stanza Primitives" subtitle="BlockTag · CompilePill · DiffHunk — the product's signature parts" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<link rel="stylesheet" href="../../styles.css" />
+<style>
+  body { margin: 0; background: var(--surface-app); padding: 22px; }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+  .lbl { font: var(--weight-bold) var(--text-2xs)/1 var(--font-sans); letter-spacing: var(--tracking-caps);
+         text-transform: uppercase; color: var(--text-faint); width: 100%; margin-bottom: -4px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<script type="text/babel" data-presets="react">
+const { BlockTag, CompilePill, DiffHunk } = window.StanzaDesignSystem_d6c63d;
+const diff = `@@ -24,4 +24,4 @@\n-\\section{Intro}\n-The model is good and works well in many cases.\n+\\section{Introduction}\n+We show the model generalises across three regimes (§3).\n It builds on prior work.`;
+
+function Demo() {
+  return (
+    <div>
+      <div className="row"><span className="lbl">Block references (selected in the PDF)</span>
+        <BlockTag kind="section" label="Introduction" span="intro.tex:24–31" active onRemove={()=>{}} />
+        <BlockTag kind="equation" label="eq:energy" span="main.tex:88" onRemove={()=>{}} />
+        <BlockTag kind="figure" label="fig:arch" span="figs.tex:12" />
+        <BlockTag kind="citation" label="cite:vaswani17" span="refs.bib:4" />
+      </div>
+      <div className="row"><span className="lbl">Compile status</span>
+        <CompilePill state="running" />
+        <CompilePill state="ok" />
+        <CompilePill state="failed" errors={3} warnings={1} onClick={()=>{}} />
+        <CompilePill state="idle" />
+      </div>
+      <div className="row"><span className="lbl">Proposal diff</span>
+        <div style={{width:'100%'}}><DiffHunk file="sections/intro.tex" diff={diff} /></div>
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<Demo/>);
+</script>
+</body>
+</html>

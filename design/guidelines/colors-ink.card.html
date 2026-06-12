@@ -1,0 +1,22 @@
+<!-- @dsCard group="Colors" viewport="700x150" name="Ink Text Ramp" subtitle="Warm near-black text, 900 → 200" -->
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8" /><link rel="stylesheet" href="../styles.css" />
+<style>
+  body { margin:0; background:var(--surface-app); padding:18px; }
+  .row { display:grid; grid-template-columns:repeat(8,1fr); gap:6px; }
+  .sw { border-radius:var(--radius-sm); overflow:hidden; border:1px solid var(--border-faint); }
+  .chip { height:54px; }
+  .meta { padding:5px 6px; background:var(--paper-1); }
+  .name { font:var(--weight-semibold) var(--text-2xs)/1.2 var(--font-mono); color:var(--ink-700); }
+</style></head><body>
+  <div class="row">
+    <div class="sw"><div class="chip" style="background:var(--ink-900)"></div><div class="meta"><div class="name">900</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--ink-800)"></div><div class="meta"><div class="name">800</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--ink-700)"></div><div class="meta"><div class="name">700</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--ink-600)"></div><div class="meta"><div class="name">600</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--ink-500)"></div><div class="meta"><div class="name">500</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--ink-400)"></div><div class="meta"><div class="name">400</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--ink-300)"></div><div class="meta"><div class="name">300</div></div></div>
+    <div class="sw"><div class="chip" style="background:var(--ink-200)"></div><div class="meta"><div class="name">200</div></div></div>
+  </div>
+</body></html>

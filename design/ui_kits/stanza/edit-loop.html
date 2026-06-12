@@ -1,0 +1,61 @@
+<!-- @dsCard group="Stanza App" viewport="1320x824" name="Edit loop — diff review" subtitle="Opens mid-loop: block selected · instruction sent · proposal awaiting Accept / Reject" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Stanza — edit loop (diff review)</title>
+<link rel="stylesheet" href="../../styles.css" />
+<style>
+  html, body { height: 100%; margin: 0; background: var(--surface-canvas); }
+  #root { height: 100vh; overflow: hidden; }
+  *::-webkit-scrollbar { width: 11px; height: 11px; }
+  *::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 999px; border: 3px solid transparent; background-clip: content-box; }
+  *::-webkit-scrollbar-thumb:hover { background: var(--line-ink); background-clip: content-box; }
+  *::-webkit-scrollbar-track { background: transparent; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<script src="icons.jsx"></script>
+<script src="paperData.js"></script>
+<script type="text/babel" data-presets="react" src="TitleBar.jsx"></script>
+<script type="text/babel" data-presets="react" src="Sidebar.jsx"></script>
+<script type="text/babel" data-presets="react" src="PdfPane.jsx"></script>
+<script type="text/babel" data-presets="react" src="ChatPane.jsx"></script>
+<script type="text/babel" data-presets="react" src="SourceEditor.jsx"></script>
+<script type="text/babel" data-presets="react" src="OpenScreen.jsx"></script>
+<script type="text/babel" data-presets="react" src="Workspace.jsx"></script>
+<script type="text/babel" data-presets="react">
+  // Pre-seeded mid-loop state: the diff-review moment. The proposal pops in
+  // AT the block — no chat panel open (toggle it from the title bar).
+  const paper = window.STZ_PAPER;
+  const target = paper.blocks.find((b) => b.id === 's1-p1');
+  // TWO parallel Claude tasks in the margin rail — one proposal awaiting
+  // review at the intro paragraph, one still running on the abstract.
+  const preset = {
+    sourceOpen: false,
+    chatOpen: false,
+    tasks: [
+      { id: 1, blockIds: ['s1-p1'], instruction: 'Tighten this and add a forward reference to the method.',
+        phase: 'review', proposal: paper.proposals['s1-p1'] },
+      { id: 2, blockIds: ['abs-h', 'abstract'], instruction: 'Lead with the contribution — the method detail can come second.',
+        phase: 'busy', proposal: null }
+    ],
+    messages: [
+      { role: 'claude', text: 'Document primed — 11 blocks across 4 files. Click a block in the page to start an edit; several can run at once.' },
+      { role: 'user', text: 'Tighten this and add a forward reference to the method.',
+        blocks: [{ id: target.id, file: target.file, span: target.span }] },
+      { role: 'claude', text: paper.proposals['s1-p1'].note, proposal: paper.proposals['s1-p1'], resolved: null, taskId: 1 }
+    ]
+  };
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    React.createElement(window.Workspace, { preset, onCloseDoc: () => {} })
+  );
+</script>
+</body>
+</html>

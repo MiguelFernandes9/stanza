@@ -1,0 +1,32 @@
+<!-- @dsCard group="Brand" viewport="700x200" name="Logo & Wordmark" subtitle="The selection-marquee mark + Newsreader wordmark" -->
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8" /><link rel="stylesheet" href="../styles.css" />
+<style>
+  body { margin:0; background:var(--surface-app); padding:0; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; height:200px; }
+  .cell { display:flex; align-items:center; justify-content:center; gap:14px; }
+  .light { background:var(--paper-1); }
+  .dark { background:var(--ink-900); }
+  .lock { display:flex; align-items:center; gap:13px; }
+  .word { font:var(--weight-semibold) 38px/1 var(--font-serif); letter-spacing:-0.01em; }
+  .light .word { color:var(--ink-900); }
+  .dark .word { color:var(--paper-0); }
+  .mark { width:42px; height:42px; }
+  .light .mark { color:var(--ink-900); }
+  .dark .mark { color:var(--paper-0); }
+</style></head><body>
+  <div class="grid">
+    <div class="cell light">
+      <div class="lock">
+        <svg class="mark" viewBox="0 0 32 32" fill="none"><rect x="4" y="4" width="24" height="24" rx="5.5" stroke="currentColor" stroke-width="2.1"/><line x1="9.5" y1="11.5" x2="22.5" y2="11.5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/><line x1="9.5" y1="16" x2="19" y2="16" stroke="#C25C39" stroke-width="2.1" stroke-linecap="round"/><line x1="9.5" y1="20.5" x2="23" y2="20.5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/></svg>
+        <span class="word">Stanza</span>
+      </div>
+    </div>
+    <div class="cell dark">
+      <div class="lock">
+        <svg class="mark" viewBox="0 0 32 32" fill="none"><rect x="4" y="4" width="24" height="24" rx="5.5" stroke="currentColor" stroke-width="2.1"/><line x1="9.5" y1="11.5" x2="22.5" y2="11.5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/><line x1="9.5" y1="16" x2="19" y2="16" stroke="#D27E5C" stroke-width="2.1" stroke-linecap="round"/><line x1="9.5" y1="20.5" x2="23" y2="20.5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"/></svg>
+        <span class="word">Stanza</span>
+      </div>
+    </div>
+  </div>
+</body></html>

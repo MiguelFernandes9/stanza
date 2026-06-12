@@ -1,0 +1,6 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Stanza">
+  <rect x="4" y="4" width="24" height="24" rx="5.5" stroke="currentColor" stroke-width="2.1"></rect>
+  <line x1="9.5" y1="11.5" x2="22.5" y2="11.5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"></line>
+  <line x1="9.5" y1="16" x2="19" y2="16" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"></line>
+  <line x1="9.5" y1="20.5" x2="23" y2="20.5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"></line>
+</svg>

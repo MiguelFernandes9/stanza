@@ -1,0 +1,21 @@
+<!-- @dsCard group="Spacing" viewport="700x150" name="Radii" subtitle="Restrained — an instrument, not a toy" -->
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8" /><link rel="stylesheet" href="../styles.css" />
+<style>
+  body { margin:0; background:var(--surface-app); padding:20px; }
+  .row { display:flex; gap:18px; align-items:flex-end; }
+  .item { display:flex; flex-direction:column; align-items:center; gap:8px; }
+  .box { width:64px; height:48px; background:var(--paper-1); border:1px solid var(--border-strong); box-shadow:var(--shadow-xs); }
+  .top { border-bottom:none; }
+  .n { font:var(--weight-semibold) var(--text-xs)/1 var(--font-sans); color:var(--ink-700); }
+  .v { font:var(--text-2xs)/1 var(--font-mono); color:var(--ink-400); }
+</style></head><body>
+  <div class="row">
+    <div class="item"><div class="box" style="border-radius:var(--radius-xs) var(--radius-xs) 0 0"></div><div class="n">xs</div><div class="v">3px</div></div>
+    <div class="item"><div class="box" style="border-radius:var(--radius-sm) var(--radius-sm) 0 0"></div><div class="n">sm</div><div class="v">5px</div></div>
+    <div class="item"><div class="box" style="border-radius:var(--radius-md) var(--radius-md) 0 0"></div><div class="n">md</div><div class="v">7px</div></div>
+    <div class="item"><div class="box" style="border-radius:var(--radius-lg) var(--radius-lg) 0 0"></div><div class="n">lg</div><div class="v">10px</div></div>
+    <div class="item"><div class="box" style="border-radius:var(--radius-xl) var(--radius-xl) 0 0"></div><div class="n">xl</div><div class="v">14px</div></div>
+    <div class="item"><div class="box" style="border-radius:var(--radius-pill) var(--radius-pill) 0 0"></div><div class="n">pill</div><div class="v">999px</div></div>
+  </div>
+</body></html>
