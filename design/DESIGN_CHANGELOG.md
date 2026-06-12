@@ -26,7 +26,19 @@ First complete interaction design. Spec: `design_handoff_edit_loop/README.md`.
   marks) | Source (diff) toggle; Accept ⌘↵ / Reject; esc closes.
 
 ### Implementation notes (Claude Code: append here)
-- _none yet_
+- Recents rows show no relative-time meta — `RecentProject` in the frozen
+  contract carries no timestamp (fields: root, name, hasSession, blockCount).
+- Priming overlay Cancel only dismisses the overlay; the contract has no
+  abort channel for an in-flight open/prime. Needs a backend channel if
+  real cancel is wanted.
+- TitleBar uses native macOS traffic lights (hiddenInset window), not the
+  drawn dots; the design's lights-close-document gesture is deferred.
+- FD4 page renders deterministic filler text — the real compiled page
+  arrives with F5 (pdf.js); only block geometry drives the rail.
+- Card "Review" (maximize) button deferred to FD5 with the overlay itself;
+  the inline DiffHunk on the card carries review until then.
+- `document:open` gained an optional `{root}` request payload so recents
+  rows can open a specific project (additive; channel name unchanged).
 
 ## Unreleased / open design questions
 - Multi-file proposals: per-file diff tabs in review overlay?

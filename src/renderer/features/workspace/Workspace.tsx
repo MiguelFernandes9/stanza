@@ -1,0 +1,187 @@
+import { useCallback, useEffect, useReducer, useState } from 'react'
+import type { JSX } from 'react'
+import { client } from '@renderer/lib/client'
+import type { BlockNode } from '@shared/blocks/types'
+import type { CommitInfo, DocumentInfo, FileEntry } from '@shared/ipc'
+import { PaperPane } from '../paper/PaperPane'
+import { expandIds, flattenBlocks, taskSpans } from '../paper/paperModel'
+import { initialTaskState, taskReducer } from '../tasks/taskStore'
+import { Sidebar } from './Sidebar'
+import { TitleBar } from './TitleBar'
+import type { CompileInfo } from './TitleBar'
+
+interface Props {
+  doc: DocumentInfo
+}
+
+function PanePlaceholder({ eyebrow, note, width }: { eyebrow: string; note: string; width: number }): JSX.Element {
+  return (
+    <section
+      style={{
+        width,
+        flex: '0 0 auto',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 6,
+        background: 'var(--surface-app)',
+        borderLeft: '1px solid var(--border-default)',
+        minWidth: 0
+      }}
+    >
+      <span
+        style={{
+          font: 'var(--weight-bold) var(--text-2xs)/1 var(--font-sans)',
+          letterSpacing: 'var(--tracking-caps)',
+          textTransform: 'uppercase',
+          color: 'var(--ink-400)'
+        }}
+      >
+        {eyebrow}
+      </span>
+      <span style={{ font: 'var(--text-sm)/1.4 var(--font-sans)', color: 'var(--ink-500)' }}>{note}</span>
+    </section>
+  )
+}
+
+/** Workspace — design §2: TitleBar, sidebar, paper pane with the margin-rail
+ *  edit loop (FD4). Source editor (F4) and chat pane (FD6) still plug into
+ *  placeholders. ⌘R compile · ⌘E source · ⌘J assistant. */
+export function Workspace({ doc }: Props): JSX.Element {
+  const [files, setFiles] = useState<FileEntry[]>([])
+  const [blocks, setBlocks] = useState<BlockNode[]>([])
+  const [history, setHistory] = useState<CommitInfo[]>([])
+  const [sourceOpen, setSourceOpen] = useState(false)
+  const [chatOpen, setChatOpen] = useState(false)
+  const [compile, setCompile] = useState<CompileInfo>({ state: 'idle', errors: 0, warnings: 0 })
+  const [state, dispatch] = useReducer(taskReducer, initialTaskState)
+
+  const loadHistory = useCallback(() => {
+    void client.documentHistory().then(setHistory, () => setHistory([]))
+  }, [])
+
+  useEffect(() => {
+    void client.documentFiles().then(setFiles, () => setFiles([]))
+    void client.documentBlocks(doc.mainFile).then(setBlocks, () => setBlocks([]))
+    loadHistory()
+  }, [doc, loadHistory])
+
+  useEffect(
+    () =>
+      client.onCompileStatus((s) =>
+        setCompile((c) => ({ ...c, state: s === 'running' ? 'running' : s === 'ok' ? 'ok' : 'failed' }))
+      ),
+    []
+  )
+
+  const runCompile = useCallback(() => {
+    setCompile((c) => ({ ...c, state: 'running' }))
+    void client.compileRun({}).then(
+      (res) => setCompile({ state: res.ok ? 'ok' : 'failed', errors: res.errors.length, warnings: 0 }),
+      () => setCompile((c) => ({ ...c, state: 'failed' }))
+    )
+  }, [])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (!(e.metaKey || e.ctrlKey)) return
+      const key = e.key.toLowerCase()
+      if (key === 'r') {
+        e.preventDefault()
+        runCompile()
+      } else if (key === 'e') {
+        e.preventDefault()
+        setSourceOpen((v) => !v)
+      } else if (key === 'j') {
+        e.preventDefault()
+        setChatOpen((v) => !v)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [runCompile])
+
+  const pageBlocks = flattenBlocks(blocks)
+
+  const submitTask = (taskId: number): void => {
+    const task = state.tasks.find((t) => t.id === taskId)
+    if (!task || !task.instruction.trim()) return
+    dispatch({ type: 'submit', taskId })
+    void client.claudeRun({ instruction: task.instruction.trim(), spans: taskSpans(task.blockIds, blocks) }).then(
+      (res) => {
+        dispatch({ type: 'op-started', taskId, opId: res.opId })
+        if (res.proposal) dispatch({ type: 'proposal', taskId, proposal: res.proposal, note: res.note })
+        else dispatch({ type: 'resolve', taskId }) // no file changes — nothing to review
+      },
+      (err: unknown) =>
+        dispatch({ type: 'op-failed', taskId, error: err instanceof Error ? err.message : String(err) })
+    )
+  }
+
+  const resolveTask = (taskId: number, accept: boolean): void => {
+    const task = state.tasks.find((t) => t.id === taskId)
+    const opId = task?.proposal?.opId ?? task?.opId
+    if (!opId) return
+    void client.reviewResolve({ opId, accept }).then(
+      () => {
+        dispatch({ type: 'resolve', taskId })
+        if (accept) {
+          runCompile()
+          loadHistory()
+        }
+      },
+      (err: unknown) =>
+        dispatch({ type: 'op-failed', taskId, error: err instanceof Error ? err.message : String(err) })
+    )
+  }
+
+  const projectName = doc.root.split('/').pop() ?? doc.root
+  const activeTask = state.tasks.find((t) => t.id === state.activeTask)
+
+  return (
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--surface-canvas)' }}>
+      <TitleBar
+        title={projectName}
+        mainFile={doc.mainFile}
+        compile={compile}
+        onCompile={runCompile}
+        sourceOpen={sourceOpen}
+        onToggleSource={() => setSourceOpen((v) => !v)}
+        chatOpen={chatOpen}
+        onToggleChat={() => setChatOpen((v) => !v)}
+      />
+      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+        <Sidebar
+          doc={doc}
+          files={files}
+          blocks={blocks}
+          history={history}
+          activeBlock={activeTask?.blockIds[0] ?? null}
+          onPickBlock={(id) => {
+            dispatch({ type: 'set-view', view: 'select' })
+            dispatch({ type: 'toggle-block', ids: expandIds(blocks, id), additive: false })
+          }}
+        />
+        {sourceOpen && <PanePlaceholder eyebrow="Source" note="CodeMirror editor lands with F4" width={420} />}
+        <PaperPane
+          mainFile={doc.mainFile}
+          pageBlocks={pageBlocks}
+          state={state}
+          onToggleBlock={(id, additive) =>
+            dispatch({ type: 'toggle-block', ids: expandIds(blocks, id), additive })
+          }
+          onActivateTask={(taskId) => dispatch({ type: 'activate', taskId })}
+          onToggleAdding={() => dispatch({ type: 'set-adding', adding: !state.adding })}
+          onRemoveBlock={(taskId, blockId) => dispatch({ type: 'remove-block', taskId, blockId })}
+          onUpdateInstruction={(taskId, instruction) => dispatch({ type: 'update-instruction', taskId, instruction })}
+          onSubmitTask={submitTask}
+          onDismissTask={(taskId) => dispatch({ type: 'dismiss', taskId })}
+          onResolveTask={resolveTask}
+          onView={(view) => dispatch({ type: 'set-view', view })}
+        />
+        {chatOpen && <PanePlaceholder eyebrow="Assistant" note="Session history lands with FD6" width={428} />}
+      </div>
+    </div>
+  )
+}
