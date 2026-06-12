@@ -99,6 +99,10 @@ export function registerIpcHandlers(): void {
     atomicWrite(join(requireSession().info.root, relPath), content)
   })
 
+  ipcMain.handle(IpcChannels.documentRead, (_e, relPath: string) =>
+    readFileSync(join(requireSession().info.root, relPath), 'utf8'),
+  )
+
   ipcMain.handle(IpcChannels.compileRun, async (_e, req: CompileRequest) => {
     const doc = requireSession()
     sendToAll(IpcChannels.compileStatus, 'running' satisfies CompileStatus)

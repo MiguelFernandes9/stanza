@@ -15,11 +15,15 @@
     "test:integration": "bash scripts/test-integration.sh"
   },
   "dependencies": {
+    "@codemirror/lint": "^6.9.7",
     "@unified-latex/unified-latex-types": "^1.8.4",
     "@unified-latex/unified-latex-util-parse": "^1.8.4",
     "chokidar": "^5.0.0",
+    "codemirror": "^6.0.2",
+    "codemirror-lang-latex": "^0.4.1",
     "diff": "^9.0.0",
     "lucide-react": "^1.18.0",
+    "pdfjs-dist": "^6.0.227",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },

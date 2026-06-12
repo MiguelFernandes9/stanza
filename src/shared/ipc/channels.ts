@@ -4,6 +4,7 @@ export const IpcChannels = {
   documentRecents: 'document:recents', // invoke → RecentProject[]
   documentHistory: 'document:history', // invoke → CommitInfo[] (sidebar HISTORY)
   documentSave: 'document:save',      // invoke (relPath, content) → void (F4)
+  documentRead: 'document:read',      // invoke relPath → string (working-tree content; F4 editor — contract addition, flagged at gate)
   documentFiles: 'document:files',    // invoke → FileEntry[] (sidebar FILES tree)
   documentBlocks: 'document:blocks',  // invoke file → BlockNode[] (F8; type from shared/blocks)
   primeStatus: 'prime:status',        // main→renderer event: PrimeStep (priming overlay)
