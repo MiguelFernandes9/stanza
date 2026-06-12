@@ -12,6 +12,7 @@ import type { EditorApi } from '../editor/EditorPane'
 import { PaperPane } from '../paper/PaperPane'
 import type { PdfFlash } from '../paper/PaperPane'
 import { expandIds, flattenBlocks, spanLabel, taskSpans } from '../paper/paperModel'
+import { resolveToKnownFile } from '@renderer/lib/paths'
 import { blockLabel, tagKind } from '../tasks/TaskCard'
 import { initialTaskState, taskReducer } from '../tasks/taskStore'
 import { Sidebar } from './Sidebar'
@@ -131,7 +132,9 @@ export function Workspace({ doc }: Props): JSX.Element {
       (loc) => {
         if (!loc) return
         setSourceOpen(true)
-        editorApi.current?.jumpTo(loc.file, loc.line)
+        // Defensive: synctex once returned absolute realpaths — resolve to a
+        // known project file so a regression still jumps instead of no-op'ing.
+        editorApi.current?.jumpTo(resolveToKnownFile(loc.file, doc.texFiles), loc.line)
       },
       () => undefined
     )
@@ -157,6 +160,13 @@ export function Workspace({ doc }: Props): JSX.Element {
   }, [debounce])
 
   const pageBlocks = flattenBlocks(blocks)
+
+  // Defensive: normalize compile-error paths to known project files so an
+  // absolute-path regression still lands gutter markers on the right file.
+  const editorErrors = useMemo(
+    () => compileErrors.map((e) => ({ ...e, file: resolveToKnownFile(e.file, doc.texFiles) })),
+    [compileErrors, doc.texFiles]
+  )
 
   /** instructionOverride: the chat composer writes the text and submits in
    *  one step — state updates are async, so the text travels explicitly. */
@@ -271,7 +281,7 @@ export function Workspace({ doc }: Props): JSX.Element {
             activeFile={activeFile}
             onSelectFile={setActiveFile}
             onDocChanged={() => debounce.trigger()}
-            errors={compileErrors}
+            errors={editorErrors}
             onForwardSearch={forwardSearch}
             register={(api) => {
               editorApi.current = api
