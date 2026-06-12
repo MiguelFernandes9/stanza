@@ -1,4 +1,4 @@
-import { readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type {
   CompileRequest,
@@ -40,16 +40,25 @@ export class CompileService {
    *  so clicks keep working in a chapter-scoped PDF. */
   private lastBase: string
 
+  /** doc.root resolved through symlinks once at the boundary —
+   *  tectonic records realpaths in .synctex.gz, so queries against a
+   *  symlinked path (e.g. /tmp on macOS) would return nothing. */
+  private root: string
+
   constructor(
     private runner: ProcessRunner,
-    private doc: DocumentInfo,
+    doc: DocumentInfo,
     private readLog: (absPath: string) => string | null = readLogFromDisk,
   ) {
+    this.doc = doc
     this.lastBase = doc.mainFile.replace(/\.tex$/, '')
+    this.root = safeRealpath(doc.root)
   }
 
+  private doc: DocumentInfo
+
   private get pdfPath(): string {
-    return join(this.doc.root, `${this.lastBase}.pdf`)
+    return join(this.root, `${this.lastBase}.pdf`)
   }
 
   async compile(req: CompileRequest): Promise<CompileResult> {
@@ -64,7 +73,7 @@ export class CompileService {
 
     if (scoped) {
       writeFileSync(
-        join(this.doc.root, target),
+        join(this.root, target),
         `\\includeonly{${chapters.join(',')}}\n\\input{${this.doc.mainFile}}\n`,
       )
     }
@@ -74,7 +83,7 @@ export class CompileService {
       proc = await this.runner.run({
         cmd: 'tectonic',
         args: ['-X', 'compile', '--synctex', '--keep-logs', target],
-        cwd: this.doc.root,
+        cwd: this.root,
         signal: controller.signal,
       })
     } catch (err) {
@@ -84,7 +93,7 @@ export class CompileService {
         errors: [{ file: '', line: null, message: missing ? TECTONIC_HINT : String(err) }],
       }
     } finally {
-      if (scoped) rmSync(join(this.doc.root, target), { force: true })
+      if (scoped) rmSync(join(this.root, target), { force: true })
     }
 
     if (controller.signal.aborted) {
@@ -94,12 +103,12 @@ export class CompileService {
       this.lastBase = base
       return {
         ok: true,
-        pdfPath: join(this.doc.root, `${base}.pdf`),
-        synctexPath: join(this.doc.root, `${base}.synctex.gz`),
+        pdfPath: join(this.root, `${base}.pdf`),
+        synctexPath: join(this.root, `${base}.synctex.gz`),
         errors: [],
       }
     }
-    const log = this.readLog(join(this.doc.root, `${base}.log`)) ?? proc.stderr
+    const log = this.readLog(join(this.root, `${base}.log`)) ?? proc.stderr
     return { ok: false, errors: parseCompileLog(log, this.doc.mainFile) }
   }
 
@@ -112,7 +121,7 @@ export class CompileService {
   }
 
   async forward(span: BlockSpan): Promise<PdfRect[]> {
-    const absFile = join(this.doc.root, span.file)
+    const absFile = join(this.root, span.file)
     const rects: PdfRect[] = []
     for (const line of sampleLines(span.startLine, span.endLine)) {
       const proc = await this.synctex(['view', '-i', `${line}:0:${absFile}`, '-o', this.pdfPath])
@@ -124,14 +133,14 @@ export class CompileService {
 
   private async synctex(args: string[]) {
     try {
-      return await this.runner.run({ cmd: 'synctex', args, cwd: this.doc.root })
+      return await this.runner.run({ cmd: 'synctex', args, cwd: this.root })
     } catch {
       return null // synctex CLI not on PATH — queries degrade gracefully
     }
   }
 
   private toRelative(file: string): string {
-    const prefix = `${this.doc.root}/`
+    const prefix = `${this.root}/`
     if (file.startsWith(prefix)) return file.slice(prefix.length)
     return file.startsWith('./') ? file.slice(2) : file
   }
@@ -157,4 +166,13 @@ function dedupeRects(rects: PdfRect[]): PdfRect[] {
     seen.add(key)
     return true
   })
+}
+
+/** Realpath when the folder exists; the raw path otherwise. */
+function safeRealpath(path: string): string {
+  try {
+    return realpathSync(path)
+  } catch {
+    return path
+  }
 }
