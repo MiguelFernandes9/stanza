@@ -62,6 +62,15 @@ First complete interaction design. Spec: `design_handoff_edit_loop/README.md`.
   pending-edit line wash not implemented (needs review-state line ranges).
 - Contract additions this lane: document:read (working-tree content — the
   editor cannot load files otherwise) alongside the earlier prime:cancel.
+- New document (cleanup lane): the design mock faked the new-document path;
+  the real flow now collects a validated name + a parent folder in a
+  NewDocumentDialog before document:create (backend needs an absolute dir).
+  Adds dialog:pickDirectory — a bare folder picker, since document:open's
+  picker would open the chosen folder as a project. Name input gets the
+  native autoFocus (the ported Input doesn't forward refs — left untouched).
+- Defensive file-match: synctex-inverse and compile-error paths are resolved
+  to known project files by suffix, so an absolute/realpath regression still
+  jumps and still marks the gutter rather than silently missing.
 
 ## Unreleased / open design questions
 - Multi-file proposals: per-file diff tabs in review overlay?

@@ -71,6 +71,10 @@ export function registerIpcHandlers(): void {
     priming?.abort()
   })
 
+  // Parent directory for a New document — picks a folder without opening it
+  // as a project (document:open's picker would open it).
+  ipcMain.handle(IpcChannels.dialogPickDirectory, () => pickFolder())
+
   ipcMain.handle(IpcChannels.documentRecents, (): RecentProject[] =>
     store
       .listProjects()

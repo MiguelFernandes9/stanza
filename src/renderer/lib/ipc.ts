@@ -47,6 +47,8 @@ export const api = {
   documentRead: (relPath: string) => invoke<string>(IpcChannels.documentRead, relPath),
   documentFiles: () => invoke<FileEntry[]>(IpcChannels.documentFiles),
   documentBlocks: (file: string) => invoke<BlockNode[]>(IpcChannels.documentBlocks, file),
+  /** Pick a parent directory for New document (no project opened). Null = cancelled. */
+  dialogPickDirectory: () => invoke<string | null>(IpcChannels.dialogPickDirectory),
   compileRun: (req: CompileRequest) => invoke<CompileResult>(IpcChannels.compileRun, req),
   synctexInverse: (p: InversePoint) =>
     invoke<SourceLocation | null>(IpcChannels.synctexInverse, p),

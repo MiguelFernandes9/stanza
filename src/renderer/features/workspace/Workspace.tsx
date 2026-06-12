@@ -12,6 +12,7 @@ import type { EditorApi } from '../editor/EditorPane'
 import { PaperPane } from '../paper/PaperPane'
 import type { PdfFlash } from '../paper/PaperPane'
 import { expandIds, flattenBlocks, spanLabel, taskSpans } from '../paper/paperModel'
+import { resolveToKnownFile } from '@renderer/lib/paths'
 import { blockLabel, tagKind } from '../tasks/TaskCard'
 import { initialTaskState, taskReducer } from '../tasks/taskStore'
 import { Sidebar } from './Sidebar'
@@ -44,7 +45,7 @@ export function Workspace({ doc }: Props): JSX.Element {
   const [opRecords, setOpRecords] = useState<OpRecord[]>([])
   const [activeFile, setActiveFile] = useState(doc.mainFile)
   const [compileErrors, setCompileErrors] = useState<CompileError[]>([])
-  const [pdfState, setPdfState] = useState<{ path: string; nonce: number } | null>(null)
+  const [pdfState, setPdfState] = useState<{ rel: string; nonce: number } | null>(null)
   const [pdfFlash, setPdfFlash] = useState<PdfFlash | null>(null)
   const editorApi = useRef<EditorApi | null>(null)
 
@@ -52,11 +53,10 @@ export function Workspace({ doc }: Props): JSX.Element {
 
   // FR4 stale-PDF rule: a failed compile keeps the last good render — the
   // nonce only bumps on ok, which busts the stanza-doc:// cache.
-  const pdfUrl = pdfState
-    ? `stanza-doc://doc/${encodeURI(
-        pdfState.path.startsWith(doc.root) ? pdfState.path.slice(doc.root.length + 1) : pdfState.path
-      )}?v=${pdfState.nonce}`
-    : null
+  // The URL carries only the root-relative name; embedding the absolute
+  // pdfPath (realpath form since the synctex fixes) tripped the protocol's
+  // traversal guard — the document root is resolved in main, not here.
+  const pdfUrl = pdfState ? `stanza-doc://doc/${encodeURIComponent(pdfState.rel)}?v=${pdfState.nonce}` : null
 
   const loadHistory = useCallback(() => {
     void client.documentHistory().then(setHistory, () => setHistory([]))
@@ -94,8 +94,10 @@ export function Workspace({ doc }: Props): JSX.Element {
         setCompile({ state: res.ok ? 'ok' : 'failed', errors: res.errors.length, warnings: 0 })
         setCompileErrors(res.errors)
         if (res.ok && res.pdfPath) {
-          const path = res.pdfPath
-          setPdfState((prev) => ({ path, nonce: (prev?.nonce ?? 0) + 1 }))
+          // tectonic writes the PDF flat at the doc root (cwd), so the
+          // basename is its root-relative path — no absolute path in the URL.
+          const rel = res.pdfPath.split('/').pop() ?? 'main.pdf'
+          setPdfState((prev) => ({ rel, nonce: (prev?.nonce ?? 0) + 1 }))
         }
       },
       () => setCompile((c) => ({ ...c, state: 'failed' }))
@@ -131,7 +133,9 @@ export function Workspace({ doc }: Props): JSX.Element {
       (loc) => {
         if (!loc) return
         setSourceOpen(true)
-        editorApi.current?.jumpTo(loc.file, loc.line)
+        // Defensive: synctex once returned absolute realpaths — resolve to a
+        // known project file so a regression still jumps instead of no-op'ing.
+        editorApi.current?.jumpTo(resolveToKnownFile(loc.file, doc.texFiles), loc.line)
       },
       () => undefined
     )
@@ -157,6 +161,13 @@ export function Workspace({ doc }: Props): JSX.Element {
   }, [debounce])
 
   const pageBlocks = flattenBlocks(blocks)
+
+  // Defensive: normalize compile-error paths to known project files so an
+  // absolute-path regression still lands gutter markers on the right file.
+  const editorErrors = useMemo(
+    () => compileErrors.map((e) => ({ ...e, file: resolveToKnownFile(e.file, doc.texFiles) })),
+    [compileErrors, doc.texFiles]
+  )
 
   /** instructionOverride: the chat composer writes the text and submits in
    *  one step — state updates are async, so the text travels explicitly. */
@@ -271,7 +282,7 @@ export function Workspace({ doc }: Props): JSX.Element {
             activeFile={activeFile}
             onSelectFile={setActiveFile}
             onDocChanged={() => debounce.trigger()}
-            errors={compileErrors}
+            errors={editorErrors}
             onForwardSearch={forwardSearch}
             register={(api) => {
               editorApi.current = api

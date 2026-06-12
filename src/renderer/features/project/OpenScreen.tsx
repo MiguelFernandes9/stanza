@@ -6,6 +6,7 @@ import { client } from '@renderer/lib/client'
 import type { DocumentInfo, PrimeStep, RecentProject } from '@shared/ipc'
 import { foldPrimeSteps } from './primeSteps'
 import type { PrimeVariant } from './primeSteps'
+import { NewDocumentDialog } from './NewDocumentDialog'
 import { PrimingOverlay } from './PrimingOverlay'
 import { RecentRow } from './RecentRow'
 import { StanzaMark } from './StanzaMark'
@@ -27,6 +28,7 @@ export function OpenScreen({ onOpened }: Props): JSX.Element {
   const [priming, setPriming] = useState<Priming | null>(null)
   const [events, setEvents] = useState<PrimeStep[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [newDocOpen, setNewDocOpen] = useState(false)
 
   useEffect(() => {
     void client.documentRecents().then(setRecents, () => setRecents([]))
@@ -93,11 +95,7 @@ export function OpenScreen({ onOpened }: Props): JSX.Element {
             variant="primary"
             size="lg"
             iconLeft={<Plus size={17} />}
-            onClick={() =>
-              void run({ project: 'untitled-paper', variant: 'new' }, () =>
-                client.documentCreate({ name: 'untitled-paper', dir: '' })
-              )
-            }
+            onClick={() => setNewDocOpen(true)}
           >
             New document
           </Button>
@@ -152,6 +150,16 @@ export function OpenScreen({ onOpened }: Props): JSX.Element {
           control initialized, session primed.
         </div>
       </div>
+
+      {newDocOpen && (
+        <NewDocumentDialog
+          onCancel={() => setNewDocOpen(false)}
+          onCreate={({ name, dir }) => {
+            setNewDocOpen(false)
+            void run({ project: name, variant: 'new' }, () => client.documentCreate({ name, dir }))
+          }}
+        />
+      )}
 
       {overlayVisible && priming && (
         <PrimingOverlay

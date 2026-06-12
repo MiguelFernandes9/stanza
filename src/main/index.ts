@@ -1,6 +1,7 @@
 import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'node:path'
 import { currentDocRoot, registerIpcHandlers } from './ipc-registry'
+import { buildAppMenu } from './menu'
 import { handleDocProtocol, registerDocScheme } from './protocol'
 
 registerDocScheme() // must precede app ready
@@ -43,6 +44,7 @@ function createWindow(): void {
 }
 
 void app.whenReady().then(() => {
+  buildAppMenu() // frees ⌘R from the default reload accelerator
   registerIpcHandlers()
   handleDocProtocol(currentDocRoot)
   createWindow()
