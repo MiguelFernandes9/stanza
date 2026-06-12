@@ -225,8 +225,11 @@ export class CompileService {
 }
 ```
 
-Command: `tectonic --synctex --keep-logs -X compile <mainFile>` with
-`cwd = doc.root`. SyncTeX queries: try the `synctex` CLI
+Command: `tectonic -X compile --synctex --keep-logs <mainFile>` with
+`cwd = doc.root`. (Amended 2026-06-12: flags must FOLLOW `-X compile` —
+`-X` switches tectonic to its V2 interface and rejects V1-style flags
+before it; tectonic 0.16.9 exits 2 on the original order. Caught by
+tester T3 against the real binary.) SyncTeX queries: try the `synctex` CLI
 (`synctex edit -o ...` / `synctex view -i ...`) if present on PATH;
 otherwise parse the `.synctex.gz` with a JS parser behind the same two
 methods — **evaluate npm options in this task and record the choice in
