@@ -10,9 +10,10 @@ function assertKnown(channel: string): void {
 // Thin allowlisted pass-through; the typed surface lives in
 // src/renderer/lib/ipc.ts against the shared contract.
 const bridge = {
-  invoke(channel: string, payload?: unknown): Promise<unknown> {
+  // Variadic: document:save's handler takes (relPath, content) positionally.
+  invoke(channel: string, ...args: unknown[]): Promise<unknown> {
     assertKnown(channel)
-    return ipcRenderer.invoke(channel, payload)
+    return ipcRenderer.invoke(channel, ...args)
   },
   on(channel: string, cb: (payload: unknown) => void): () => void {
     assertKnown(channel)

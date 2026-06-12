@@ -158,8 +158,9 @@ export function OpenScreen({ onOpened }: Props): JSX.Element {
           project={priming.project}
           steps={steps}
           onCancel={() => {
-            // No abort channel in the frozen contract — cancel dismisses the
-            // overlay; the in-flight open resolves into the workspace or fails.
+            // prime:cancel is a manager-approved contract addition whose
+            // handler is a backend follow-up — tolerate rejection until then.
+            void client.primeCancel().catch(() => undefined)
             setPriming(null)
             setEvents([])
           }}
