@@ -42,6 +42,16 @@ describe('DocumentService.create', () => {
     expect(tex).toContain('\\section{Introduction}')
   })
 
+  test('rejects a non-absolute dir instead of creating in the app CWD', async () => {
+    await expect(service.create({ name: 'Stray', dir: 'untitled-papers' })).rejects.toThrow(
+      /absolute/,
+    )
+    await expect(service.create({ name: 'Stray', dir: './here' })).rejects.toThrow(
+      /absolute/,
+    )
+    expect(existsSync(join(process.cwd(), 'untitled-papers'))).toBe(false)
+  })
+
   test('template parses to at least two blocks', async () => {
     const info = await service.create({ name: 'Blocks', dir })
     const { parseBlocks } = await import('../../../shared/blocks/parse')

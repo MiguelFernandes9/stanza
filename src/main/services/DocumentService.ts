@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import type { DocumentInfo, PrimeStep } from '../../shared/ipc/document'
 import { resolveProjectFiles } from '../../shared/latex/project'
 import { parseBlocks } from '../../shared/blocks/parse'
@@ -70,8 +70,13 @@ export class DocumentService {
     return { root, mainFile, texFiles: orderTexFiles(mainFile, texFiles, read) }
   }
 
-  /** "New document": minimal article project in <dir>/<name>. */
+  /** "New document": minimal article project in <dir>/<name>.
+   *  dir must be absolute — a relative dir would resolve against the
+   *  app CWD and key the Store with a relative root (smoke-run BUG B). */
   async create(args: { name: string; dir: string }): Promise<DocumentInfo> {
+    if (!isAbsolute(args.dir)) {
+      throw new Error(`document:create dir must be absolute, got "${args.dir}"`)
+    }
     const root = join(args.dir, args.name)
     mkdirSync(root, { recursive: true })
     writeFileSync(join(root, 'main.tex'), TEMPLATE(args.name))

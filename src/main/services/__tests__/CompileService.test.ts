@@ -1,4 +1,11 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
@@ -114,7 +121,8 @@ describe('CompileService includeOnly (B12.1 chapter scope)', () => {
   let scopedDoc: DocumentInfo
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'stanza-scope-'))
+    // realpath: the service resolves symlinked roots (macOS /var → /private/var)
+    root = realpathSync(mkdtempSync(join(tmpdir(), 'stanza-scope-')))
     scopedDoc = { root, mainFile: 'main.tex', texFiles: ['main.tex'] }
   })
 
@@ -182,6 +190,71 @@ describe('CompileService includeOnly (B12.1 chapter scope)', () => {
 
     const inverseArgs = runner.calls[1]!.args
     expect(inverseArgs[2]).toBe(`1:10:20:${join(root, '.stanza-scope.pdf')}`)
+  })
+})
+
+describe('CompileService with a symlinked doc root (tester finding)', () => {
+  // tectonic records realpaths in .synctex.gz; querying with the
+  // symlinked path returns zero results, so the service must resolve
+  // the root once at its boundary.
+  let realRoot: string
+  let linkRoot: string
+  let holder: string
+
+  beforeEach(() => {
+    realRoot = realpathSync(mkdtempSync(join(tmpdir(), 'stanza-real-')))
+    holder = mkdtempSync(join(tmpdir(), 'stanza-link-'))
+    linkRoot = join(holder, 'doc')
+    symlinkSync(realRoot, linkRoot)
+  })
+
+  afterEach(() => {
+    rmSync(holder, { recursive: true, force: true })
+    rmSync(realRoot, { recursive: true, force: true })
+  })
+
+  test('compile and synctex queries run against the resolved realpath', async () => {
+    const runner = new MockRunner(() => ok)
+    const service = new CompileService(
+      runner,
+      { root: linkRoot, mainFile: 'main.tex', texFiles: ['main.tex'] },
+      () => null,
+    )
+
+    const result = await service.compile({})
+    expect(runner.calls[0]!.cwd).toBe(realRoot)
+    expect(result.pdfPath).toBe(join(realRoot, 'main.pdf'))
+
+    await service.forward({ file: 'chapters/ch1.tex', startLine: 12, endLine: 12 })
+    expect(runner.calls[1]!.args).toEqual([
+      'view',
+      '-i',
+      `12:0:${join(realRoot, 'chapters/ch1.tex')}`,
+      '-o',
+      join(realRoot, 'main.pdf'),
+    ])
+  })
+
+  test('inverse maps realpath Input lines back to root-relative files', async () => {
+    const runner = new MockRunner(() => ({
+      ...ok,
+      stdout: [
+        'SyncTeX result begin',
+        `Input:${join(realRoot, 'chapters/ch1.tex')}`,
+        'Line:12',
+        'SyncTeX result end',
+      ].join('\n'),
+    }))
+    const service = new CompileService(
+      runner,
+      { root: linkRoot, mainFile: 'main.tex', texFiles: ['main.tex'] },
+      () => null,
+    )
+
+    expect(await service.inverse({ page: 1, x: 1, y: 1 })).toEqual({
+      file: 'chapters/ch1.tex',
+      line: 12,
+    })
   })
 })
 

@@ -156,6 +156,16 @@ describe('ReviewService.resolve', () => {
 })
 
 describe('ReviewService.list (crash recovery)', () => {
+  test('a folder with no repo lists nothing instead of throwing', async () => {
+    const bare = mkdtempSync(join(tmpdir(), 'stanza-norepo-'))
+    try {
+      const service = new ReviewService(new GitClient(runner, bare))
+      expect(await service.list()).toEqual([])
+    } finally {
+      rmSync(bare, { recursive: true, force: true })
+    }
+  })
+
   test('a fresh instance rebuilds proposals from op branches', async () => {
     write('main.tex', 'RECOVER ME\nline2\nline3\n')
     await review.capture('op9', 'survive a crash', [])
