@@ -141,6 +141,29 @@ describe('GitClient branch operations (proposal-branch review)', () => {
     expect(await git.show('HEAD', 'missing.tex')).toBe('')
   })
 
+  test('diffRange diffs from the merge base, not the moved branch tip', async () => {
+    await initWithCommit()
+    write('main.tex', 'proposed\n')
+    await git.switchCreate('stanza/op-mb')
+    await git.commitAll('claude: propose')
+    await git.switchBack()
+    // user keeps editing other files after the capture
+    write('notes.tex', 'unrelated manual edit\n')
+    await git.commitAll('wip: manual edits')
+    const diff = await git.diffRange('HEAD', 'stanza/op-mb')
+    expect(diff).toContain('+proposed')
+    expect(diff).not.toContain('unrelated manual edit')
+  })
+
+  test('subject returns the commit subject at a ref', async () => {
+    await initWithCommit()
+    write('main.tex', 'x\n')
+    await git.switchCreate('stanza/op-s')
+    await git.commitAll('claude: shorten the abstract')
+    await git.switchBack()
+    expect(await git.subject('stanza/op-s')).toBe('claude: shorten the abstract')
+  })
+
   test('log returns subjects with kind classification', async () => {
     await initWithCommit()
     write('a.tex', '1\n')

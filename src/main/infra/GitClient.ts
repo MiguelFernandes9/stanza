@@ -106,8 +106,15 @@ export class GitClient {
     return res.stdout.split('\n').filter((line) => line.trim() !== '')
   }
 
+  /** Changes introduced by `to` since it diverged from `from`
+   *  (three-dot: merge-base diff), so later commits on `from` don't
+   *  pollute a proposal's diff. */
   async diffRange(from: string, to: string): Promise<string> {
-    return (await this.must(['diff', `${from}..${to}`])).stdout
+    return (await this.must(['diff', `${from}...${to}`])).stdout
+  }
+
+  async subject(ref: string): Promise<string> {
+    return (await this.must(['log', '-1', '--format=%s', ref])).stdout.trim()
   }
 
   /** File content at a ref; empty string when the file is absent there. */
