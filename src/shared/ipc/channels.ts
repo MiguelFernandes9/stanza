@@ -7,6 +7,7 @@ export const IpcChannels = {
   documentRead: 'document:read',      // invoke relPath → string (working-tree content; F4 editor — contract addition, flagged at gate)
   documentFiles: 'document:files',    // invoke → FileEntry[] (sidebar FILES tree)
   documentBlocks: 'document:blocks',  // invoke file → BlockNode[] (F8; type from shared/blocks)
+  dialogPickDirectory: 'dialog:pickDirectory', // invoke → string | null (parent dir for New document — contract addition, flagged at gate)
   primeStatus: 'prime:status',        // main→renderer event: PrimeStep (priming overlay)
   primeCancel: 'prime:cancel',        // invoke → void — abort the priming pipeline (manager-approved addition; backend follow-up)
   compileRun: 'compile:run',          // invoke CompileRequest → CompileResult
