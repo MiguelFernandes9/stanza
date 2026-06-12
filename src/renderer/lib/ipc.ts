@@ -32,7 +32,10 @@ const on =
 
 /** Typed IPC client — the only way the renderer talks to main. */
 export const api = {
-  documentOpen: () => invoke<DocumentInfo | null>(IpcChannels.documentOpen),
+  /** No payload → folder picker dialog; {root} → open that project directly
+   *  (recents row). Additive payload on the frozen channel — stubs ignore it. */
+  documentOpen: (req?: { root?: string }) =>
+    invoke<DocumentInfo | null>(IpcChannels.documentOpen, req),
   documentCreate: (req: { name: string; dir: string }) =>
     invoke<DocumentInfo>(IpcChannels.documentCreate, req),
   documentRecents: () => invoke<RecentProject[]>(IpcChannels.documentRecents),
