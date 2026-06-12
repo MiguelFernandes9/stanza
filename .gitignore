@@ -5,6 +5,10 @@ out/
 .DS_Store
 .env
 
+# Playwright artifacts
+test-results/
+playwright-report/
+
 # LaTeX fixture build outputs stay untracked; captured compile logs
 # (fixtures/logs/, plan T1.1) are test data and must be tracked.
 fixtures/*/main.pdf

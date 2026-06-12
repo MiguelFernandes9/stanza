@@ -2,6 +2,12 @@ import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'node:path'
 import { registerIpcHandlers } from './ipc-registry'
 
+// Test seam (T6 E2E): an isolated userData dir keeps Playwright runs
+// out of the real per-project store. No effect outside tests.
+if (process.env.STANZA_USER_DATA) {
+  app.setPath('userData', process.env.STANZA_USER_DATA)
+}
+
 function createWindow(): void {
   const win = new BrowserWindow({
     width: 1440,
