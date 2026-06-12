@@ -1,0 +1,273 @@
+import { useCallback, useEffect, useReducer, useState } from 'react'
+import type { JSX } from 'react'
+import { Toast } from '@renderer/components'
+import { client } from '@renderer/lib/client'
+import type { BlockNode } from '@shared/blocks/types'
+import type { CommitInfo, DocumentInfo, FileEntry, OpRecord } from '@shared/ipc'
+import { ChatPane } from '../chat/ChatPane'
+import type { ChatMessage, ComposeChip } from '../chat/ChatPane'
+import { PaperPane } from '../paper/PaperPane'
+import { expandIds, flattenBlocks, spanLabel, taskSpans } from '../paper/paperModel'
+import { blockLabel, tagKind } from '../tasks/TaskCard'
+import { initialTaskState, taskReducer } from '../tasks/taskStore'
+import { Sidebar } from './Sidebar'
+import { TitleBar } from './TitleBar'
+import type { CompileInfo } from './TitleBar'
+
+interface Props {
+  doc: DocumentInfo
+}
+
+function PanePlaceholder({ eyebrow, note, width }: { eyebrow: string; note: string; width: number }): JSX.Element {
+  return (
+    <section
+      style={{
+        width,
+        flex: '0 0 auto',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 6,
+        background: 'var(--surface-app)',
+        borderLeft: '1px solid var(--border-default)',
+        minWidth: 0
+      }}
+    >
+      <span
+        style={{
+          font: 'var(--weight-bold) var(--text-2xs)/1 var(--font-sans)',
+          letterSpacing: 'var(--tracking-caps)',
+          textTransform: 'uppercase',
+          color: 'var(--ink-400)'
+        }}
+      >
+        {eyebrow}
+      </span>
+      <span style={{ font: 'var(--text-sm)/1.4 var(--font-sans)', color: 'var(--ink-500)' }}>{note}</span>
+    </section>
+  )
+}
+
+/** Workspace — design §2: TitleBar, sidebar, paper pane with the margin-rail
+ *  edit loop (FD4). Source editor (F4) and chat pane (FD6) still plug into
+ *  placeholders. ⌘R compile · ⌘E source · ⌘J assistant. */
+export function Workspace({ doc }: Props): JSX.Element {
+  const [files, setFiles] = useState<FileEntry[]>([])
+  const [blocks, setBlocks] = useState<BlockNode[]>([])
+  const [history, setHistory] = useState<CommitInfo[]>([])
+  const [sourceOpen, setSourceOpen] = useState(false)
+  const [chatOpen, setChatOpen] = useState(false)
+  const [compile, setCompile] = useState<CompileInfo>({ state: 'idle', errors: 0, warnings: 0 })
+  const [toast, setToast] = useState<{ title: string; message: string; tone: 'danger' | 'success' } | null>(null)
+  const [state, dispatch] = useReducer(taskReducer, initialTaskState)
+
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(null), 6000)
+    return () => clearTimeout(t)
+  }, [toast])
+
+  const [opRecords, setOpRecords] = useState<OpRecord[]>([])
+
+  const loadHistory = useCallback(() => {
+    void client.documentHistory().then(setHistory, () => setHistory([]))
+  }, [])
+
+  const loadOps = useCallback(() => {
+    void client.claudeHistory().then(setOpRecords, () => setOpRecords([]))
+  }, [])
+
+  useEffect(() => {
+    void client.documentFiles().then(setFiles, () => setFiles([]))
+    void client.documentBlocks(doc.mainFile).then(setBlocks, () => setBlocks([]))
+    loadHistory()
+    loadOps()
+  }, [doc, loadHistory, loadOps])
+
+  // Pending proposals re-emitted on open (crash recovery, FR7).
+  useEffect(
+    () => client.onReviewProposal((proposal) => dispatch({ type: 'restore-proposal', proposal })),
+    []
+  )
+
+  useEffect(
+    () =>
+      client.onCompileStatus((s) =>
+        setCompile((c) => ({ ...c, state: s === 'running' ? 'running' : s === 'ok' ? 'ok' : 'failed' }))
+      ),
+    []
+  )
+
+  const runCompile = useCallback(() => {
+    setCompile((c) => ({ ...c, state: 'running' }))
+    void client.compileRun({}).then(
+      (res) => setCompile({ state: res.ok ? 'ok' : 'failed', errors: res.errors.length, warnings: 0 }),
+      () => setCompile((c) => ({ ...c, state: 'failed' }))
+    )
+  }, [])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (!(e.metaKey || e.ctrlKey)) return
+      const key = e.key.toLowerCase()
+      if (key === 'r') {
+        e.preventDefault()
+        runCompile()
+      } else if (key === 'e') {
+        e.preventDefault()
+        setSourceOpen((v) => !v)
+      } else if (key === 'j') {
+        e.preventDefault()
+        setChatOpen((v) => !v)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [runCompile])
+
+  const pageBlocks = flattenBlocks(blocks)
+
+  /** instructionOverride: the chat composer writes the text and submits in
+   *  one step — state updates are async, so the text travels explicitly. */
+  const submitTask = (taskId: number, instructionOverride?: string): void => {
+    const task = state.tasks.find((t) => t.id === taskId)
+    const instruction = (instructionOverride ?? task?.instruction ?? '').trim()
+    if (!task || !instruction) return
+    if (instructionOverride) dispatch({ type: 'update-instruction', taskId, instruction })
+    dispatch({ type: 'submit', taskId })
+    void client.claudeRun({ instruction, spans: taskSpans(task.blockIds, blocks) }).then(
+      (res) => {
+        dispatch({ type: 'op-started', taskId, opId: res.opId })
+        if (res.proposal) dispatch({ type: 'proposal', taskId, proposal: res.proposal, note: res.note })
+        else dispatch({ type: 'resolve', taskId }) // no file changes — nothing to review
+        loadOps()
+      },
+      (err: unknown) =>
+        dispatch({ type: 'op-failed', taskId, error: err instanceof Error ? err.message : String(err) })
+    )
+  }
+
+  const resolveTask = (taskId: number, accept: boolean): void => {
+    const task = state.tasks.find((t) => t.id === taskId)
+    const opId = task?.proposal?.opId ?? task?.opId
+    if (!opId) return
+    void client.reviewResolve({ opId, accept }).then(
+      (resolution) => {
+        if (resolution.conflicts && resolution.conflicts.length > 0) {
+          // FD5.4: merge conflicted — proposal stays pending, surface the files.
+          setToast({
+            title: 'Accept failed — merge conflict',
+            message: `Conflicting files: ${resolution.conflicts.join(', ')}. The proposal is still pending.`,
+            tone: 'danger'
+          })
+          return
+        }
+        dispatch({ type: 'resolve', taskId })
+        loadOps()
+        if (accept) {
+          runCompile()
+          loadHistory()
+        }
+      },
+      (err: unknown) =>
+        dispatch({ type: 'op-failed', taskId, error: err instanceof Error ? err.message : String(err) })
+    )
+  }
+
+  const projectName = doc.root.split('/').pop() ?? doc.root
+  const activeTask = state.tasks.find((t) => t.id === state.activeTask)
+  const pageById = new Map(pageBlocks.map((b) => [b.id, b]))
+
+  // Chat stream: one user+claude pair per op record; unresolved ops carry
+  // their proposal (from the live task) for inline accept/reject.
+  const messages: ChatMessage[] = opRecords.flatMap((r): ChatMessage[] => {
+    const owner = state.tasks.find((t) => t.opId === r.opId || t.proposal?.opId === r.opId)
+    return [
+      { role: 'user', text: r.instruction },
+      {
+        role: 'claude',
+        text: r.note,
+        proposal: r.accepted === null ? owner?.proposal ?? undefined : undefined,
+        resolved: r.accepted === null ? null : r.accepted ? 'accept' : 'reject'
+      }
+    ]
+  })
+  const chatBusy = state.tasks.some((t) => t.phase === 'busy')
+  const chips: ComposeChip[] = state.tasks
+    .filter((t) => t.phase === 'compose')
+    .flatMap((t) => t.blockIds)
+    .map((id) => pageById.get(id))
+    .filter((b): b is NonNullable<typeof b> => b != null)
+    .map((b) => ({ blockId: b.id, kind: tagKind(b), label: blockLabel(b), span: spanLabel(b.span) }))
+
+  const chatSubmit = (instruction: string): void => {
+    const compose = state.tasks.filter((t) => t.phase === 'compose').at(-1)
+    if (compose) submitTask(compose.id, instruction)
+  }
+
+  const resolveByOp = (opId: string, accept: boolean): void => {
+    const owner = state.tasks.find((t) => t.opId === opId || t.proposal?.opId === opId)
+    if (owner) resolveTask(owner.id, accept)
+  }
+
+  return (
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--surface-canvas)' }}>
+      <TitleBar
+        title={projectName}
+        mainFile={doc.mainFile}
+        compile={compile}
+        onCompile={runCompile}
+        sourceOpen={sourceOpen}
+        onToggleSource={() => setSourceOpen((v) => !v)}
+        chatOpen={chatOpen}
+        onToggleChat={() => setChatOpen((v) => !v)}
+      />
+      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+        <Sidebar
+          doc={doc}
+          files={files}
+          blocks={blocks}
+          history={history}
+          activeBlock={activeTask?.blockIds[0] ?? null}
+          onPickBlock={(id) => {
+            dispatch({ type: 'set-view', view: 'select' })
+            dispatch({ type: 'toggle-block', ids: expandIds(blocks, id), additive: false })
+          }}
+        />
+        {sourceOpen && <PanePlaceholder eyebrow="Source" note="CodeMirror editor lands with F4" width={420} />}
+        <PaperPane
+          mainFile={doc.mainFile}
+          pageBlocks={pageBlocks}
+          state={state}
+          onToggleBlock={(id, additive) =>
+            dispatch({ type: 'toggle-block', ids: expandIds(blocks, id), additive })
+          }
+          onActivateTask={(taskId) => dispatch({ type: 'activate', taskId })}
+          onToggleAdding={() => dispatch({ type: 'set-adding', adding: !state.adding })}
+          onRemoveBlock={(taskId, blockId) => dispatch({ type: 'remove-block', taskId, blockId })}
+          onUpdateInstruction={(taskId, instruction) => dispatch({ type: 'update-instruction', taskId, instruction })}
+          onSubmitTask={submitTask}
+          onDismissTask={(taskId) => dispatch({ type: 'dismiss', taskId })}
+          onResolveTask={resolveTask}
+          onView={(view) => dispatch({ type: 'set-view', view })}
+        />
+        {chatOpen && (
+          <ChatPane
+            messages={messages}
+            busy={chatBusy}
+            chips={chips}
+            onRemoveChip={(blockId) => dispatch({ type: 'toggle-block', ids: [blockId], additive: true })}
+            onSubmit={chatSubmit}
+            onResolveOp={resolveByOp}
+          />
+        )}
+      </div>
+      {toast && (
+        <div style={{ position: 'fixed', top: 50, right: 16, zIndex: 120 }}>
+          <Toast title={toast.title} message={toast.message} tone={toast.tone} onDismiss={() => setToast(null)} />
+        </div>
+      )}
+    </div>
+  )
+}

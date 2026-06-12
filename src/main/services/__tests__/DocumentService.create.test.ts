@@ -79,6 +79,19 @@ describe('DocumentService.prime', () => {
     expect(primed.map((d) => d.root)).toEqual([info.root])
   })
 
+  test('fresh init writes a doc .gitignore that keeps figure pdfs tracked', async () => {
+    const info = await service.create({ name: 'Ignore', dir })
+    await service.prime(info.root, () => {})
+
+    const ignore = readFileSync(join(info.root, '.gitignore'), 'utf8')
+    expect(ignore).toContain('/main.pdf')
+    expect(ignore).toContain('*.synctex.gz')
+    expect(ignore).toContain('*.log')
+    expect(ignore).not.toContain('*.pdf') // figures stay versioned
+    const git = new GitClient(runner, info.root)
+    expect(await git.isClean()).toBe(true) // .gitignore is in the initial commit
+  })
+
   test('recents gains the project with hasSession and blockCount', async () => {
     const info = await service.create({ name: 'Recents', dir })
     await service.prime(info.root, () => {})
@@ -88,6 +101,62 @@ describe('DocumentService.prime', () => {
     expect(record.blockCount).toBeGreaterThanOrEqual(2)
     expect(record.lastOpened).toBeTruthy()
     expect(existsSync(join(dir, 'projects.json'))).toBe(true)
+  })
+})
+
+describe('DocumentService.prime cancellation (prime:cancel)', () => {
+  function cancellableService(): { svc: DocumentService; controller: AbortController } {
+    const controller = new AbortController()
+    const svc = new DocumentService({
+      store,
+      makeGit: (root) => new GitClient(runner, root),
+      // hangs like a real claude prime until the signal fires
+      primeSession: (_doc, signal) =>
+        new Promise<void>((_, reject) => {
+          if (signal?.aborted) return reject(new Error('aborted'))
+          signal?.addEventListener('abort', () => reject(new Error('aborted')))
+        }),
+    })
+    return { svc, controller }
+  }
+
+  test('cancel mid-session: PRIME_CANCELED, no store record, no orphan .git', async () => {
+    const { svc, controller } = cancellableService()
+    const info = await service.create({ name: 'Cancelled', dir })
+
+    const priming = svc.prime(info.root, (step) => {
+      if (step.step === 'session' && step.state === 'running') controller.abort()
+    }, controller.signal)
+
+    await expect(priming).rejects.toThrow('PRIME_CANCELED')
+    expect(store.getProject(info.root)).toEqual({})
+    expect(existsSync(join(info.root, '.git'))).toBe(false)
+    expect(existsSync(join(info.root, 'main.tex'))).toBe(true) // user files stay
+  })
+
+  test('cancel never deletes a pre-existing repo', async () => {
+    const { svc, controller } = cancellableService()
+    const info = await service.create({ name: 'Existing', dir })
+    const git = new GitClient(runner, info.root)
+    await git.init()
+    await git.commitAll('user history')
+
+    const priming = svc.prime(info.root, (step) => {
+      if (step.step === 'session' && step.state === 'running') controller.abort()
+    }, controller.signal)
+
+    await expect(priming).rejects.toThrow('PRIME_CANCELED')
+    expect(existsSync(join(info.root, '.git'))).toBe(true)
+    expect(await git.log(5)).toHaveLength(1) // history untouched
+  })
+
+  test('abort before the pipeline starts cancels at the first step', async () => {
+    const { svc, controller } = cancellableService()
+    const info = await service.create({ name: 'Early', dir })
+    controller.abort()
+    await expect(svc.prime(info.root, () => {}, controller.signal)).rejects.toThrow(
+      'PRIME_CANCELED',
+    )
   })
 })
 

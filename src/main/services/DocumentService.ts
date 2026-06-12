@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { DocumentInfo, PrimeStep } from '../../shared/ipc/document'
 import { resolveProjectFiles } from '../../shared/latex/project'
@@ -13,8 +13,23 @@ export interface DocumentServiceDeps {
   store: Store
   makeGit(root: string): GitClient
   /** Primes the per-document Claude session (ClaudeService.prime). */
-  primeSession(doc: DocumentInfo): Promise<void>
+  primeSession(doc: DocumentInfo, signal?: AbortSignal): Promise<void>
 }
+
+/** Build artifacts never belong in the document repo. Only the main
+ *  output pdf is ignored by name — figure pdfs stay versioned. */
+const docGitignore = (mainBase: string) => `# stanza: build outputs
+/${mainBase}.pdf
+*.synctex.gz
+*.log
+*.aux
+*.xdv
+*.toc
+*.out
+*.bbl
+*.blg
+.stanza-scope.*
+`
 
 const TEMPLATE = (name: string) => `\\documentclass[11pt]{article}
 \\usepackage[utf8]{inputenc}
@@ -67,42 +82,71 @@ export class DocumentService {
 
   /** One-time blocking priming flow (FR1): read sources → parse blocks
    *  → git init + initial commit → prime the Claude session. Each step
-   *  emits running/done for the priming overlay. */
-  async prime(root: string, emit: (step: PrimeStep) => void): Promise<DocumentInfo> {
+   *  emits running/done for the priming overlay. An aborted signal
+   *  (prime:cancel) stops the pipeline and undoes partial state: a git
+   *  init made by this run is removed, nothing is stored. */
+  async prime(
+    root: string,
+    emit: (step: PrimeStep) => void,
+    signal?: AbortSignal,
+  ): Promise<DocumentInfo> {
     const deps = this.deps
     if (!deps) throw new Error('DocumentService.prime needs deps (store, git, session)')
+    let createdRepo = false
 
-    emit({ step: 'read', state: 'running' })
-    const info = await this.open(root)
-    if (!info) throw new Error(`no .tex files found in ${root}`)
-    emit({ step: 'read', state: 'done', detail: `${info.texFiles.length} files` })
+    try {
+      throwIfAborted(signal)
+      emit({ step: 'read', state: 'running' })
+      const info = await this.open(root)
+      if (!info) throw new Error(`no .tex files found in ${root}`)
+      emit({ step: 'read', state: 'done', detail: `${info.texFiles.length} files` })
 
-    emit({ step: 'parse', state: 'running' })
-    let blockCount = 0
-    for (const file of info.texFiles) {
-      try {
-        blockCount += countNodes(parseBlocks(file, readFileSync(join(root, file), 'utf8')))
-      } catch {
-        // unparsable file: skip — the editor still opens it as text
+      throwIfAborted(signal)
+      emit({ step: 'parse', state: 'running' })
+      let blockCount = 0
+      for (const file of info.texFiles) {
+        try {
+          blockCount += countNodes(parseBlocks(file, readFileSync(join(root, file), 'utf8')))
+        } catch {
+          // unparsable file: skip — the editor still opens it as text
+        }
       }
+      emit({ step: 'parse', state: 'done', detail: `${blockCount} blocks` })
+
+      throwIfAborted(signal)
+      emit({ step: 'git', state: 'running' })
+      const git = deps.makeGit(root)
+      if (!(await git.isRepo())) {
+        await git.init()
+        createdRepo = true
+        if (!existsSync(join(root, '.gitignore'))) {
+          writeFileSync(join(root, '.gitignore'), docGitignore(info.mainFile.replace(/\.tex$/, '')))
+        }
+        await git.commitAll('initial commit')
+      }
+      emit({ step: 'git', state: 'done' })
+
+      throwIfAborted(signal)
+      emit({ step: 'session', state: 'running' })
+      await deps.primeSession(info, signal)
+      emit({ step: 'session', state: 'done' })
+
+      throwIfAborted(signal)
+      deps.store.setProject(root, { lastOpened: new Date().toISOString(), blockCount })
+      return info
+    } catch (err) {
+      if (signal?.aborted) {
+        // undo only what this run created — never a pre-existing repo
+        if (createdRepo) rmSync(join(root, '.git'), { recursive: true, force: true })
+        throw new Error('PRIME_CANCELED')
+      }
+      throw err
     }
-    emit({ step: 'parse', state: 'done', detail: `${blockCount} blocks` })
-
-    emit({ step: 'git', state: 'running' })
-    const git = deps.makeGit(root)
-    if (!(await git.isRepo())) {
-      await git.init()
-      await git.commitAll('initial commit')
-    }
-    emit({ step: 'git', state: 'done' })
-
-    emit({ step: 'session', state: 'running' })
-    await deps.primeSession(info)
-    emit({ step: 'session', state: 'done' })
-
-    deps.store.setProject(root, { lastOpened: new Date().toISOString(), blockCount })
-    return info
   }
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new Error('PRIME_CANCELED')
 }
 
 function countNodes(roots: BlockNode[]): number {

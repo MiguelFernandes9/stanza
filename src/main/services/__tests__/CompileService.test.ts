@@ -1,4 +1,7 @@
-import { describe, expect, test } from 'vitest'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import type { ProcessRunner, ProcResult, RunSpec } from '../../infra/ProcessRunner'
 import { CompileService } from '../CompileService'
 import type { DocumentInfo } from '../../../shared/ipc/document'
@@ -40,7 +43,7 @@ describe('CompileService.compile', () => {
 
     expect(runner.calls[0]).toMatchObject({
       cmd: 'tectonic',
-      args: ['--synctex', '--keep-logs', '-X', 'compile', 'main.tex'],
+      args: ['-X', 'compile', '--synctex', '--keep-logs', 'main.tex'],
       cwd: '/proj',
     })
     expect(result.ok).toBe(true)
@@ -103,6 +106,82 @@ describe('CompileService.compile', () => {
     expect(firstResult.ok).toBe(false)
     expect(firstResult.errors).toEqual([]) // aborted, not failed
     expect(secondResult.ok).toBe(true)
+  })
+})
+
+describe('CompileService includeOnly (B12.1 chapter scope)', () => {
+  let root: string
+  let scopedDoc: DocumentInfo
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'stanza-scope-'))
+    scopedDoc = { root, mainFile: 'main.tex', texFiles: ['main.tex'] }
+  })
+
+  afterEach(() => rmSync(root, { recursive: true, force: true }))
+
+  test('scoped compile targets a wrapper with \\includeonly, then removes it', async () => {
+    let wrapperSeenByTectonic = ''
+    const runner = new MockRunner((spec) => {
+      wrapperSeenByTectonic = readFileSync(join(root, spec.args[spec.args.length - 1]!), 'utf8')
+      return ok
+    })
+    const service = new CompileService(runner, scopedDoc, () => null)
+
+    const result = await service.compile({ includeOnly: ['chapters/ch1'] })
+
+    expect(runner.calls[0]!.args).toEqual([
+      '-X',
+      'compile',
+      '--synctex',
+      '--keep-logs',
+      '.stanza-scope.tex',
+    ])
+    expect(wrapperSeenByTectonic).toBe('\\includeonly{chapters/ch1}\n\\input{main.tex}\n')
+    expect(result.pdfPath).toBe(join(root, '.stanza-scope.pdf'))
+    expect(result.synctexPath).toBe(join(root, '.stanza-scope.synctex.gz'))
+    expect(existsSync(join(root, '.stanza-scope.tex'))).toBe(false) // cleaned up
+  })
+
+  test('a .tex suffix in includeOnly entries is stripped', async () => {
+    let wrapper = ''
+    const runner = new MockRunner((spec) => {
+      wrapper = readFileSync(join(root, spec.args[spec.args.length - 1]!), 'utf8')
+      return ok
+    })
+    const service = new CompileService(runner, scopedDoc, () => null)
+    await service.compile({ includeOnly: ['chapters/ch1.tex', 'chapters/ch2'] })
+    expect(wrapper).toContain('\\includeonly{chapters/ch1,chapters/ch2}')
+  })
+
+  test('an empty includeOnly list compiles the main file directly', async () => {
+    const runner = new MockRunner(() => ok)
+    const service = new CompileService(runner, scopedDoc, () => null)
+    const result = await service.compile({ includeOnly: [] })
+    expect(runner.calls[0]!.args[4]).toBe('main.tex')
+    expect(result.pdfPath).toBe(join(root, 'main.pdf'))
+  })
+
+  test('failed scoped compile reads the wrapper log', async () => {
+    const requested: string[] = []
+    const runner = new MockRunner(() => ({ ...ok, code: 1 }))
+    const service = new CompileService(runner, scopedDoc, (absPath) => {
+      requested.push(absPath)
+      return '(./main.tex\n! Emergency stop.\n)'
+    })
+    await service.compile({ includeOnly: ['chapters/ch1'] })
+    expect(requested).toEqual([join(root, '.stanza-scope.log')])
+  })
+
+  test('synctex queries follow the last compiled target', async () => {
+    const runner = new MockRunner(() => ok)
+    const service = new CompileService(runner, scopedDoc, () => null)
+    await service.compile({ includeOnly: ['chapters/ch1'] })
+
+    await service.inverse({ page: 1, x: 10, y: 20 })
+
+    const inverseArgs = runner.calls[1]!.args
+    expect(inverseArgs[2]).toBe(`1:10:20:${join(root, '.stanza-scope.pdf')}`)
   })
 })
 

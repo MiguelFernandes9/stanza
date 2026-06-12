@@ -9,6 +9,7 @@ import type {
   CompileResult,
   CompileStatus,
   DocumentInfo,
+  DocumentOpenRequest,
   FileEntry,
   InversePoint,
   OpRecord,
@@ -22,8 +23,8 @@ import type {
 } from '@shared/ipc'
 import type { BlockNode } from '@shared/blocks/types'
 
-const invoke = <T>(channel: string, payload?: unknown): Promise<T> =>
-  window.stanza.invoke(channel, payload) as Promise<T>
+const invoke = <T>(channel: string, ...args: unknown[]): Promise<T> =>
+  window.stanza.invoke(channel, ...args) as Promise<T>
 
 const on =
   <T>(channel: string) =>
@@ -32,13 +33,16 @@ const on =
 
 /** Typed IPC client — the only way the renderer talks to main. */
 export const api = {
-  documentOpen: () => invoke<DocumentInfo | null>(IpcChannels.documentOpen),
+  /** No root → folder picker dialog; with root → open that project directly
+   *  (recents row). Wire payload is the bare root string (handler signature). */
+  documentOpen: (req?: DocumentOpenRequest) =>
+    invoke<DocumentInfo | null>(IpcChannels.documentOpen, req?.root),
   documentCreate: (req: { name: string; dir: string }) =>
     invoke<DocumentInfo>(IpcChannels.documentCreate, req),
   documentRecents: () => invoke<RecentProject[]>(IpcChannels.documentRecents),
   documentHistory: () => invoke<CommitInfo[]>(IpcChannels.documentHistory),
   documentSave: (req: { relPath: string; content: string }) =>
-    invoke<void>(IpcChannels.documentSave, req),
+    invoke<void>(IpcChannels.documentSave, req.relPath, req.content),
   documentFiles: () => invoke<FileEntry[]>(IpcChannels.documentFiles),
   documentBlocks: (file: string) => invoke<BlockNode[]>(IpcChannels.documentBlocks, file),
   compileRun: (req: CompileRequest) => invoke<CompileResult>(IpcChannels.compileRun, req),
@@ -51,6 +55,9 @@ export const api = {
   reviewList: () => invoke<ReviewProposal[]>(IpcChannels.reviewList),
   reviewFileAt: (req: { opId: string; file: string }) =>
     invoke<{ before: string; after: string }>(IpcChannels.reviewFileAt, req),
+  /** Abort the priming pipeline (manager-approved addition; handler is a
+   *  backend follow-up — callers must tolerate rejection until it lands). */
+  primeCancel: () => invoke<void>(IpcChannels.primeCancel),
   onCompileStatus: on<CompileStatus>(IpcChannels.compileStatus),
   onClaudeStatus: on<ClaudeStatus>(IpcChannels.claudeStatus),
   onReviewProposal: on<ReviewProposal>(IpcChannels.reviewProposal),

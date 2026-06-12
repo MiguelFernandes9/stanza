@@ -3,10 +3,11 @@ export const IpcChannels = {
   documentCreate: 'document:create',  // invoke {name: string; dir: string} → DocumentInfo (article template)
   documentRecents: 'document:recents', // invoke → RecentProject[]
   documentHistory: 'document:history', // invoke → CommitInfo[] (sidebar HISTORY)
-  documentSave: 'document:save',      // invoke {relPath, content} → void (F4)
+  documentSave: 'document:save',      // invoke (relPath, content) → void (F4)
   documentFiles: 'document:files',    // invoke → FileEntry[] (sidebar FILES tree)
   documentBlocks: 'document:blocks',  // invoke file → BlockNode[] (F8; type from shared/blocks)
   primeStatus: 'prime:status',        // main→renderer event: PrimeStep (priming overlay)
+  primeCancel: 'prime:cancel',        // invoke → void — abort the priming pipeline (manager-approved addition; backend follow-up)
   compileRun: 'compile:run',          // invoke CompileRequest → CompileResult
   compileStatus: 'compile:status',    // main→renderer event: CompileStatus
   synctexInverse: 'synctex:inverse',  // invoke InversePoint → SourceLocation | null
