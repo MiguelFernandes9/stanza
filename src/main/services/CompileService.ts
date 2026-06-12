@@ -1,5 +1,5 @@
 import { readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import type {
   CompileRequest,
   CompileResult,
@@ -139,10 +139,17 @@ export class CompileService {
     }
   }
 
+  /** Map a synctex `Input:` path to a root-relative file (contract:
+   *  SourceLocation.file is relative to doc root). Both sides are
+   *  realpath-resolved first — tectonic records realpaths, and the doc
+   *  root may be reached via a different symlink spelling, so a plain
+   *  string-prefix check would leak the absolute path and the renderer
+   *  could never match the file (live-gate click-to-source no-op). */
   private toRelative(file: string): string {
-    const prefix = `${this.root}/`
-    if (file.startsWith(prefix)) return file.slice(prefix.length)
-    return file.startsWith('./') ? file.slice(2) : file
+    const resolved = safeRealpath(file)
+    const rel = relative(this.root, resolved)
+    // Outside the root (unexpected) → hand back the best path we have.
+    return rel && !rel.startsWith('..') ? rel : resolved
   }
 }
 
