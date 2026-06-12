@@ -5,9 +5,10 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
+  writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import type { ProcessRunner, ProcResult, RunSpec } from '../../infra/ProcessRunner'
 import { CompileService } from '../CompileService'
@@ -255,6 +256,35 @@ describe('CompileService with a symlinked doc root (tester finding)', () => {
       file: 'chapters/ch1.tex',
       line: 12,
     })
+  })
+
+  test('inverse never leaks an absolute path when synctex spells the root differently', async () => {
+    // The doc is opened (and root resolved) one way; synctex records the
+    // file under a *second* symlink to the same dir. A byte-for-byte
+    // prefix check misses it and leaks the absolute path; the renderer
+    // can't match it and click-to-source silently no-ops (live gate bug).
+    writeFileSync(join(realRoot, 'main.tex'), 'x')
+    const otherLink = join(holder, 'doc-alt')
+    symlinkSync(realRoot, otherLink)
+
+    const runner = new MockRunner(() => ({
+      ...ok,
+      stdout: [
+        'SyncTeX result begin',
+        `Input:${join(otherLink, 'main.tex')}`,
+        'Line:11',
+        'SyncTeX result end',
+      ].join('\n'),
+    }))
+    const service = new CompileService(
+      runner,
+      { root: realRoot, mainFile: 'main.tex', texFiles: ['main.tex'] },
+      () => null,
+    )
+
+    const loc = await service.inverse({ page: 1, x: 1, y: 1 })
+    expect(loc).toEqual({ file: 'main.tex', line: 11 })
+    expect(isAbsolute(loc!.file)).toBe(false)
   })
 })
 
