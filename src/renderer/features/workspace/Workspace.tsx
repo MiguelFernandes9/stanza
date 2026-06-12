@@ -87,9 +87,13 @@ export function Workspace({ doc }: Props): JSX.Element {
 
   useEffect(
     () =>
-      client.onCompileStatus((s) =>
+      client.onCompileStatus((s) => {
         setCompile((c) => ({ ...c, state: s === 'running' ? 'running' : s === 'ok' ? 'ok' : 'failed' }))
-      ),
+        // Bump the cache-busting nonce on EVERY successful compile, not only
+        // the runCompile promise path — a compile triggered elsewhere must
+        // still refresh the pane (L5). Reuses the known PDF name.
+        if (s === 'ok') setPdfState((prev) => (prev ? { ...prev, nonce: prev.nonce + 1 } : prev))
+      }),
     []
   )
 

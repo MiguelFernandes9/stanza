@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { JSX, ReactNode } from 'react'
+import { pagesToEvict, visiblePageRange } from './pageWindow'
 import type { PDFDocumentProxy, PDFPageProxy } from './pdfjsSetup'
 
 export interface PageGeometry {
@@ -22,6 +23,11 @@ interface Props {
 }
 
 const PAGE_GAP = 18
+const PAGE_BUFFER = 1
+/** Cap the backing-store resolution: a retina page at scale already costs
+ *  ~30 MB, and fast scroll churns several at once — uncapped dpr crashed the
+ *  renderer (L6). */
+const MAX_DPR = 2
 
 function PageCanvas({ page, scale }: { page: PDFPageProxy; scale: number }): JSX.Element {
   const ref = useRef<HTMLCanvasElement | null>(null)
@@ -29,29 +35,50 @@ function PageCanvas({ page, scale }: { page: PDFPageProxy; scale: number }): JSX
     const canvas = ref.current
     if (!canvas) return
     const viewport = page.getViewport({ scale })
-    const dpr = window.devicePixelRatio || 1
+    const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR)
     canvas.width = Math.floor(viewport.width * dpr)
     canvas.height = Math.floor(viewport.height * dpr)
     canvas.style.width = `${viewport.width}px`
     canvas.style.height = `${viewport.height}px`
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    const task = page.render({ canvas, canvasContext: ctx, viewport, transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined })
+    const task = page.render({
+      canvas,
+      canvasContext: ctx,
+      viewport,
+      transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined
+    })
     task.promise.catch(() => undefined) // cancelled renders reject — benign
-    return () => task.cancel()
+    return () => {
+      task.cancel()
+      // Free the backing store immediately rather than waiting for GC — the
+      // difference between bounded and runaway memory under fast scroll.
+      canvas.width = 0
+      canvas.height = 0
+    }
   }, [page, scale])
   return <canvas ref={ref} style={{ display: 'block' }} />
 }
 
-/** Virtualized page column: every page holds its slot (geometry from page 1),
- *  but only visible ±1 mount a canvas — F5.2's re-render containment; scroll
- *  position survives document swaps because slot heights never collapse. */
+/** Virtualized page column. Only the visible ±1 pages mount a canvas and hold
+ *  a page proxy; everything else is evicted (proxy.cleanup + zeroed canvas) so
+ *  memory stays bounded during fast scroll. The page cache is keyed to the
+ *  current document — a recompile swaps `pdf`, the cache is dropped, and the
+ *  visible pages re-render fresh (fixes the stale-after-compile pane, L5). */
 export function PdfPageStack({ pdf, scale, scrollRef, onGeometry, overlay, onPageClick }: Props): JSX.Element {
   const [geo, setGeo] = useState<PageGeometry | null>(null)
   const [pages, setPages] = useState<Map<number, PDFPageProxy>>(new Map())
-  const [range, setRange] = useState<[number, number]>([1, 2])
+  const [range, setRange] = useState<[number, number]>([1, 0])
+  const pagesRef = useRef(pages)
+  pagesRef.current = pages
 
+  // New document (recompile / open): drop the old page cache so stale proxies
+  // can't render, and re-measure geometry. Cleanup releases the old proxies.
   useEffect(() => {
+    for (const page of pagesRef.current.values()) void page.cleanup()
+    setGeo(null)
+    setRange([1, 0])
+    setPages(new Map())
     let alive = true
     void pdf.getPage(1).then((page) => {
       if (!alive) return
@@ -66,28 +93,47 @@ export function PdfPageStack({ pdf, scale, scrollRef, onGeometry, overlay, onPag
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pdf, scale])
 
-  // Visible range from scroll position.
+  // Visible range from scroll position, coalesced to one update per frame so a
+  // fast scroll doesn't churn mount/unmount faster than memory can be freed.
   useEffect(() => {
     const el = scrollRef.current
     if (!el || !geo) return
-    const update = (): void => {
+    let frame = 0
+    const recompute = (): void => {
+      frame = 0
       const slot = geo.height + geo.gap
-      const first = Math.max(1, Math.floor(el.scrollTop / slot))
-      const last = Math.min(pdf.numPages, Math.ceil((el.scrollTop + el.clientHeight) / slot) + 1)
-      setRange((prev) => (prev[0] === first && prev[1] === last ? prev : [first, last]))
+      const next = visiblePageRange(el.scrollTop, el.clientHeight, slot, pdf.numPages, PAGE_BUFFER)
+      setRange((prev) => (prev[0] === next[0] && prev[1] === next[1] ? prev : next))
     }
-    update()
-    el.addEventListener('scroll', update, { passive: true })
-    return () => el.removeEventListener('scroll', update)
+    const onScroll = (): void => {
+      if (!frame) frame = requestAnimationFrame(recompute)
+    }
+    recompute()
+    el.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      el.removeEventListener('scroll', onScroll)
+      if (frame) cancelAnimationFrame(frame)
+    }
   }, [geo, pdf, scrollRef])
 
-  // Fetch page proxies for the visible range.
+  // Fetch proxies entering the window; evict + cleanup those leaving it.
   useEffect(() => {
+    if (range[1] < range[0]) return
     let alive = true
     for (let n = range[0]; n <= range[1]; n++) {
-      if (pages.has(n)) continue
+      if (pagesRef.current.has(n)) continue
       void pdf.getPage(n).then((page) => {
         if (alive) setPages((prev) => (prev.has(n) ? prev : new Map(prev).set(n, page)))
+        else page.cleanup()
+      })
+    }
+    const evict = pagesToEvict(new Set(pagesRef.current.keys()), range)
+    if (evict.size > 0) {
+      for (const n of evict) void pagesRef.current.get(n)?.cleanup()
+      setPages((prev) => {
+        const next = new Map(prev)
+        for (const n of evict) next.delete(n)
+        return next
       })
     }
     return () => {

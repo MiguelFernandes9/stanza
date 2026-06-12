@@ -99,6 +99,10 @@ export function registerIpcHandlers(): void {
     return parseBlocks(file, readFileSync(join(root, file), 'utf8'))
   })
 
+  // The open document survives a renderer crash (main holds the session), so
+  // a reloaded window restores straight into the workspace (L6 recovery).
+  ipcMain.handle(IpcChannels.documentCurrent, (): DocumentInfo | null => session?.info ?? null)
+
   ipcMain.handle(IpcChannels.documentSave, (_e, relPath: string, content: string) => {
     atomicWrite(join(requireSession().info.root, relPath), content)
   })
