@@ -45,7 +45,7 @@ export function Workspace({ doc }: Props): JSX.Element {
   const [opRecords, setOpRecords] = useState<OpRecord[]>([])
   const [activeFile, setActiveFile] = useState(doc.mainFile)
   const [compileErrors, setCompileErrors] = useState<CompileError[]>([])
-  const [pdfState, setPdfState] = useState<{ path: string; nonce: number } | null>(null)
+  const [pdfState, setPdfState] = useState<{ rel: string; nonce: number } | null>(null)
   const [pdfFlash, setPdfFlash] = useState<PdfFlash | null>(null)
   const editorApi = useRef<EditorApi | null>(null)
 
@@ -53,11 +53,10 @@ export function Workspace({ doc }: Props): JSX.Element {
 
   // FR4 stale-PDF rule: a failed compile keeps the last good render — the
   // nonce only bumps on ok, which busts the stanza-doc:// cache.
-  const pdfUrl = pdfState
-    ? `stanza-doc://doc/${encodeURI(
-        pdfState.path.startsWith(doc.root) ? pdfState.path.slice(doc.root.length + 1) : pdfState.path
-      )}?v=${pdfState.nonce}`
-    : null
+  // The URL carries only the root-relative name; embedding the absolute
+  // pdfPath (realpath form since the synctex fixes) tripped the protocol's
+  // traversal guard — the document root is resolved in main, not here.
+  const pdfUrl = pdfState ? `stanza-doc://doc/${encodeURIComponent(pdfState.rel)}?v=${pdfState.nonce}` : null
 
   const loadHistory = useCallback(() => {
     void client.documentHistory().then(setHistory, () => setHistory([]))
@@ -95,8 +94,10 @@ export function Workspace({ doc }: Props): JSX.Element {
         setCompile({ state: res.ok ? 'ok' : 'failed', errors: res.errors.length, warnings: 0 })
         setCompileErrors(res.errors)
         if (res.ok && res.pdfPath) {
-          const path = res.pdfPath
-          setPdfState((prev) => ({ path, nonce: (prev?.nonce ?? 0) + 1 }))
+          // tectonic writes the PDF flat at the doc root (cwd), so the
+          // basename is its root-relative path — no absolute path in the URL.
+          const rel = res.pdfPath.split('/').pop() ?? 'main.pdf'
+          setPdfState((prev) => ({ rel, nonce: (prev?.nonce ?? 0) + 1 }))
         }
       },
       () => setCompile((c) => ({ ...c, state: 'failed' }))
