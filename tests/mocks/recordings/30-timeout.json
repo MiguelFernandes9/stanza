@@ -1,0 +1,5 @@
+{
+  "description": "Never returns — exercises the 120 s op timeout path (ProcessRunner must kill the child).",
+  "match": { "promptRegex": "hang|timeout|take forever" },
+  "sleepForever": true
+}

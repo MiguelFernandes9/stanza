@@ -10,7 +10,7 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit --composite false -p tsconfig.node.json && tsc --noEmit --composite false -p tsconfig.web.json",
-    "test": "vitest run --project shared --project main --project renderer --project fixtures",
+    "test": "vitest run --project shared --project main --project renderer --project tests",
     "test:integration": "bash scripts/test-integration.sh"
   },
   "dependencies": {
