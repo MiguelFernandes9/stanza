@@ -1,34 +1,231 @@
-import { ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 import { IpcChannels } from '@shared/ipc'
-import type { IpcChannel } from '@shared/ipc'
+import type {
+  BlockSpan,
+  ClaudeRequest,
+  ClaudeResult,
+  CompileRequest,
+  CompileStatus,
+  FileEntry,
+  InversePoint,
+  IpcChannel,
+  OpRecord,
+  RecentProject,
+  ReviewDecision,
+} from '@shared/ipc'
+import { parseBlocks } from '@shared/blocks/parse'
+import { DefaultProcessRunner } from './infra/ProcessRunner'
+import { GitClient } from './infra/GitClient'
+import { Store } from './infra/Store'
+import { ClaudeService } from './services/ClaudeService'
+import { DocumentService } from './services/DocumentService'
+import { DocumentSession } from './session'
 
-/** Invoke channels only — the four main→renderer event channels
- *  (compileStatus, claudeStatus, reviewProposal, primeStatus) are sent
- *  via webContents.send by services once those land. */
-const INVOKE_CHANNELS: IpcChannel[] = [
-  IpcChannels.documentOpen,
-  IpcChannels.documentCreate,
-  IpcChannels.documentRecents,
-  IpcChannels.documentHistory,
-  IpcChannels.documentSave,
-  IpcChannels.documentFiles,
-  IpcChannels.documentBlocks,
-  IpcChannels.compileRun,
-  IpcChannels.synctexInverse,
-  IpcChannels.synctexForward,
-  IpcChannels.claudeRun,
-  IpcChannels.claudeHistory,
-  IpcChannels.reviewResolve,
-  IpcChannels.reviewList,
-  IpcChannels.reviewFileAt
+const runner = new DefaultProcessRunner()
+let store: Store
+let documents: DocumentService
+let session: DocumentSession | null = null
+
+/** The only place channels bind to services (spec §5). */
+export function registerIpcHandlers(): void {
+  store = new Store(join(app.getPath('userData'), 'projects.json'))
+  documents = new DocumentService({
+    store,
+    makeGit: (root) => new GitClient(runner, root),
+    primeSession: (doc) => new ClaudeService(runner, store, doc).prime(),
+  })
+
+  ipcMain.handle(IpcChannels.documentOpen, async (_e, root?: string) => {
+    const folder = root ?? (await pickFolder())
+    if (!folder) return null
+    const info = await documents.open(folder)
+    if (!info) return null
+    session = new DocumentSession(info, runner, store)
+    store.setProject(info.root, { lastOpened: new Date().toISOString() })
+    await reEmitPendingProposals(session) // crash recovery (spec §7)
+    return info
+  })
+
+  ipcMain.handle(IpcChannels.documentCreate, async (_e, args: { name: string; dir: string }) => {
+    const created = await documents.create(args)
+    const info = await documents.prime(created.root, (step) =>
+      sendToAll(IpcChannels.primeStatus, step),
+    )
+    session = new DocumentSession(info, runner, store)
+    return info
+  })
+
+  ipcMain.handle(IpcChannels.documentRecents, (): RecentProject[] =>
+    store
+      .listProjects()
+      .sort(([, a], [, b]) => (b.lastOpened ?? '').localeCompare(a.lastOpened ?? ''))
+      .map(([root, record]) => ({
+        root,
+        name: basename(root),
+        hasSession: Boolean(record.sessionId),
+        ...(record.blockCount !== undefined ? { blockCount: record.blockCount } : {}),
+      })),
+  )
+
+  ipcMain.handle(IpcChannels.documentHistory, () => requireSession().git.log(50))
+
+  ipcMain.handle(IpcChannels.documentFiles, (): FileEntry[] =>
+    listFiles(requireSession().info.root),
+  )
+
+  ipcMain.handle(IpcChannels.documentBlocks, (_e, file: string) => {
+    const { root } = requireSession().info
+    return parseBlocks(file, readFileSync(join(root, file), 'utf8'))
+  })
+
+  ipcMain.handle(IpcChannels.documentSave, (_e, relPath: string, content: string) => {
+    atomicWrite(join(requireSession().info.root, relPath), content)
+  })
+
+  ipcMain.handle(IpcChannels.compileRun, async (_e, req: CompileRequest) => {
+    const doc = requireSession()
+    sendToAll(IpcChannels.compileStatus, 'running' satisfies CompileStatus)
+    const result = await doc.compiler.compile(req)
+    sendToAll(IpcChannels.compileStatus, (result.ok ? 'ok' : 'failed') satisfies CompileStatus)
+    return result
+  })
+
+  ipcMain.handle(IpcChannels.synctexInverse, (_e, point: InversePoint) =>
+    session ? session.compiler.inverse(point) : null,
+  )
+
+  ipcMain.handle(IpcChannels.synctexForward, (_e, span: BlockSpan) =>
+    session ? session.compiler.forward(span) : [],
+  )
+
+  ipcMain.handle(IpcChannels.claudeRun, (_e, req: ClaudeRequest) => runClaudeOp(req))
+
+  ipcMain.handle(
+    IpcChannels.claudeHistory,
+    (): OpRecord[] => store.getProject(requireSession().info.root).ops ?? [],
+  )
+
+  ipcMain.handle(IpcChannels.reviewResolve, async (_e, decision: ReviewDecision) => {
+    const doc = requireSession()
+    const resolution = await doc.review.resolve(decision)
+    if (resolution.committed || !decision.accept) {
+      patchOpRecord(doc.info.root, decision.opId, { accepted: decision.accept })
+    }
+    return resolution
+  })
+
+  ipcMain.handle(IpcChannels.reviewList, () => requireSession().review.list())
+
+  ipcMain.handle(IpcChannels.reviewFileAt, async (_e, args: { opId: string; file: string }) => {
+    const doc = requireSession()
+    return {
+      before: await doc.git.show('HEAD', args.file),
+      after: await doc.git.show(`stanza/op-${args.opId}`, args.file),
+    }
+  })
+}
+
+/** Diff-gated op pipeline (FR7): lock check → clean tree → run op →
+ *  settle → capture to proposal branch → emit proposal. */
+async function runClaudeOp(req: ClaudeRequest): Promise<ClaudeResult> {
+  const doc = requireSession()
+  doc.review.assertSpansFree(req.spans)
+  await doc.review.prepare()
+
+  let op: { opId: string; note: string }
+  try {
+    op = await doc.claude.runOp(req, (status) => sendToAll(IpcChannels.claudeStatus, status))
+  } catch (err) {
+    await doc.git.restoreAll() // failed/timed-out op never leaves edits behind
+    throw err
+  }
+
+  // claude -p exits after its writes; a short grace covers fs flush
+  // (plan B11.2 suggests the watcher here — revisit if edits ever lag).
+  await new Promise((resolve) => setTimeout(resolve, 300))
+
+  const proposal = await doc.review.capture(op.opId, req.instruction, req.spans)
+  appendOpRecord(doc.info.root, {
+    opId: op.opId,
+    ts: new Date().toISOString(),
+    instruction: req.instruction,
+    note: op.note,
+    accepted: null,
+  })
+  if (proposal) sendToAll(IpcChannels.reviewProposal, proposal)
+  return { opId: op.opId, note: op.note, proposal }
+}
+
+async function reEmitPendingProposals(doc: DocumentSession): Promise<void> {
+  for (const proposal of await doc.review.list()) {
+    sendToAll(IpcChannels.reviewProposal, proposal)
+  }
+}
+
+function requireSession(): DocumentSession {
+  if (!session) throw new Error('NO_DOCUMENT')
+  return session
+}
+
+function appendOpRecord(root: string, record: OpRecord): void {
+  const ops = store.getProject(root).ops ?? []
+  store.setProject(root, { ops: [...ops, record] })
+}
+
+function patchOpRecord(root: string, opId: string, patch: Partial<OpRecord>): void {
+  const ops = (store.getProject(root).ops ?? []).map((op) =>
+    op.opId === opId ? { ...op, ...patch } : op,
+  )
+  store.setProject(root, { ops })
+}
+
+async function pickFolder(): Promise<string | null> {
+  const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
+  return result.canceled ? null : (result.filePaths[0] ?? null)
+}
+
+function sendToAll(channel: IpcChannel, payload: unknown): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send(channel, payload)
+  }
+}
+
+/** Write via temp file + rename so a crash never truncates the target. */
+function atomicWrite(absPath: string, content: string): void {
+  mkdirSync(dirname(absPath), { recursive: true })
+  const tempPath = `${absPath}.stanza-tmp`
+  writeFileSync(tempPath, content)
+  renameSync(tempPath, absPath)
+}
+
+const FILE_KINDS: [RegExp, FileEntry['kind']][] = [
+  [/\.tex$/, 'tex'],
+  [/\.bib$/, 'bib'],
+  [/\.(png|jpe?g|gif|svg|pdf|eps)$/, 'image'],
+  [/\.(sty|cls)$/, 'style'],
+  [/\.(md|txt)$/, 'text'],
 ]
 
-/** M0 skeleton: every channel rejects until its service lands (B5.4, B11.2).
- *  This is the only place channels bind to implementations (spec §5). */
-export function registerIpcHandlers(): void {
-  for (const channel of INVOKE_CHANNELS) {
-    ipcMain.handle(channel, () => {
-      throw new Error('NOT_IMPLEMENTED')
-    })
+function listFiles(root: string, dir = ''): FileEntry[] {
+  let entries
+  try {
+    entries = readdirSync(join(root, dir), { withFileTypes: true })
+  } catch {
+    return []
   }
+  const found: FileEntry[] = []
+  for (const entry of entries) {
+    const relPath = dir ? `${dir}/${entry.name}` : entry.name
+    if (entry.isDirectory()) {
+      if (entry.name !== 'node_modules' && !entry.name.startsWith('.')) {
+        found.push(...listFiles(root, relPath))
+      }
+    } else {
+      const kind = FILE_KINDS.find(([re]) => re.test(entry.name))?.[1] ?? 'other'
+      found.push({ relPath, kind })
+    }
+  }
+  return found
 }

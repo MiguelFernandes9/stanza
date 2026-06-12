@@ -11,9 +11,13 @@
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit --composite false -p tsconfig.node.json && tsc --noEmit --composite false -p tsconfig.web.json",
     "test": "vitest run --project shared --project main --project renderer --project tests",
+    "test:watch": "vitest",
     "test:integration": "bash scripts/test-integration.sh"
   },
   "dependencies": {
+    "@unified-latex/unified-latex-types": "^1.8.4",
+    "@unified-latex/unified-latex-util-parse": "^1.8.4",
+    "chokidar": "^5.0.0",
     "lucide-react": "^1.18.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
