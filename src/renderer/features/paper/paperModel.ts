@@ -1,5 +1,5 @@
 import type { BlockNode } from '../../../shared/blocks/types'
-import type { BlockSpan } from '../../../shared/ipc'
+import type { BlockSpan, PdfRect } from '../../../shared/ipc'
 import type { TaskPhase } from '../tasks/taskStore'
 
 /** Selection state a task stamps on a block — drives the edge bar, the
@@ -22,42 +22,94 @@ export interface PageBlock {
   sectionId: string | null
 }
 
+/** Flatten the whole block tree to one row per selectable unit, in reading
+ *  order. Walks to any depth: every section (chapter, section, subsection…)
+ *  becomes a heading row; every leaf (paragraph/environment) at any depth
+ *  becomes its own row, tagged with its nearest-ancestor section. A heading
+ *  row's geometry spans only its heading line — selection expands to the
+ *  whole section via expandIds, so the box doesn't blanket nested content
+ *  (BUG-5/9). */
 export function flattenBlocks(roots: BlockNode[]): PageBlock[] {
   const out: PageBlock[] = []
-  for (const node of roots) {
-    if (node.kind === 'preamble') continue
-    if (node.kind === 'section') {
-      out.push({ id: node.id, kind: 'heading', name: node.name, span: node.span, sectionId: node.id })
-      for (const child of node.children) {
+  const walk = (nodes: BlockNode[], sectionId: string | null): void => {
+    for (const node of nodes) {
+      if (node.kind === 'preamble') continue
+      if (node.kind === 'section') {
         out.push({
-          id: child.id,
-          kind: child.kind === 'environment' ? 'environment' : 'paragraph',
-          envName: child.kind === 'environment' ? child.name : undefined,
-          span: child.span,
+          id: node.id,
+          kind: 'heading',
+          name: node.name,
+          span: { ...node.span, endLine: node.span.startLine },
           sectionId: node.id
         })
+        walk(node.children, node.id)
+      } else {
+        out.push({
+          id: node.id,
+          kind: node.kind === 'environment' ? 'environment' : 'paragraph',
+          envName: node.kind === 'environment' ? node.name : undefined,
+          span: node.span,
+          sectionId
+        })
       }
-    } else {
-      out.push({
-        id: node.id,
-        kind: node.kind === 'environment' ? 'environment' : 'paragraph',
-        envName: node.kind === 'environment' ? node.name : undefined,
-        span: node.span,
-        sectionId: null
-      })
     }
   }
+  walk(roots, null)
   return out
 }
 
-/** Section heading id → the whole section (heading + children); leaf → itself. */
+/** Section id → the section plus its entire descendant subtree (so the
+ *  selection wash covers nested subsections and their content); any other
+ *  id → itself. taskSpans separately scopes the edit to the section span. */
 export function expandIds(roots: BlockNode[], blockId: string): string[] {
-  for (const node of roots) {
-    if (node.kind === 'section' && node.id === blockId) {
-      return [node.id, ...node.children.map((c) => c.id)]
+  const subtree = (node: BlockNode): string[] => [
+    node.id,
+    ...node.children.flatMap(subtree)
+  ]
+  const find = (nodes: BlockNode[]): BlockNode | null => {
+    for (const node of nodes) {
+      if (node.id === blockId) return node
+      const hit = find(node.children)
+      if (hit) return hit
+    }
+    return null
+  }
+  const node = find(roots)
+  return node && node.kind === 'section' ? subtree(node) : [blockId]
+}
+
+/** Bounding box of a block's synctex forward rects. Degenerate rects
+ *  (height ≤ 0 or width ≤ 0 — e.g. page-break artifacts a \chapter leaves
+ *  on the preceding page) are dropped; the page is chosen by coverage (most
+ *  rects, then largest area), not rects[0], so a page-breaking heading
+ *  resolves to the page it actually lands on (BUG-5). Null when nothing
+ *  solid remains. */
+export function blockBoxFromRects(rects: PdfRect[]): PdfRect | null {
+  const solid = rects.filter((r) => r.height > 0 && r.width > 0)
+  if (!solid.length) return null
+
+  const byPage = new Map<number, PdfRect[]>()
+  for (const r of solid) {
+    const arr = byPage.get(r.page)
+    if (arr) arr.push(r)
+    else byPage.set(r.page, [r])
+  }
+
+  let best: PdfRect[] = []
+  let bestArea = -1
+  for (const group of byPage.values()) {
+    const area = group.reduce((a, r) => a + r.width * r.height, 0)
+    if (group.length > best.length || (group.length === best.length && area > bestArea)) {
+      best = group
+      bestArea = area
     }
   }
-  return [blockId]
+
+  const x = Math.min(...best.map((r) => r.x))
+  const y = Math.min(...best.map((r) => r.y))
+  const right = Math.max(...best.map((r) => r.x + r.width))
+  const bottom = Math.max(...best.map((r) => r.y + r.height))
+  return { page: best[0]!.page, x, y, width: right - x, height: bottom - y }
 }
 
 const basename = (path: string): string => path.split('/').pop() ?? path
