@@ -55,6 +55,15 @@ describe('span labels', () => {
   it('combines multiple spans into a min–max range', () => {
     expect(combinedSpanLabel([span(24, 31), span(35, 40)])).toBe('main.tex:24–40')
   })
+  it('groups spans per file when a selection crosses files', () => {
+    expect(
+      combinedSpanLabel([
+        { file: 'chapters/ch1.tex', startLine: 24, endLine: 31 },
+        { file: 'chapters/ch2.tex', startLine: 3, endLine: 9 },
+        { file: 'chapters/ch1.tex', startLine: 40, endLine: 44 },
+      ])
+    ).toBe('ch1.tex:24–44, ch2.tex:3–9')
+  })
 })
 
 describe('taskSpans', () => {
