@@ -1,8 +1,7 @@
 import type { JSX } from 'react'
 import { Lock } from 'lucide-react'
-import type { BlockMark } from './PaperBlock'
 import { spanLabel } from './paperModel'
-import type { PageBlock } from './paperModel'
+import type { BlockMark, PageBlock } from './paperModel'
 
 export interface OverlayRect {
   page: number
@@ -27,9 +26,9 @@ interface Props {
 
 const GLYPH: Record<PageBlock['kind'], string> = { heading: '§', paragraph: '¶', environment: '∑' }
 
-/** Interaction twin of PaperBlock for the real PDF page (F5): a transparent
- *  hit-area over the synctex rect carrying the same selection wash, edge bar
- *  and hover/lock pills — the canvas underneath stays untouched. */
+/** Selection hit-area over a block's synctex rect on the real PDF page (F5):
+ *  a transparent overlay carrying the selection wash, edge bar and hover/lock
+ *  pills — the canvas underneath stays untouched. */
 export function BlockOverlay({
   block,
   rect,

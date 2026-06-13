@@ -74,7 +74,9 @@ export function Workspace({ doc }: Props): JSX.Element {
 
   useEffect(() => {
     void client.documentFiles().then(setFiles, () => setFiles([]))
-    void client.documentBlocks(doc.mainFile).then(setBlocks, () => setBlocks([]))
+    // Blocks for the whole project (all \include'd files), not just main —
+    // chapters in ch1/ch2 must be selectable too (BUG-3).
+    void client.documentProjectBlocks().then(setBlocks, () => setBlocks([]))
     loadHistory()
     loadOps()
   }, [doc, loadHistory, loadOps])
@@ -307,6 +309,7 @@ export function Workspace({ doc }: Props): JSX.Element {
           mainFile={doc.mainFile}
           pageBlocks={pageBlocks}
           state={state}
+          compile={compile}
           pdfUrl={pdfUrl}
           onInverseSearch={inverseSearch}
           flash={pdfFlash}

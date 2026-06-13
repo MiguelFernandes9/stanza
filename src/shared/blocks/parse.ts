@@ -11,6 +11,28 @@ const SECTION_LEVELS: Record<string, number> = {
 
 const ENVIRONMENT_TYPES = new Set(['environment', 'mathenv', 'displaymath', 'verbatim'])
 
+/** Structural macros that carry no prose: they end the current paragraph
+ *  and are skipped (like whitespace/comments), never becoming a selectable
+ *  block. Otherwise \maketitle/\tableofcontents/\include et al. fall into
+ *  the paragraph bucket and forge a bogus prose block over the title page. */
+const STANDALONE_MACROS = new Set([
+  'maketitle',
+  'tableofcontents',
+  'listoffigures',
+  'listoftables',
+  'include',
+  'input',
+  'bibliography',
+  'bibliographystyle',
+  'printbibliography',
+  'newpage',
+  'clearpage',
+  'appendix',
+  'frontmatter',
+  'mainmatter',
+  'backmatter',
+])
+
 /** Parse .tex source into the block tree: preamble, nested sections,
  *  paragraphs, environments. Ids are structural path + content hash —
  *  derived from the parse, never embedded in the source. */
@@ -36,6 +58,28 @@ export function parseBlocks(file: string, source: string): BlockNode[] {
   return roots
 }
 
+/** Parse a whole project into one flat roots array — every file's blocks
+ *  concatenated in the given (inclusion) order. Each BlockNode.span keeps
+ *  its own file, so flattenBlocks / blockAtLine / taskSpans address the
+ *  right source. Caller supplies read (null = file unreadable/missing);
+ *  unparsable files are skipped, the editor still opens them as text. */
+export function parseProjectBlocks(
+  texFiles: string[],
+  read: (relPath: string) => string | null,
+): BlockNode[] {
+  const roots: BlockNode[] = []
+  for (const file of texFiles) {
+    const source = read(file)
+    if (source === null) continue
+    try {
+      roots.push(...parseBlocks(file, source))
+    } catch {
+      // unparsable file: skip
+    }
+  }
+  return roots
+}
+
 function walkBody(file: string, nodes: Ast.Node[]): BlockNode[] {
   const roots: BlockNode[] = []
   const sectionStack: { block: BlockNode; level: number }[] = []
@@ -58,6 +102,10 @@ function walkBody(file: string, nodes: Ast.Node[]): BlockNode[] {
 
     if (node.type === 'whitespace' || node.type === 'comment') continue
     if (node.type === 'parbreak') {
+      flushParagraph()
+      continue
+    }
+    if (node.type === 'macro' && STANDALONE_MACROS.has(node.content)) {
       flushParagraph()
       continue
     }

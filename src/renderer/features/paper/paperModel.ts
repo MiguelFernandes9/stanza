@@ -1,5 +1,14 @@
 import type { BlockNode } from '../../../shared/blocks/types'
 import type { BlockSpan } from '../../../shared/ipc'
+import type { TaskPhase } from '../tasks/taskStore'
+
+/** Selection state a task stamps on a block — drives the edge bar, the
+ *  selection wash and the hover/lock pill on both the PDF overlay and the
+ *  pre-compile filler. */
+export interface BlockMark {
+  phase: TaskPhase
+  active: boolean
+}
 
 /** One row on the rendered page. Preamble never renders; a section
  *  contributes a heading row plus one row per child block. */
@@ -57,11 +66,23 @@ export function spanLabel(span: BlockSpan): string {
   return `${basename(span.file)}:${span.startLine}–${span.endLine}`
 }
 
-/** "main.tex:24–40" across several spans (single-file assumption of v1). */
+/** A min–max range per file, e.g. "main.tex:24–40" for one file or
+ *  "ch1.tex:24–44, ch2.tex:3–9" when a selection crosses files. Files
+ *  appear in first-seen order. */
 export function combinedSpanLabel(spans: BlockSpan[]): string {
-  const start = Math.min(...spans.map((s) => s.startLine))
-  const end = Math.max(...spans.map((s) => s.endLine))
-  return `${basename(spans[0].file)}:${start}–${end}`
+  const byFile = new Map<string, { start: number; end: number }>()
+  for (const s of spans) {
+    const cur = byFile.get(s.file)
+    if (cur) {
+      cur.start = Math.min(cur.start, s.startLine)
+      cur.end = Math.max(cur.end, s.endLine)
+    } else {
+      byFile.set(s.file, { start: s.startLine, end: s.endLine })
+    }
+  }
+  return [...byFile]
+    .map(([file, { start, end }]) => `${basename(file)}:${start}–${end}`)
+    .join(', ')
 }
 
 /** Spans for claude:run. A fully-selected section contributes its own span;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { parseBlocks } from '../parse'
+import { parseBlocks, parseProjectBlocks } from '../parse'
 import { blockAtLine } from '../lookup'
 
 // line numbers:                          1
@@ -70,6 +70,77 @@ describe('parseBlocks', () => {
     expect(first).toEqual(second)
     expect(new Set(first).size).toBe(first.length)
     expect(first.every((id) => /#[0-9a-f]{6}$/.test(id))).toBe(true)
+  })
+})
+
+describe('standalone structural macros', () => {
+  // A book preamble whose body is only structural macros — no prose.
+  const TITLE_DOC = [
+    '\\documentclass{book}', //        1
+    '\\begin{document}', //            2
+    '\\maketitle', //                  3
+    '\\tableofcontents', //            4
+    '', //                             5
+    '\\include{chapters/ch1}', //      6
+    '\\include{chapters/ch2}', //      7
+    '', //                             8
+    '\\bibliographystyle{plain}', //   9
+    '\\bibliography{refs}', //        10
+    '\\end{document}', //             11
+  ].join('\n')
+
+  test('a title page of \\maketitle/\\tableofcontents/\\include yields no paragraph block', () => {
+    const roots = parseBlocks(FILE, TITLE_DOC)
+    expect(roots.map((b) => b.kind)).toEqual(['preamble'])
+    // The lines that hold \maketitle / \tableofcontents are not a block.
+    expect(blockAtLine(roots, FILE, 3)).toBe(null)
+    expect(blockAtLine(roots, FILE, 4)).toBe(null)
+  })
+
+  test('a standalone macro flushes the paragraph and never joins one', () => {
+    const roots = parseBlocks(FILE, 'Alpha.\n\\maketitle\nBeta.')
+    expect(roots.map((b) => b.kind)).toEqual(['paragraph', 'paragraph'])
+    expect(roots[0]!.span).toMatchObject({ startLine: 1, endLine: 1 })
+    expect(roots[1]!.span).toMatchObject({ startLine: 3, endLine: 3 })
+  })
+})
+
+describe('parseProjectBlocks', () => {
+  const FILES: Record<string, string> = {
+    'main.tex': [
+      '\\documentclass{book}',
+      '\\begin{document}',
+      '\\maketitle',
+      '\\include{chapters/ch1}',
+      '\\include{chapters/ch2}',
+      '\\end{document}',
+    ].join('\n'),
+    'chapters/ch1.tex': '\\section{One}\nBody one.',
+    'chapters/ch2.tex': '\\section{Two}\nBody two.',
+  }
+  const read = (rel: string): string | null => FILES[rel] ?? null
+
+  test('merges every file: main contributes no body paragraph, chapters keep their file', () => {
+    const roots = parseProjectBlocks(
+      ['main.tex', 'chapters/ch1.tex', 'chapters/ch2.tex'],
+      read,
+    )
+    // main.tex's body is only structural macros → just the preamble survives.
+    expect(roots.map((b) => b.kind)).toEqual(['preamble', 'section', 'section'])
+    expect(roots[0]!.span.file).toBe('main.tex')
+
+    const ch1 = roots[1]!
+    expect(ch1.name).toBe('One')
+    expect(ch1.span.file).toBe('chapters/ch1.tex')
+    expect(ch1.children[0]!.span.file).toBe('chapters/ch1.tex')
+
+    expect(roots[2]!.name).toBe('Two')
+    expect(roots[2]!.span.file).toBe('chapters/ch2.tex')
+  })
+
+  test('skips files that cannot be read', () => {
+    const roots = parseProjectBlocks(['main.tex', 'chapters/missing.tex'], read)
+    expect(roots.every((b) => b.span.file === 'main.tex')).toBe(true)
   })
 })
 

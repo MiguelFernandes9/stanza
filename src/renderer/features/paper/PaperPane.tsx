@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { JSX } from 'react'
 import { client } from '@renderer/lib/client'
+import type { CompileState } from '@renderer/components'
 import type { PdfRect } from '@shared/ipc'
 import { usePdfDocument } from '../pdf/usePdfDocument'
 import { PdfPageStack } from '../pdf/PdfPageStack'
@@ -9,11 +10,10 @@ import { ReviewOverlay } from '../review/ReviewOverlay'
 import { blockLabel, RAIL, RAIL_GAP, TaskCard, tagKind } from '../tasks/TaskCard'
 import type { PaneView, TaskState } from '../tasks/taskStore'
 import { BlockOverlay } from './BlockOverlay'
-import { PaperBlock } from './PaperBlock'
-import type { BlockMark } from './PaperBlock'
+import { FillerPage } from './FillerPage'
 import { PaperToolbar } from './PaperToolbar'
 import { combinedSpanLabel, spanLabel } from './paperModel'
-import type { PageBlock } from './paperModel'
+import type { BlockMark, PageBlock } from './paperModel'
 
 const FALLBACK_PAGE_WIDTH = 564
 
@@ -29,6 +29,8 @@ interface Props {
   mainFile: string
   pageBlocks: PageBlock[]
   state: TaskState
+  /** Compile lifecycle — drives the filler's honest status while pdfUrl is null. */
+  compile: { state: CompileState; errors: number }
   /** stanza-doc:// url with compile nonce; null before the first ok compile. */
   pdfUrl: string | null
   /** Read-mode click on the page → synctex inverse (F7). PDF pt. */
@@ -239,16 +241,7 @@ export function PaperPane(props: Props): JSX.Element {
                 }}
               />
             ) : (
-              <FillerPage
-                pageBlocks={pageBlocks}
-                marks={marks}
-                hover={hover}
-                view={state.view}
-                setHover={setHover}
-                blockEls={blockEls}
-                onToggleBlock={(id, additive) => props.onToggleBlock(id, additive)}
-                adding={state.adding}
-              />
+              <FillerPage state={props.compile.state} errors={props.compile.errors} />
             )}
           </div>
         </div>
@@ -283,59 +276,6 @@ export function PaperPane(props: Props): JSX.Element {
           />
         )
       })()}
-    </div>
-  )
-}
-
-/** Pre-first-compile fallback — the FD4 filler page. */
-function FillerPage({
-  pageBlocks,
-  marks,
-  hover,
-  view,
-  setHover,
-  blockEls,
-  onToggleBlock,
-  adding
-}: {
-  pageBlocks: PageBlock[]
-  marks: Record<string, BlockMark>
-  hover: string | null
-  view: PaneView
-  setHover: (fn: (h: string | null) => string | null) => void
-  blockEls: React.MutableRefObject<Record<string, HTMLDivElement | null>>
-  onToggleBlock: (id: string, additive: boolean) => void
-  adding: boolean
-}): JSX.Element {
-  return (
-    <div
-      style={{
-        background: 'var(--paper-2)',
-        border: '1px solid var(--border-default)',
-        borderRadius: 4,
-        boxShadow: 'var(--shadow-lg)',
-        padding: '52px 56px 60px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 11
-      }}
-    >
-      {pageBlocks.map((b) => (
-        <PaperBlock
-          key={b.id}
-          block={b}
-          mark={marks[b.id] ?? null}
-          hovered={view === 'select' && hover === b.id}
-          selectMode={view === 'select'}
-          refCb={(el) => {
-            blockEls.current[b.id] = el
-          }}
-          onEnter={() => setHover(() => b.id)}
-          onLeave={() => setHover((h) => (h === b.id ? null : h))}
-          onClick={(e) => view === 'select' && onToggleBlock(b.id, adding || e.shiftKey || e.metaKey || e.ctrlKey)}
-        />
-      ))}
-      <div style={{ marginTop: 10, textAlign: 'center', font: '11px/1 var(--font-serif)', color: 'var(--ink-300)' }}>1</div>
     </div>
   )
 }
