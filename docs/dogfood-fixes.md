@@ -325,6 +325,40 @@ all its content (1, 2, 3 …). `taskSpans` already covers the span.
 
 **Lane (BUG-7 + BUG-8).** Renderer only — `TaskCard.tsx`, `paperModel.ts`.
 
+## BUG-9 — nested blocks (equations, figures) under a subsection unselectable
+
+**Symptom.** In a chapter you can select "the text" but not an equation
+or figure independently.
+
+**Root cause — the real "flatten the tree" gap.** The parse tree is
+correct and deep (`chapter → section → paragraph/equation/figure`), but
+`flattenBlocks` ([paperModel.ts:25](src/renderer/features/paper/paperModel.ts#L25))
+only descends **two levels**: for each top-level section it emits a
+heading row plus its *direct* children. A `\chapter`'s direct children
+are its `\section`s; the equations/figures/paragraphs nested **under**
+those sections are grandchildren and are dropped — so they never become
+`PageBlock`s, get no overlay, and can't be selected. (Worse: a child
+that is itself a section is emitted with `kind:'paragraph'`.)
+
+Confirmed against ch1/ch2: the tree contains `environment:equation`,
+`environment:itemize`, `environment:figure` with valid spans, but they
+sit under subsections, so `flattenBlocks` never surfaces them.
+
+**Fix (renderer, `paperModel.ts`).** Make `flattenBlocks` recursive —
+walk the whole tree, emitting a `heading` row for every section at any
+depth and a `paragraph`/`environment` row for every leaf at any depth,
+each tagged with its nearest-ancestor section id. Then equations and
+figures are independently selectable. Pairs with BUG-5 (heading geometry
+= heading line, so the chapter box stops blanketing its nested content)
+and BUG-8 (recursive `expandIds`).
+
+**Test.** `flattenBlocks` on a `chapter → section → {paragraph, equation,
+figure}` fixture yields rows for the equation and figure (not just the
+section), with correct `sectionId`.
+
+**Lane.** Renderer only — folds into `fix/select-and-compile-polish`
+alongside BUG-5/7/8 (all touch `paperModel.ts`/`PaperPane.tsx`).
+
 ## Re-dispatch needed — BUG-4 + BUG-5 never landed
 
 `fix/compile-abort-heading-geo` == main (no commits, no remote PR). The
