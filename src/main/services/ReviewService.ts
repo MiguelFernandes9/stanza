@@ -80,9 +80,16 @@ export class ReviewService {
   }
 
   /** Throws SPANS_LOCKED when any requested span overlaps a span owned
-   *  by an unresolved proposal (FR5 — enforced main-side, UI mirrors). */
+   *  by an unresolved proposal (FR5 — enforced main-side, UI mirrors).
+   *  Empty spans mean "whole document": a whole-doc op (spans=[]) needs a
+   *  clean slate, and a pending whole-doc proposal (locked=[]) owns the
+   *  whole tree — either way, empty on one side locks against everything
+   *  (FEATURE-1, v1 serial execution). */
   assertSpansFree(spans: BlockSpan[]): void {
     for (const locked of this.pendingSpans.values()) {
+      if (spans.length === 0 || locked.length === 0) {
+        throw new Error('SPANS_LOCKED')
+      }
       for (const lockedSpan of locked) {
         for (const span of spans) {
           if (
