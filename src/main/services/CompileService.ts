@@ -33,7 +33,8 @@ function readLogFromDisk(absPath: string): string | null {
 
 /** Compile via tectonic and answer SyncTeX queries via the synctex CLI.
  *  Latest-wins: a compile requested while one runs aborts the running
- *  one (aborted compiles resolve ok:false with no errors). */
+ *  one (aborted compiles resolve { ok:false, aborted:true } so callers
+ *  never surface a superseded compile as a failure). */
 export class CompileService {
   private controller: AbortController | null = null
   /** Base name of the last compiled target — synctex queries follow it
@@ -97,7 +98,7 @@ export class CompileService {
     }
 
     if (controller.signal.aborted) {
-      return { ok: false, errors: [] }
+      return { ok: false, aborted: true, errors: [] }
     }
     if (proc.code === 0) {
       this.lastBase = base

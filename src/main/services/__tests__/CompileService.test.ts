@@ -113,7 +113,9 @@ describe('CompileService.compile', () => {
     expect(runner.calls[0]!.signal!.aborted).toBe(true)
     expect(firstResult.ok).toBe(false)
     expect(firstResult.errors).toEqual([]) // aborted, not failed
+    expect(firstResult.aborted).toBe(true) // tagged so callers never show 'failed'
     expect(secondResult.ok).toBe(true)
+    expect(secondResult.aborted).toBeFalsy() // a real result is not aborted
   })
 })
 

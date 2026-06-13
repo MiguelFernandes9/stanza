@@ -103,6 +103,9 @@ export function Workspace({ doc }: Props): JSX.Element {
     setCompile((c) => ({ ...c, state: 'running' }))
     void client.compileRun({}).then(
       (res) => {
+        // Superseded compile (StrictMode double-fire / mid-compile ⌘R): a
+        // newer run owns the status — don't flip to 'failed' (BUG-4).
+        if (res.aborted) return
         setCompile({ state: res.ok ? 'ok' : 'failed', errors: res.errors.length, warnings: 0 })
         setCompileErrors(res.errors)
         if (res.ok && res.pdfPath) {

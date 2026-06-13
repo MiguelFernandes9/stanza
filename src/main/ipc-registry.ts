@@ -123,7 +123,12 @@ export function registerIpcHandlers(): void {
     const doc = requireSession()
     sendToAll(IpcChannels.compileStatus, 'running' satisfies CompileStatus)
     const result = await doc.compiler.compile(req)
-    sendToAll(IpcChannels.compileStatus, (result.ok ? 'ok' : 'failed') satisfies CompileStatus)
+    // An aborted/superseded compile is not a failure — a newer compile is in
+    // flight and will emit its own status. Emitting 'failed' here causes the
+    // open-time "Compile failed — 0 errors" flash under StrictMode (BUG-4).
+    if (!result.aborted) {
+      sendToAll(IpcChannels.compileStatus, (result.ok ? 'ok' : 'failed') satisfies CompileStatus)
+    }
     return result
   })
 

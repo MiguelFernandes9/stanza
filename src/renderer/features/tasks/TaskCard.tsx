@@ -64,7 +64,10 @@ export function TaskCard({
 }: Props): JSX.Element {
   const taRef = useRef<HTMLTextAreaElement | null>(null)
   useEffect(() => {
-    if (expanded && task.phase === 'compose') taRef.current?.focus()
+    // preventScroll: the card paints at top:0 before PaperPane's layout effect
+    // sets its rail offset; a plain focus() would scroll the PDF pane to the
+    // top, hiding the just-selected block and making it feel unselectable (BUG-7).
+    if (expanded && task.phase === 'compose') taRef.current?.focus({ preventScroll: true })
   }, [task.phase, expanded])
 
   const phaseColor =

@@ -12,7 +12,7 @@ import type { PaneView, TaskState } from '../tasks/taskStore'
 import { BlockOverlay } from './BlockOverlay'
 import { FillerPage } from './FillerPage'
 import { PaperToolbar } from './PaperToolbar'
-import { combinedSpanLabel, spanLabel } from './paperModel'
+import { blockBoxFromRects, combinedSpanLabel, spanLabel } from './paperModel'
 import type { BlockMark, PageBlock } from './paperModel'
 
 const FALLBACK_PAGE_WIDTH = 564
@@ -83,14 +83,11 @@ export function PaperPane(props: Props): JSX.Element {
     void Promise.all(
       pageBlocks.map(async (b) => {
         const rects = await client.synctexForward(b.span).catch((): PdfRect[] => [])
-        const page = rects[0]?.page
-        const onPage = rects.filter((r) => r.page === page)
-        if (!onPage.length) return null
-        const x = Math.min(...onPage.map((r) => r.x))
-        const y = Math.min(...onPage.map((r) => r.y))
-        const right = Math.max(...onPage.map((r) => r.x + r.width))
-        const bottom = Math.max(...onPage.map((r) => r.y + r.height))
-        return [b.id, { page, x, y, width: right - x, height: bottom - y }] as const
+        // Drop page-break artifacts and pick the page by coverage, so a
+        // \chapter heading resolves to its real page, not a 0-height box on
+        // the preceding one (BUG-5).
+        const box = blockBoxFromRects(rects)
+        return box ? ([b.id, box] as const) : null
       })
     ).then((entries) => {
       if (alive) setBlockRects(new Map(entries.filter((e): e is NonNullable<typeof e> => e != null)))

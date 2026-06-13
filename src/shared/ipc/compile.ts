@@ -2,6 +2,7 @@ export interface CompileRequest { includeOnly?: string[] }  // chapter scope (M3
 export interface CompileError { file: string; line: number | null; message: string }
 export interface CompileResult {
   ok: boolean
+  aborted?: boolean     // superseded by a newer compile — not a real failure
   pdfPath?: string      // absolute; set when ok
   synctexPath?: string
   errors: CompileError[]
