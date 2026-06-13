@@ -3,7 +3,7 @@ import type { JSX } from 'react'
 import { Toast } from '@renderer/components'
 import { client } from '@renderer/lib/client'
 import type { BlockNode } from '@shared/blocks/types'
-import type { CommitInfo, CompileError, DocumentInfo, FileEntry, OpRecord } from '@shared/ipc'
+import type { BlockSpan, CommitInfo, CompileError, DocumentInfo, FileEntry, OpRecord } from '@shared/ipc'
 import { ChatPane } from '../chat/ChatPane'
 import type { ChatMessage, ComposeChip } from '../chat/ChatPane'
 import { AUTO_COMPILE_MS, createDebounce } from '../editor/autoCompile'
@@ -181,15 +181,10 @@ export function Workspace({ doc }: Props): JSX.Element {
     [compileErrors, doc.texFiles]
   )
 
-  /** instructionOverride: the chat composer writes the text and submits in
-   *  one step — state updates are async, so the text travels explicitly. */
-  const submitTask = (taskId: number, instructionOverride?: string): void => {
-    const task = state.tasks.find((t) => t.id === taskId)
-    const instruction = (instructionOverride ?? task?.instruction ?? '').trim()
-    if (!task || !instruction) return
-    if (instructionOverride) dispatch({ type: 'update-instruction', taskId, instruction })
-    dispatch({ type: 'submit', taskId })
-    void client.claudeRun({ instruction, spans: taskSpans(task.blockIds, blocks) }).then(
+  /** Fire claude:run for a task already in busy phase and wire its result
+   *  back by taskId (op-started → proposal/noop, or op-failed). */
+  const runOp = (taskId: number, instruction: string, spans: BlockSpan[]): void => {
+    void client.claudeRun({ instruction, spans }).then(
       (res) => {
         dispatch({ type: 'op-started', taskId, opId: res.opId })
         if (res.proposal) dispatch({ type: 'proposal', taskId, proposal: res.proposal, note: res.note })
@@ -202,6 +197,28 @@ export function Workspace({ doc }: Props): JSX.Element {
       (err: unknown) =>
         dispatch({ type: 'op-failed', taskId, error: err instanceof Error ? err.message : String(err) })
     )
+  }
+
+  /** instructionOverride: the chat composer writes the text and submits in
+   *  one step — state updates are async, so the text travels explicitly. */
+  const submitTask = (taskId: number, instructionOverride?: string): void => {
+    const task = state.tasks.find((t) => t.id === taskId)
+    const instruction = (instructionOverride ?? task?.instruction ?? '').trim()
+    if (!task || !instruction) return
+    if (instructionOverride) dispatch({ type: 'update-instruction', taskId, instruction })
+    dispatch({ type: 'submit', taskId })
+    runOp(taskId, instruction, taskSpans(task.blockIds, blocks))
+  }
+
+  /** No blocks selected → edit the whole project (unscoped op, spans: []).
+   *  The reducer assigns the new task state.nextId, so the async op result
+   *  can target that id — mirrors submitTask's flow. */
+  const submitWholeDoc = (instruction: string): void => {
+    const text = instruction.trim()
+    if (!text) return
+    const taskId = state.nextId
+    dispatch({ type: 'start-whole-doc', instruction: text })
+    runOp(taskId, text, [])
   }
 
   const resolveTask = (taskId: number, accept: boolean): void => {
@@ -260,6 +277,7 @@ export function Workspace({ doc }: Props): JSX.Element {
   const chatSubmit = (instruction: string): void => {
     const compose = state.tasks.filter((t) => t.phase === 'compose').at(-1)
     if (compose) submitTask(compose.id, instruction)
+    else submitWholeDoc(instruction)
   }
 
   const resolveByOp = (opId: string, accept: boolean): void => {

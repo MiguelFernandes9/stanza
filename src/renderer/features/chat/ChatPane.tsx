@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { JSX } from 'react'
-import { ArrowUp, Check, GitCommitHorizontal, Sparkles, Undo2, X } from 'lucide-react'
+import { ArrowUp, Check, FileText, GitCommitHorizontal, Sparkles, Undo2, X } from 'lucide-react'
 import { Avatar, BlockTag, Button, DiffHunk, Kbd, StatusDot } from '@renderer/components'
 import type { BlockTagKind } from '@renderer/components'
 import type { ReviewProposal } from '@shared/ipc'
@@ -179,13 +179,30 @@ export function ChatPane({ messages, busy, chips, onRemoveChip, onSubmit, onReso
       </div>
 
       <div style={{ flex: '0 0 auto', borderTop: '1px solid var(--border-default)', padding: 12, background: 'var(--surface-app)' }}>
-        {chips.length > 0 && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 9 }}>
-            {chips.map((c) => (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 9 }}>
+          {chips.length > 0 ? (
+            chips.map((c) => (
               <BlockTag key={c.blockId} kind={c.kind} label={c.label} span={c.span} active onRemove={() => onRemoveChip(c.blockId)} />
-            ))}
-          </div>
-        )}
+            ))
+          ) : (
+            // No selection → the op edits the whole project (spans: []).
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                height: 22,
+                padding: '0 9px',
+                borderRadius: 'var(--radius-pill)',
+                border: '1px dashed var(--line-ink)',
+                color: 'var(--ink-500)',
+                font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-sans)'
+              }}
+            >
+              <FileText size={11} /> Whole document
+            </span>
+          )}
+        </div>
         <div
           style={{
             display: 'flex',
@@ -208,7 +225,7 @@ export function ChatPane({ messages, busy, chips, onRemoveChip, onSubmit, onReso
               }
             }}
             rows={1}
-            placeholder={chips.length ? 'Instruct Claude for the selected block…' : 'Select a block in the page, then type an instruction…'}
+            placeholder={chips.length ? 'Instruct Claude for the selected block…' : 'Edit the whole document…'}
             style={{
               flex: 1,
               resize: 'none',
