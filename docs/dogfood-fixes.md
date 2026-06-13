@@ -286,6 +286,52 @@ unknown revision` on open — a stored op record referencing a deleted
 `review.list`). Non-fatal (app works), but noisy and fragile: list/re-emit
 should skip ops whose branch no longer exists. Low priority.
 
+## BUG-7 — pressing a block scrolls the PDF pane to the top (looks unselectable)
+
+**Symptom.** Pressing a block (e.g. the "0.1 Motivation" section) appears
+to do nothing / "can't select it". In fact the block IS selected (a task
+is created, the OUTLINE entry highlights) — but the PDF pane jumps to
+page 1, so the selection is off-screen and the interaction feels broken.
+
+**Root cause.** On select a `compose` task is created; its composer
+textarea autofocuses — `TaskCard.tsx:67` `taRef.current?.focus()`. On the
+first paint the card is positioned at `top: 0` (its real rail offset is
+computed by the `useLayoutEffect` in `PaperPane` a tick later), so the
+browser scrolls the PDF scroll-container to the top to bring the focused
+textarea into view. The card then repositions, but the scroll has already
+jumped and stays at the top.
+
+**Fix (renderer).** `taRef.current?.focus({ preventScroll: true })` in
+`TaskCard.tsx`. (Optional hardening: don't render the card at `top:0`
+before its offset is known.)
+
+**Test.** Selecting a block on a non-first page keeps the pane scroll
+position (assert `scrollTop` unchanged across select).
+
+## BUG-8 — selecting a section only highlights its direct children
+
+**Not a parse-tree gap — the tree is correct.** `parseBlocks` already
+builds the nested `chapter → section → paragraph/figure` tree with spans,
+and `taskSpans` sends Claude the whole section span on select (the edit is
+correctly scoped to the entire section). The gap is purely the selection
+*wash*: `expandIds` ([paperModel.ts:54](src/renderer/features/paper/paperModel.ts#L54))
+returns only the section's **direct** children, so a section containing
+subsections highlights the subsection headings but not the paragraphs
+beneath them.
+
+**Fix (renderer).** Make `expandIds` recursive — return the section id
+plus its entire descendant subtree, so pressing a section visually marks
+all its content (1, 2, 3 …). `taskSpans` already covers the span.
+
+**Lane (BUG-7 + BUG-8).** Renderer only — `TaskCard.tsx`, `paperModel.ts`.
+
+## Re-dispatch needed — BUG-4 + BUG-5 never landed
+
+`fix/compile-abort-heading-geo` == main (no commits, no remote PR). The
+compile-flash (BUG-4) and chapter-heading-geometry (BUG-5) work was
+planned but dropped when the sibling pivoted to #22. Both still open;
+re-dispatch on a fresh branch.
+
 ### FU-2 — remove dead single-file `documentBlocks` IPC
 
 DONE / or fold into the branch before merge: `documentProjectBlocks`
