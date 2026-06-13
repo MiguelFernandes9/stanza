@@ -46,7 +46,6 @@ export const api = {
   /** Working-tree file content (F4 editor). Contract addition, flagged at gate. */
   documentRead: (relPath: string) => invoke<string>(IpcChannels.documentRead, relPath),
   documentFiles: () => invoke<FileEntry[]>(IpcChannels.documentFiles),
-  documentBlocks: (file: string) => invoke<BlockNode[]>(IpcChannels.documentBlocks, file),
   /** Every project file's blocks merged into one tree (multi-file overlays).
    *  Each span carries its own file. Contract addition, flagged at gate. */
   documentProjectBlocks: () => invoke<BlockNode[]>(IpcChannels.documentProjectBlocks),
