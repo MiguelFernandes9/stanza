@@ -105,6 +105,26 @@ describe('standalone structural macros', () => {
   })
 })
 
+describe('transparent marker macros (\\label etc.)', () => {
+  test('a bare \\label after \\chapter makes no phantom paragraph block', () => {
+    const roots = parseBlocks('ch1.tex', '\\chapter{X}\n\\label{y}\n\n\\section{Z}')
+    expect(roots.map((b) => b.kind)).toEqual(['section'])
+    const chapter = roots[0]!
+    expect(chapter.name).toBe('X')
+    // \label emits nothing — it must not become a selectable block that
+    // forward-maps onto the chapter title and steals the click (BUG-11).
+    expect(chapter.children.map((c) => c.kind)).toEqual(['section'])
+    // The label line resolves to the chapter, not a phantom paragraph.
+    expect(blockAtLine(roots, 'ch1.tex', 2)).toBe(chapter)
+  })
+
+  test('an inline \\label is absorbed and does not split its paragraph', () => {
+    const roots = parseBlocks('x.tex', 'Some text \\label{a} more text.')
+    expect(roots.map((b) => b.kind)).toEqual(['paragraph'])
+    expect(roots[0]!.span).toMatchObject({ startLine: 1, endLine: 1 })
+  })
+})
+
 describe('parseProjectBlocks', () => {
   const FILES: Record<string, string> = {
     'main.tex': [
