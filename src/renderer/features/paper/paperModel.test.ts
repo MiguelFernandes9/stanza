@@ -6,6 +6,7 @@ import {
   combinedSpanLabel,
   expandIds,
   flattenBlocks,
+  padBox,
   selectionBounds,
   spanLabel,
   taskSpans
@@ -192,6 +193,21 @@ describe('selectionBounds — per-page union envelope (BUG-10)', () => {
 
   it('no boxes → no envelope', () => {
     expect(selectionBounds([])).toEqual([])
+  })
+})
+
+describe('padBox — breathing room around the bounds (BUG-13)', () => {
+  it('grows the box by pad on every side, keeping the page', () => {
+    expect(padBox({ page: 5, x: 72, y: 90, width: 300, height: 100 }, 6)).toEqual({
+      page: 5,
+      x: 66,
+      y: 84,
+      width: 312,
+      height: 112
+    })
+  })
+  it('never pushes the origin negative', () => {
+    expect(padBox({ page: 2, x: 3, y: 1, width: 50, height: 50 }, 6)).toMatchObject({ x: 0, y: 0 })
   })
 })
 
