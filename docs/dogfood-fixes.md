@@ -482,3 +482,160 @@ After this, clicking the chapter title hits the chapter heading →
 **Test (`parse.test.ts`).** `\chapter{X}\n\label{y}\n\n\section{Z}` → no
 paragraph block at the label line; `Some text \label{a} more.` → one
 paragraph (not two). **Lane.** Shared parser only — small.
+
+## BUG-15 — block boxes keep the OLD pdf's positions after a recompile
+
+After an edit lands (accept an op → recompile, or a manual save →
+recompile) the page re-renders with the new content, but the block
+overlays keep the geometry of the **previous** PDF — boxes float in the
+wrong place, a chapter box covers nothing. Closing and reopening the
+window fixes it. User confirmed: "it keeps the blocks of the old pdf."
+
+**Root cause — the block tree is never re-fetched after open.**
+`client.documentProjectBlocks().then(setBlocks)` runs in **one** effect,
+keyed `[doc, loadHistory, loadOps]` (`Workspace.tsx:75`). It fires on
+open and never again. So `blocks` (and `pageBlocks = flattenBlocks(blocks)`)
+freeze at open-time line numbers. When Claude's merge rewrites the .tex,
+the spans shift, but the renderer still holds the old `startLine/endLine`.
+The geometry effect (`PaperPane.tsx:102`) then calls
+`client.synctexForward(b.span)` with **stale line numbers** against the
+**new** `.synctex.gz` → boxes resolve to wherever those old lines now sit
+→ misplaced overlays. Reopening re-runs the open effect → fresh spans →
+correct (matches the user's exact repro).
+
+Secondary, latent: that geometry effect depends on `[pdf, pageBlocks.length]`
+(the `.length` is a deliberate guard against `pageBlocks` being a fresh
+array every render). Even once blocks ARE re-fetched, an **in-place** edit
+that keeps the block count but shifts line numbers won't change `.length`,
+so the effect can miss the update depending on the pdf-vs-blocks async
+race. The dep must track the spans themselves, not the count.
+
+**Fix — two coordinated parts.**
+1. `Workspace.tsx`: extract a `loadBlocks` callback
+   (`documentProjectBlocks().then(setBlocks, () => setBlocks([]))`) and
+   call it on **every successful compile**, not just on open. The
+   `onCompileStatus` handler already does `if (s === 'ok')` (it bumps the
+   nonce there for compiles triggered anywhere) — add `loadBlocks()` in
+   that same branch so it covers the `runCompile`, accept→recompile, and
+   debounced-save paths uniformly. Keep the existing open-time fetch too.
+2. `PaperPane.tsx`: change the geometry effect's dep from
+   `pageBlocks.length` to a **span signature** — e.g.
+   `pageBlocks.map(b => b.id + ':' + b.span.file + ':' + b.span.startLine + ':' + b.span.endLine).join('|')`
+   computed once and used as the dep. Stable by value across renders (no
+   loop), but changes whenever any span moves, so geometry recomputes
+   against the current spans regardless of count or async ordering.
+
+After this, accept→recompile re-fetches the block tree and re-maps every
+box against the fresh synctex, so overlays track the new PDF without a
+reopen.
+
+**Test.** Renderer-level: a Workspace test that, after a second
+`compile:status ok`, asserts `documentProjectBlocks` is invoked again
+(not only on mount). paperModel/PaperPane: the geometry effect re-runs
+when a block's span changes with the count unchanged (assert
+`synctexForward` re-called after spans shift). **Lane.** Two files
+(`Workspace.tsx`, `PaperPane.tsx`), renderer only — small/medium.
+
+## BUG-16 — a block that straddles a page break is washed on only one page
+
+Selecting a chapter, the last paragraph on the page gets no wash even
+though it's clearly part of the chapter — "leftover text skipped." Repro:
+`/tmp/stanza-demo` ch2.tex, paragraph at lines **29-34** ("When the real
+data arrives…") flows from the bottom of page 2 onto page 3; with the
+chapter selected, its page-2 lines stay un-washed and the selection
+outline stops one paragraph short.
+
+**Root cause — one box per block, single page.** It is NOT a membership
+bug: `expandIds(chapter)` returns the whole subtree, so the paragraph is
+in `marks` active. The geometry collapses it. `blockRects` is
+`Map<string, PdfRect>` (`PaperPane.tsx:64`) holding exactly **one** box
+per block, produced by `blockBoxFromRects` which picks a single page
+**by coverage** (the BUG-5 heuristic that dodged a \chapter's 0-height
+page-break artifact). `overlaysFor(pageNo)` then draws a block only where
+`rect.page === pageNo` (`PaperPane.tsx:165`). A paragraph/section
+spanning two pages resolves to its higher-coverage page (here page 3), so
+on page 2 it has no rect → no `BlockOverlay` wash, and it never enters
+page 2's `selectionBounds` union (which is why the outline ends at the
+prior paragraph). Membership is right; only the per-page geometry is lost.
+
+**Fix — store per-page boxes, not one.**
+1. `paperModel.ts`: replace `blockBoxFromRects` (or add a sibling) with a
+   per-page version returning `PdfRect[]` — keep the **solid-rect filter**
+   (`r.height > 0 && r.width > 0`, preserves the BUG-5 dodge of the
+   heading's 0-height artifact on the preceding page), group the solid
+   rects **by page**, and union per page. This is exactly
+   `selectionBounds`'s per-page-envelope logic, so the two can share a
+   helper. Result: one box per page the block actually occupies.
+2. `PaperPane.tsx`: `blockRects` becomes `Map<string, PdfRect[]>`. The
+   geometry effect stores all per-page boxes per block.
+   - `overlaysFor(pageNo)`: for each block, render a `BlockOverlay` for
+     **each** of its boxes whose `.page === pageNo` (a straddling block
+     gets an overlay on both pages).
+   - `boxesFor` / `selectionBounds`: feed the **flattened** per-page rects
+     so the active-selection union covers every page the subtree touches.
+   - `BlockOverlay` ref (card alignment via `blockEls.current[id]`):
+     anchor to the block's **topmost** box (lowest page, then lowest y) so
+     the rail card still lines up with the block's start.
+
+**BUG-5 interaction.** Building per-page boxes from solid rects only means
+a \chapter heading's 0-height artifact on the previous page is still
+dropped — no spurious preceding-page box reappears.
+
+**Test.** `paperModel`: rects across two pages → two boxes (one per
+page); a degenerate rect on a page yields no box for it. `PaperPane`: a
+block with boxes on pages 2 and 3 renders an overlay on both, and the
+page-2 selection union includes it. **Lane.** `paperModel.ts` +
+`PaperPane.tsx` (+ minor `BlockOverlay` ref), renderer only — medium.
+
+**Bundle note.** BUG-15 and BUG-16 both rewrite the PaperPane geometry
+effect and `blockRects` — running them as parallel siblings would
+conflict on the same lines. Dispatch them as **one** branch
+(`fix/block-geometry`): per-page `blockRects: Map<string, PdfRect[]>`,
+geometry effect keyed on a span signature, and `loadBlocks()` on every
+compile-ok. One coherent change to "block geometry tracks the live source
+and every page it spans." (Landed: sibling commit bafd041, 254 green.)
+
+## BUG-17 — task/review card "bubble" jumps to the top of the page
+
+A task card (notably the review bubble after an edit) renders pinned to
+the very top of the page instead of beside its block. Seen after a
+whole-document edit + accept.
+
+**Root cause — the card anchor falls back to `top: 0` whenever the block
+element can't be resolved** (`PaperPane.tsx:144`):
+
+```
+const el = blockEls.current[t.blockIds[0]]
+return { id: t.id, top: el ? el.getBoundingClientRect().top - wTop - 4 : 0 }
+```
+
+The card aligns by measuring the DOM overlay of `blockIds[0]`. That
+element is missing in two cases, both → `top: 0`:
+1. **Whole-doc edit** (no selection → `blockIds: []`): `blockIds[0]` is
+   `undefined`, so `blockEls.current[undefined]` is `undefined` → the
+   unscoped review card pins to the page top. (This is the reported repro.)
+2. **Block on a virtualized page**: `BlockOverlay` only mounts for pages
+   in the visible window (`PdfPageStack` renders visible ±1), so a card
+   whose block scrolled off-screen has a `null` ref → `top: 0`.
+
+The DOM-measurement approach is the weak link: it can't anchor to a block
+that isn't currently mounted, and has no sensible home for an unscoped
+(whole-doc) card.
+
+**Fix — anchor from geometry, not the DOM.**
+- Compute the card top from `blockRects` (the synctex boxes already held):
+  `(rect.page - 1) * (geo.height + geo.gap) + rect.y * zoom` for the
+  block's **topmost** box (lowest page, then lowest y). Defined whether or
+  not the page is mounted, so a card stays put when its block scrolls out
+  of the virtualization window.
+- Unscoped task (`blockIds` empty): anchor to the current viewport
+  (`scrollRef.current.scrollTop`) rather than absolute `0`, so the
+  whole-doc review card appears where the user is looking.
+
+Note: post BUG-16, `blockRects` is `Map<string, PdfRect[]>` — take the
+first (topmost) box for the anchor.
+
+**Test.** `PaperPane`: a task whose block is on a non-rendered page gets a
+non-zero top derived from its rect; a whole-doc task (empty `blockIds`)
+anchors at the viewport scrollTop, not 0. **Lane.** `PaperPane.tsx`
+(card-alignment `useLayoutEffect`), renderer only — small.
