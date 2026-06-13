@@ -33,6 +33,21 @@ const STANDALONE_MACROS = new Set([
   'backmatter',
 ])
 
+/** Invisible marker macros that emit nothing on the page. They must NOT
+ *  flush (unlike STANDALONE_MACROS) — a bare `\label` after `\chapter` would
+ *  otherwise become a phantom paragraph that forward-maps onto the chapter
+ *  title and steals the click (BUG-11). Skipped without starting a paragraph;
+ *  an already-open paragraph absorbs them, so an inline `\label` doesn't
+ *  split its prose. */
+const TRANSPARENT_MACROS = new Set([
+  'label',
+  'index',
+  'glossary',
+  'nomenclature',
+  'hypertarget',
+  'phantomsection',
+])
+
 /** Parse .tex source into the block tree: preamble, nested sections,
  *  paragraphs, environments. Ids are structural path + content hash —
  *  derived from the parse, never embedded in the source. */
@@ -107,6 +122,11 @@ function walkBody(file: string, nodes: Ast.Node[]): BlockNode[] {
     }
     if (node.type === 'macro' && STANDALONE_MACROS.has(node.content)) {
       flushParagraph()
+      continue
+    }
+    if (node.type === 'macro' && TRANSPARENT_MACROS.has(node.content)) {
+      // Skip without flushing or starting a paragraph; absorb into an open one.
+      if (paragraph) paragraph.endLine = Math.max(paragraph.endLine, end.line)
       continue
     }
 
