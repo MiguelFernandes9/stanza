@@ -207,3 +207,48 @@ describe('ReviewService span locking', () => {
     review.assertSpansFree([{ file: 'main.tex', startLine: 1, endLine: 2 }])
   })
 })
+
+describe('ReviewService whole-document (unscoped) ops', () => {
+  test('empty-spans capture proposes every changed file as one proposal', async () => {
+    write('main.tex', 'x\ny\nz\n')
+    write('other.tex', 'new\n')
+    const proposal = await review.capture('op1', 'global rewrite', [])
+    expect(proposal!.files.sort()).toEqual(['main.tex', 'other.tex'])
+    expect(proposal!.outsideSpan).toEqual([]) // unscoped op flags nothing
+    expect(proposal!.branch).toBe('stanza/op-op1')
+    expect(await git.listBranches('stanza/op-*')).toEqual(['stanza/op-op1'])
+  })
+
+  test('a whole-doc op is allowed when no proposals are pending', () => {
+    expect(() => review.assertSpansFree([])).not.toThrow()
+  })
+
+  test('a whole-doc op is blocked while a scoped proposal is pending', async () => {
+    write('main.tex', 'CLAUDE\nline2\nline3\n')
+    await review.capture('op1', 'edit line 1', [{ file: 'main.tex', startLine: 1, endLine: 1 }])
+    // unscoped op needs a clean slate — it could clobber the scoped span
+    expect(() => review.assertSpansFree([])).toThrow('SPANS_LOCKED')
+  })
+
+  test('a whole-doc op is blocked while another whole-doc proposal is pending', async () => {
+    write('main.tex', 'X\nline2\nline3\n')
+    await review.capture('op1', 'global rewrite', [])
+    expect(() => review.assertSpansFree([])).toThrow('SPANS_LOCKED')
+  })
+
+  test('a scoped op is blocked while a whole-doc proposal is pending', async () => {
+    write('main.tex', 'CLAUDE\nline2\nline3\n')
+    await review.capture('op1', 'global rewrite', []) // pending whole-doc owns everything
+    expect(() =>
+      review.assertSpansFree([{ file: 'main.tex', startLine: 1, endLine: 1 }]),
+    ).toThrow('SPANS_LOCKED')
+  })
+
+  test('resolving a whole-doc proposal releases the global lock', async () => {
+    write('main.tex', 'X\nline2\nline3\n')
+    await review.capture('op1', 'global rewrite', [])
+    await review.resolve({ opId: 'op1', accept: false })
+    expect(() => review.assertSpansFree([])).not.toThrow()
+    review.assertSpansFree([{ file: 'main.tex', startLine: 1, endLine: 1 }])
+  })
+})
