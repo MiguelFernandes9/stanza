@@ -165,6 +165,39 @@ describe('taskReducer — restore-proposal (crash recovery)', () => {
   })
 })
 
+describe('taskReducer — whole-document op (no selection)', () => {
+  it('start-whole-doc creates a busy task with empty blockIds, made active', () => {
+    const s = run(initialTaskState, { type: 'start-whole-doc', instruction: 'Tighten the abstract' })
+    expect(s.tasks).toHaveLength(1)
+    expect(s.tasks[0]).toMatchObject({
+      blockIds: [],
+      phase: 'busy',
+      instruction: 'Tighten the abstract',
+      proposal: null
+    })
+    expect(s.activeTask).toBe(s.tasks[0].id)
+    expect(s.adding).toBe(false)
+  })
+
+  it('assigns the predicted id (state.nextId) so the async op result can target it', () => {
+    const predicted = initialTaskState.nextId
+    const s = run(initialTaskState, { type: 'start-whole-doc', instruction: 'x' })
+    expect(s.tasks[0].id).toBe(predicted)
+    expect(s.nextId).toBe(predicted + 1)
+  })
+
+  it('flows through op-started → proposal like any other task', () => {
+    let s = run(initialTaskState, { type: 'start-whole-doc', instruction: 'x' })
+    const id = s.tasks[0].id
+    s = run(
+      s,
+      { type: 'op-started', taskId: id, opId: 'op-1' },
+      { type: 'proposal', taskId: id, proposal, note: 'done' }
+    )
+    expect(s.tasks[0]).toMatchObject({ opId: 'op-1', phase: 'review' })
+  })
+})
+
 describe('taskReducer — locks', () => {
   it('lockedBlockIds covers busy and review tasks only', () => {
     let s = run(

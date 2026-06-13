@@ -46,6 +46,7 @@ export type TaskAction =
   | { type: 'remove-block'; taskId: number; blockId: string }
   | { type: 'update-instruction'; taskId: number; instruction: string }
   | { type: 'submit'; taskId: number }
+  | { type: 'start-whole-doc'; instruction: string }
   | { type: 'op-started'; taskId: number; opId: string }
   | { type: 'proposal'; taskId: number; proposal: ReviewProposal; note: string }
   | { type: 'op-noop'; taskId: number; note: string }
@@ -122,6 +123,18 @@ export function taskReducer(s: TaskState, a: TaskAction): TaskState {
       const t = s.tasks.find((x) => x.id === a.taskId)
       if (!t || t.phase !== 'compose' || !t.instruction.trim()) return s
       return { ...patchTask(s, a.taskId, { phase: 'busy', error: undefined }), adding: false }
+    }
+    case 'start-whole-doc': {
+      // No selection → an unscoped, whole-project op. Goes straight to busy
+      // (chat submit = immediate run); empty blockIds → taskSpans yields [].
+      const id = s.nextId
+      return {
+        ...s,
+        nextId: id + 1,
+        adding: false,
+        activeTask: id,
+        tasks: [...s.tasks, { id, blockIds: [], instruction: a.instruction, phase: 'busy', proposal: null }]
+      }
     }
     case 'op-started':
       return patchTask(s, a.taskId, { opId: a.opId })

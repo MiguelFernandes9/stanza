@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { JSX } from 'react'
-import { ArrowUp, Check, CircleSlash, Maximize2, Plus, Sparkles, X } from 'lucide-react'
+import { ArrowUp, Check, CircleSlash, FileText, Maximize2, Plus, Sparkles, X } from 'lucide-react'
 import { BlockTag, Button, DiffHunk, IconButton, Kbd } from '@renderer/components'
 import type { BlockTagKind } from '@renderer/components'
 import { combinedSpanLabel, spanLabel } from '../paper/paperModel'
@@ -184,7 +184,24 @@ export function TaskCard({
         </div>
 
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 5, marginBottom: 8 }}>
-          {isSection ? (
+          {blocks.length === 0 ? (
+            // Whole-document op (no blocks selected) — unscoped edit.
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                height: 22,
+                padding: '0 9px',
+                borderRadius: 'var(--radius-pill)',
+                border: '1px dashed var(--line-ink)',
+                color: 'var(--ink-500)',
+                font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-sans)'
+              }}
+            >
+              <FileText size={11} /> Whole document
+            </span>
+          ) : isSection ? (
             <BlockTag
               kind="section"
               label={blockLabel(blocks[0])}
@@ -312,7 +329,7 @@ export function TaskCard({
                 ))}
               </span>
               <span style={{ font: 'var(--text-2xs)/1 var(--font-mono)', color: 'var(--ink-400)' }}>
-                claude -p · {blocks[0]?.span.file ?? ''}
+                claude -p · {blocks[0]?.span.file ?? 'whole project'}
               </span>
             </div>
           </div>
