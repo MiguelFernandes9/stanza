@@ -21,7 +21,6 @@ interface Props {
   onEnter: () => void
   onLeave: () => void
   onClick: (e: React.MouseEvent) => void
-  refCb: (el: HTMLDivElement | null) => void
 }
 
 const GLYPH: Record<PageBlock['kind'], string> = { heading: '§', paragraph: '¶', environment: '∑' }
@@ -37,8 +36,7 @@ export function BlockOverlay({
   selectMode,
   onEnter,
   onLeave,
-  onClick,
-  refCb
+  onClick
 }: Props): JSX.Element {
   const locked = mark != null && (mark.phase === 'busy' || mark.phase === 'review')
   const barColor = mark
@@ -51,7 +49,6 @@ export function BlockOverlay({
 
   return (
     <div
-      ref={refCb}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
       onClick={(e) => {

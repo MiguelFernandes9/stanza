@@ -3,6 +3,7 @@ import type { BlockNode } from '../../../shared/blocks/types'
 import type { PdfRect } from '../../../shared/ipc'
 import {
   blockBoxesByPage,
+  cardAnchorTops,
   combinedSpanLabel,
   expandIds,
   flattenBlocks,
@@ -193,6 +194,44 @@ describe('selectionBounds — per-page union envelope (BUG-10)', () => {
 
   it('no boxes → no envelope', () => {
     expect(selectionBounds([])).toEqual([])
+  })
+})
+
+describe('cardAnchorTops — geometry-anchored rail cards (BUG-17)', () => {
+  const geo = { height: 800, gap: 16 }
+  const rects = new Map<string, PdfRect[]>([
+    ['b-pg3', [{ page: 3, x: 72, y: 120, width: 300, height: 40 }]],
+    // straddling block: topmost box (page 2) anchors the card
+    ['b-straddle', [
+      { page: 2, x: 72, y: 690, width: 300, height: 12 },
+      { page: 3, x: 72, y: 60, width: 300, height: 12 }
+    ]]
+  ])
+
+  it('anchors a scoped card from its block rect — non-zero even if the page is not rendered', () => {
+    const out = cardAnchorTops([{ id: 1, blockIds: ['b-pg3'] }], rects, geo, 1, 0)
+    // (3-1)*(800+16) + 120*1 = 1752 — derived from the rect, not a top:0 pin
+    expect(out).toEqual([{ id: 1, top: 1752 }])
+  })
+
+  it('anchors an unscoped whole-doc card (empty blockIds) at the viewport scrollTop, not 0', () => {
+    const out = cardAnchorTops([{ id: 7, blockIds: [] }], rects, geo, 1, 540)
+    expect(out).toEqual([{ id: 7, top: 540 }])
+  })
+
+  it('uses the topmost (lowest-page) box and scales rect.y by zoom', () => {
+    const out = cardAnchorTops([{ id: 2, blockIds: ['b-straddle'] }], rects, geo, 2, 0)
+    // topmost box is page 2, y 690: (2-1)*(800+16) + 690*2 = 816 + 1380 = 2196
+    expect(out).toEqual([{ id: 2, top: 2196 }])
+  })
+
+  it('falls back to scrollTop when the block has no resolved rect or geometry is absent', () => {
+    expect(cardAnchorTops([{ id: 3, blockIds: ['missing'] }], rects, geo, 1, 300)).toEqual([
+      { id: 3, top: 300 }
+    ])
+    expect(cardAnchorTops([{ id: 4, blockIds: ['b-pg3'] }], rects, null, 1, 300)).toEqual([
+      { id: 4, top: 300 }
+    ])
   })
 })
 
