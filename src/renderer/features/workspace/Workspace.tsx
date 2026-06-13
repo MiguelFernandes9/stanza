@@ -329,6 +329,7 @@ export function Workspace({ doc }: Props): JSX.Element {
         <PaperPane
           mainFile={doc.mainFile}
           pageBlocks={pageBlocks}
+          blocks={blocks}
           state={state}
           compile={compile}
           pdfUrl={pdfUrl}

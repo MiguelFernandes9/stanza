@@ -3,6 +3,7 @@ import type { JSX } from 'react'
 import { client } from '@renderer/lib/client'
 import type { CompileState } from '@renderer/components'
 import type { PdfRect } from '@shared/ipc'
+import type { BlockNode } from '@shared/blocks/types'
 import { usePdfDocument } from '../pdf/usePdfDocument'
 import { PdfPageStack } from '../pdf/PdfPageStack'
 import type { PageGeometry } from '../pdf/PdfPageStack'
@@ -12,7 +13,7 @@ import type { PaneView, TaskState } from '../tasks/taskStore'
 import { BlockOverlay } from './BlockOverlay'
 import { FillerPage } from './FillerPage'
 import { PaperToolbar } from './PaperToolbar'
-import { blockBoxFromRects, combinedSpanLabel, selectionBounds, spanLabel } from './paperModel'
+import { blockBoxFromRects, combinedSpanLabel, expandIds, padBox, selectionBounds, spanLabel } from './paperModel'
 import type { BlockMark, PageBlock } from './paperModel'
 
 const FALLBACK_PAGE_WIDTH = 564
@@ -28,6 +29,9 @@ export interface PdfFlash {
 interface Props {
   mainFile: string
   pageBlocks: PageBlock[]
+  /** Block tree — lets hover expand a section heading to its full subtree
+   *  (the same envelope a click selects). */
+  blocks: BlockNode[]
   state: TaskState
   /** Compile lifecycle — drives the filler's honest status while pdfUrl is null. */
   compile: { state: CompileState; errors: number }
@@ -75,16 +79,23 @@ export function PaperPane(props: Props): JSX.Element {
   for (const t of state.tasks)
     for (const id of t.blockIds) marks[id] = { phase: t.phase, active: t.id === state.activeTask }
 
-  // BUG-10: one bounds box per page = the union envelope of the active
-  // selection's block boxes. Content rects anchor it, so a heading's loose
-  // full-line synctex rect no longer skews the box. Per-block tint stays
-  // (BlockOverlay); this is the single bounds indicator.
-  const selectionBoxes = selectionBounds(
-    pageBlocks
-      .filter((b) => marks[b.id]?.active)
-      .map((b) => blockRects.get(b.id))
-      .filter((r): r is PdfRect => r != null)
-  )
+  // One bounds box per page = the union envelope of a set of blocks' boxes,
+  // padded so it frames the text instead of cutting glyphs (BUG-10/13).
+  const SELECT_PAD = 5
+  const boxesFor = (ids: string[]): PdfRect[] =>
+    selectionBounds(
+      ids.map((id) => blockRects.get(id)).filter((r): r is PdfRect => r != null)
+    ).map((box) => padBox(box, SELECT_PAD))
+
+  // Active selection: union over the whole selected subtree (expandIds already
+  // populated the task's blockIds, so marks-active covers chapter → section →
+  // paragraph/figure). Content rects anchor the envelope (BUG-11).
+  const selectionBoxes = boxesFor(pageBlocks.filter((b) => marks[b.id]?.active).map((b) => b.id))
+
+  // Hover preview: the same envelope a click would select — a section heading
+  // previews its whole section; a leaf previews its own box (BUG-12).
+  const hoverBoxes =
+    state.view === 'select' && hover ? boxesFor(expandIds(props.blocks, hover)) : []
 
   // Block geometry: one synctex:forward per block, bounding box of its rects.
   // Assumes top-left-origin y from the backend — verify against the fixture.
@@ -169,6 +180,27 @@ export function PaperPane(props: Props): JSX.Element {
         />
       )
     }
+    // Hover preview: a faint padded envelope of the block (or whole section)
+    // under the cursor — what a click would select (BUG-12).
+    for (const hb of hoverBoxes) {
+      if (hb.page !== pageNo) continue
+      out.push(
+        <div
+          key="hover-box"
+          style={{
+            position: 'absolute',
+            left: hb.x * zoom,
+            top: hb.y * zoom,
+            width: hb.width * zoom,
+            height: hb.height * zoom,
+            boxShadow: 'inset 0 0 0 1px var(--hover-edge)',
+            borderRadius: 'var(--radius-sm)',
+            pointerEvents: 'none'
+          }}
+        />
+      )
+    }
+
     // Selection bounds: one union box per page (+ a left edge-bar) framing
     // the active selection. Replaces the per-block active outline (BUG-10).
     for (const sb of selectionBoxes) {

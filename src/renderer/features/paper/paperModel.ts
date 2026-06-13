@@ -78,6 +78,20 @@ export function expandIds(roots: BlockNode[], blockId: string): string[] {
   return node && node.kind === 'section' ? subtree(node) : [blockId]
 }
 
+/** Grow a box by `pad` on every side (PDF pt, scaled with the page at
+ *  render) so the bounds frame the text instead of cutting into glyphs
+ *  (BUG-13). The origin is clamped to 0 so a block near the page edge
+ *  doesn't pad off-canvas. */
+export function padBox(box: PdfRect, pad: number): PdfRect {
+  return {
+    page: box.page,
+    x: Math.max(0, box.x - pad),
+    y: Math.max(0, box.y - pad),
+    width: box.width + pad * 2,
+    height: box.height + pad * 2
+  }
+}
+
 /** One selection bounds box per page: the union envelope of the given block
  *  boxes (typically a section's heading + members, looked up in blockRects),
  *  grouped by page. Content rects anchor the envelope, so a heading's loose
