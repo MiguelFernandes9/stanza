@@ -446,3 +446,39 @@ Miguel wants per-block boxes instead of one envelope.
 **Lane.** Renderer only — `PaperPane.tsx`, `BlockOverlay.tsx`,
 `paperModel.ts`. Don't touch `expandIds`/`taskSpans` logic (correct);
 BUG-11 is about why the rects don't all reach `selectionBounds`.
+
+## BUG-11 ROOT CAUSE (corrected) — `\label` becomes a phantom paragraph
+
+Not a renderer/runtime bug (the sibling + manager traces were right that
+the selection union is sound). The real cause is in the **parser**: a bare
+`\label` makes a phantom paragraph block that steals the chapter click.
+
+ch1.tex line 1 = `\chapter{Introduction}`, line 2 = `\label{ch:intro}`.
+`\label` isn't in `STANDALONE_MACROS`, so `walkBody` drops it into the
+"anything else joins a paragraph" bucket → a `paragraph` block at
+`ch1.tex:2-2`. `\label` emits nothing, so synctex forward-maps line 2
+onto the chapter title's position; that paragraph overlay sits on top of
+"Chapter 1 / Introduction". Clicking the title hits the **label
+paragraph** (pill: `¶ ch1.tex:2-2`), not the chapter heading.
+`expandIds(paragraph)` = just itself → the selection is `ch1.tex:2-2` →
+Claude receives one line, no chapter content → "it breaks". Confirmed by
+the on-screen pill.
+
+**Fix (shared parser, `src/shared/blocks/parse.ts`).** Treat invisible
+marker macros as **transparent**: a new `TRANSPARENT_MACROS` set
+(`label`, `index`, `glossary`, `nomenclature`, `hypertarget`,
+`phantomsection`) that, in `walkBody`, is skipped **without** flushing or
+starting a paragraph — but if a paragraph is already open, extend its
+`endLine` to absorb the macro. So:
+- `\label` alone (its own line, e.g. after `\chapter`) → no block.
+- `\label` inline in prose (`text \label{x} more`) → absorbed; the
+  paragraph is **not** split (don't just add it to `STANDALONE_MACROS` —
+  that flushes and would split inline-label paragraphs).
+
+After this, clicking the chapter title hits the chapter heading →
+`expandIds` returns the whole subtree → bounds box spans the chapter and
+`taskSpans` sends Claude the full chapter span.
+
+**Test (`parse.test.ts`).** `\chapter{X}\n\label{y}\n\n\section{Z}` → no
+paragraph block at the label line; `Some text \label{a} more.` → one
+paragraph (not two). **Lane.** Shared parser only — small.
