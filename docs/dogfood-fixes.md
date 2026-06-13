@@ -373,3 +373,40 @@ superseded it; the single-file `document:blocks` channel + handler +
 client method are now caller-free. Pure deletion of dead surface across
 `channels.ts`, `ipc-registry.ts` (handler + unused `parseBlocks` import),
 `ipc.ts`. No re-gate needed beyond `tsc` + the existing suite.
+
+## BUG-10 — heading selection box is misaligned → use a bounds-bar
+
+**Symptom.** Selecting a section selects the right blocks (heading +
+content — confirmed: card reads `main.tex:13–15`), but the heading's
+selection *rectangle* is off: too wide and slightly low.
+
+**Root cause (synctex granularity).** `synctex view` boxes the whole
+heading *line*, not the glyphs: for `\section{Motivation}` it returns
+`W=358pt` (full column width) and `H=10pt` (a reference height smaller
+than the larger heading font). `parseViewOutput` faithfully maps it
+(`x:h, y:v−H, w:W, h:H`), so the box stretches past the short heading
+text and sits a little low. Body paragraphs look right because they fill
+the column at ~10pt. We can't tightly bound heading glyphs without
+metrics synctex doesn't expose.
+
+**Decision (Miguel).** Don't fight synctex for a tight heading box —
+draw a **clear vertical bounds-bar** that shows what's selected.
+
+**Fix (renderer) — union bounding box, always correct.** Don't box a
+heading by its own (unreliable, full-line) synctex rect. Draw **one
+selection box = the per-page union envelope of all selected blocks'
+rects**: for each page the selection touches, `left = min(x)`,
+`right = max(x+W)`, `top = min(y)`, `bottom = max(y+H)` over every
+`PageBlock` in the selection that has a rect on that page (look them up in
+`blockRects`; a section's members are the blocks whose `sectionId` is the
+selected section, plus the heading itself). This is always correct
+because the envelope is anchored by the reliable content rects
+(paragraphs/figures); the heading's loose width is absorbed. A section
+crossing pages → one box segment per page. A single-block selection → the
+union of one rect = that rect (unchanged). Keep the per-block hover/tint
+so members are still individually visible; the union box is the bounds.
+Optionally add a left edge-bar on the same envelope for extra clarity.
+
+**Lane.** Renderer only — `PaperPane.tsx` (compute per-page section
+extent), `BlockOverlay.tsx`/`paperModel.ts` (bar rendering). Family-select
+logic (`expandIds`, `taskSpans`) already correct — don't touch it.
