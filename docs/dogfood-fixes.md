@@ -187,6 +187,105 @@ order with no context flag. Options, smallest first:
 Prefer (1) — (2) misclassifies a genuine body fragment that happens to
 open with a macro. Not urgent; pick up when touching the parser next.
 
+---
+
+# Round 2 — post-merge dogfood (real /tmp/stanza-demo, book class)
+
+The multi-file change merged cleanly but surfaced two real bugs and one
+product gap. Empirically root-caused via the running app (isolated store).
+
+## BUG-4 — "Compile failed" flash on open (aborted compile reported as failed)
+
+**Symptom.** On open the pane shows "Compile failed — 0 errors" for a
+beat, then the real PDF renders fine.
+
+**Root cause.** `main.tsx` wraps the app in `<React.StrictMode>`. In
+`electron-vite dev` (development) StrictMode double-invokes effects, so
+`Workspace`'s on-open `runCompile()` fires twice. CompileService is
+latest-wins — the second compile calls `this.controller?.abort()`, and
+the aborted first resolves `{ ok: false, errors: [] }`
+([CompileService.ts:99](src/main/services/CompileService.ts#L99)). That
+`ok:false` is surfaced as `compile:status` 'failed'
+([ipc-registry.ts:118](src/main/ipc-registry.ts#L118)) and by
+`runCompile` → "Compile failed, 0 errors". The same false-fail hits any
+superseding recompile (e.g. ⌘R mid-compile), so removing StrictMode is
+not the real fix.
+
+**Fix.** Distinguish an *aborted/superseded* compile from a genuine
+failure and never surface it as failed:
+- CompileService: tag the aborted return `{ ok: false, aborted: true,
+  errors: [] }` (extend `CompileResult` with optional `aborted`).
+- `ipc-registry` compileRun: if `result.aborted`, do not emit
+  `'failed'` (leave the status as-is — a newer compile is in flight).
+- `Workspace.runCompile`: if `res.aborted`, don't flip to 'failed'.
+
+**Lane.** Main (CompileService, ipc-registry) + renderer (Workspace).
+
+## BUG-5 — chapter heading selects nothing; section headings cover too much
+
+**Symptom.** Clicking the "Introduction" chapter heading selects
+nothing. (Section headings like "Motivation" are clickable but their box
+spuriously covers the whole section.)
+
+**Root cause (empirical, via synctex:forward on the live demo).**
+`\chapter` forces a page break: forward-mapping `\chapter{Introduction}`
+(ch1.tex line 1) returns **degenerate rects** — `rect0: page=4,
+height=0.0` (artifacts left on the preceding page) — while the real
+"Introduction" title is on page 5. `PaperPane`'s block-geometry effect
+takes `rects[0].page` (=4) and builds a **0-height box stranded on the
+wrong page** → no hit area
+([PaperPane.tsx:78](src/renderer/features/paper/PaperPane.tsx#L78)).
+Compounded by `flattenBlocks` giving the heading row the *whole section
+span* (`Introduction` = lines 1–25) so forward samples across pages
+([paperModel.ts:30](src/renderer/features/paper/paperModel.ts#L30)).
+`\section` (Motivation, line 4 → 1 rect, h=9.9, page 5) maps fine — this
+is specific to page-breaking macros.
+
+**Fix (renderer only).**
+1. `flattenBlocks`: a heading's *geometry* spans only its heading line
+   (`endLine = startLine`); selection still expands to the whole section
+   via `expandIds` (unchanged).
+2. `PaperPane` block-geometry: drop degenerate rects (`height <= 0 ||
+   width <= 0`) before choosing a page, and pick the page by **coverage**
+   (most rects / largest area), not `rects[0].page`. Then the page-4
+   zero-height artifacts are discarded and the heading resolves to its
+   real page-5 box.
+
+**Test.** Unit: a forward result with a h=0 rect on page N and real rects
+on page N+1 yields a box on N+1. Live: clicking "Introduction" washes the
+heading + all its paragraphs.
+
+**Lane.** Renderer only.
+
+## FEATURE-1 — whole-document edit when nothing is selected
+
+**Decision (Miguel).** Title/author/date and ToC stay **unselectable**
+(no prose source; `\maketitle`/`\tableofcontents` skipped — by design).
+Instead: when **no blocks are selected**, a Claude instruction from the
+main chat may edit the **whole project** (unscoped op).
+
+**Approach.** The span pipeline already degrades to this — empty `spans`
+means `ReviewService.capture` diffs the whole tree. Work:
+- `prompts.ts`: when `spans` is empty, build an *unscoped* prompt ("you
+  may edit any file in the project") instead of the span-scoped one.
+- `Workspace`/`ChatPane`: allow submitting an instruction with zero chips
+  (today `chatSubmit` needs a compose task); route it to a whole-document
+  op and show a clear "editing the whole document" affordance.
+- `assertSpansFree([])`: a whole-doc op locks nothing structurally but,
+  under v1 serial execution, should still be the only in-flight op —
+  confirm it doesn't silently coexist with a scoped pending proposal.
+
+**Lane.** Main (prompts, maybe ClaudeService/ReviewService) + renderer
+(ChatPane, Workspace). Its own branch — it's a feature, not a fix.
+
+## BUG-6 (low) — stale op branch error on open
+
+Dev terminal shows `git log -1 --format=%s stanza/op-…714f8972e9:
+unknown revision` on open — a stored op record referencing a deleted
+`stanza/op-*` proposal branch (crash-recovery `reEmitPendingProposals` /
+`review.list`). Non-fatal (app works), but noisy and fragile: list/re-emit
+should skip ops whose branch no longer exists. Low priority.
+
 ### FU-2 — remove dead single-file `documentBlocks` IPC
 
 DONE / or fold into the branch before merge: `documentProjectBlocks`
