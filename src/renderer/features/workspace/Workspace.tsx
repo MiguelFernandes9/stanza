@@ -72,14 +72,22 @@ export function Workspace({ doc }: Props): JSX.Element {
     void client.claudeHistory().then(setOpRecords, () => setOpRecords([]))
   }, [])
 
+  // Re-fetch the whole-project block tree. Called on open AND after every
+  // successful compile, so overlays map against the recompiled source's spans
+  // instead of the pre-edit ones (BUG-15). Accept→recompile and debounced
+  // save both surface through onCompileStatus('ok').
+  const loadBlocks = useCallback(() => {
+    void client.documentProjectBlocks().then(setBlocks, () => setBlocks([]))
+  }, [])
+
   useEffect(() => {
     void client.documentFiles().then(setFiles, () => setFiles([]))
     // Blocks for the whole project (all \include'd files), not just main —
     // chapters in ch1/ch2 must be selectable too (BUG-3).
-    void client.documentProjectBlocks().then(setBlocks, () => setBlocks([]))
+    loadBlocks()
     loadHistory()
     loadOps()
-  }, [doc, loadHistory, loadOps])
+  }, [doc, loadBlocks, loadHistory, loadOps])
 
   // Pending proposals re-emitted on open (crash recovery, FR7).
   useEffect(
@@ -91,12 +99,17 @@ export function Workspace({ doc }: Props): JSX.Element {
     () =>
       client.onCompileStatus((s) => {
         setCompile((c) => ({ ...c, state: s === 'running' ? 'running' : s === 'ok' ? 'ok' : 'failed' }))
-        // Bump the cache-busting nonce on EVERY successful compile, not only
-        // the runCompile promise path — a compile triggered elsewhere must
-        // still refresh the pane (L5). Reuses the known PDF name.
-        if (s === 'ok') setPdfState((prev) => (prev ? { ...prev, nonce: prev.nonce + 1 } : prev))
+        if (s === 'ok') {
+          // Bump the cache-busting nonce on EVERY successful compile, not only
+          // the runCompile promise path — a compile triggered elsewhere must
+          // still refresh the pane (L5). Reuses the known PDF name.
+          setPdfState((prev) => (prev ? { ...prev, nonce: prev.nonce + 1 } : prev))
+          // Re-map block overlays against the recompiled source — without this
+          // they keep the previous PDF's spans until a window reopen (BUG-15).
+          loadBlocks()
+        }
       }),
-    []
+    [loadBlocks]
   )
 
   const runCompile = useCallback(() => {
