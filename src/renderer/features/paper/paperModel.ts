@@ -137,6 +137,28 @@ export function blockBoxesByPage(rects: PdfRect[]): PdfRect[] {
   return unionRectsByPage(rects)
 }
 
+/** Geometry-anchored ideal top (px, within the page-stack wrap) for each
+ *  task's rail card — derived from the block's topmost synctex box, not the
+ *  DOM, so a card stays beside its block even when the block's page is
+ *  virtualized out of the render window. An unscoped whole-doc task (no
+ *  blockIds) anchors at the current viewport scrollTop; same fallback when the
+ *  block has no resolved box yet or no page geometry exists. Caller applies
+ *  collision-stacking on top of these ideals (BUG-17). */
+export function cardAnchorTops(
+  tasks: { id: number; blockIds: string[] }[],
+  rects: Map<string, PdfRect[]>,
+  geo: { height: number; gap: number } | null,
+  zoom: number,
+  scrollTop: number
+): { id: number; top: number }[] {
+  return tasks.map((t) => {
+    const rect = t.blockIds[0] ? rects.get(t.blockIds[0])?.[0] : undefined
+    const top =
+      rect && geo ? (rect.page - 1) * (geo.height + geo.gap) + rect.y * zoom : scrollTop
+    return { id: t.id, top }
+  })
+}
+
 const basename = (path: string): string => path.split('/').pop() ?? path
 
 export function spanLabel(span: BlockSpan): string {

@@ -13,7 +13,7 @@ import type { PaneView, TaskState } from '../tasks/taskStore'
 import { BlockOverlay } from './BlockOverlay'
 import { FillerPage } from './FillerPage'
 import { PaperToolbar } from './PaperToolbar'
-import { blockBoxesByPage, combinedSpanLabel, expandIds, padBox, selectionBounds, spanLabel } from './paperModel'
+import { blockBoxesByPage, cardAnchorTops, combinedSpanLabel, expandIds, padBox, selectionBounds, spanLabel } from './paperModel'
 import type { BlockMark, PageBlock } from './paperModel'
 
 const FALLBACK_PAGE_WIDTH = 564
@@ -65,9 +65,7 @@ export function PaperPane(props: Props): JSX.Element {
   // each page it touches, so neither page's wash drops out (BUG-16).
   const [blockRects, setBlockRects] = useState<Map<string, PdfRect[]>>(new Map())
   const [activeFlash, setActiveFlash] = useState<PdfFlash | null>(null)
-  const wrapRef = useRef<HTMLDivElement | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
-  const blockEls = useRef<Record<string, HTMLDivElement | null>>({})
   const cardEls = useRef<Record<number, HTMLDivElement | null>>({})
   const [tops, setTops] = useState<Record<number, number>>({})
 
@@ -144,17 +142,18 @@ export function PaperPane(props: Props): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flash?.nonce, geo != null])
 
-  // Align cards with their blocks; stack on collision (design: 14px min gap).
+  // Align cards with their blocks from geometry (not the DOM), so a card whose
+  // block scrolled out of the virtualization window — or an unscoped whole-doc
+  // card with no block — no longer pins to the page top (BUG-17). Stack on
+  // collision (design: 14px min gap).
   useLayoutEffect(() => {
-    const wrap = wrapRef.current
-    if (!wrap) return
-    const wTop = wrap.getBoundingClientRect().top
-    const ideal = state.tasks
-      .map((t) => {
-        const el = blockEls.current[t.blockIds[0]]
-        return { id: t.id, top: el ? el.getBoundingClientRect().top - wTop - 4 : 0 }
-      })
-      .sort((a, b) => a.top - b.top)
+    const ideal = cardAnchorTops(
+      state.tasks,
+      blockRects,
+      geo,
+      zoom,
+      scrollRef.current?.scrollTop ?? 0
+    ).sort((a, b) => a.top - b.top)
     let cursor = 0
     const next: Record<number, number> = {}
     for (const it of ideal) {
@@ -173,10 +172,8 @@ export function PaperPane(props: Props): JSX.Element {
     for (const b of pageBlocks) {
       const boxes = blockRects.get(b.id)
       if (!boxes) continue
-      // The topmost box (lowest page — boxes are page-ascending) anchors the
-      // rail card; boxes on other pages render their wash without rebinding the
-      // ref, so a straddling block gets an overlay on every page it touches.
-      const anchor = boxes[0]
+      // A straddling block gets an overlay on every page it touches; the rail
+      // card anchors from geometry (cardAnchorTops), so no DOM ref is needed.
       for (const rect of boxes) {
         if (rect.page !== pageNo) continue
         out.push(
@@ -187,13 +184,6 @@ export function PaperPane(props: Props): JSX.Element {
             mark={marks[b.id] ?? null}
             hovered={state.view === 'select' && hover === b.id}
             selectMode={state.view === 'select'}
-            refCb={
-              rect === anchor
-                ? (el) => {
-                    blockEls.current[b.id] = el
-                  }
-                : () => undefined
-            }
             onEnter={() => setHover(b.id)}
             onLeave={() => setHover((h) => (h === b.id ? null : h))}
             onClick={(e) => props.onToggleBlock(b.id, state.adding || e.shiftKey || e.metaKey || e.ctrlKey)}
@@ -292,7 +282,7 @@ export function PaperPane(props: Props): JSX.Element {
       />
 
       <div ref={scrollRef} style={{ flex: 1, overflow: 'auto', padding: '26px 24px 40px' }}>
-        <div ref={wrapRef} style={{ position: 'relative', width: RAIL + RAIL_GAP + pageWidth, margin: '0 auto', minHeight: '100%' }}>
+        <div style={{ position: 'relative', width: RAIL + RAIL_GAP + pageWidth, margin: '0 auto', minHeight: '100%' }}>
           {state.tasks.map((t) => (
             <div
               key={t.id}
