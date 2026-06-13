@@ -13,7 +13,7 @@ import type { PaneView, TaskState } from '../tasks/taskStore'
 import { BlockOverlay } from './BlockOverlay'
 import { FillerPage } from './FillerPage'
 import { PaperToolbar } from './PaperToolbar'
-import { blockBoxFromRects, combinedSpanLabel, expandIds, padBox, selectionBounds, spanLabel } from './paperModel'
+import { blockBoxesByPage, combinedSpanLabel, expandIds, padBox, selectionBounds, spanLabel } from './paperModel'
 import type { BlockMark, PageBlock } from './paperModel'
 
 const FALLBACK_PAGE_WIDTH = 564
@@ -61,7 +61,9 @@ export function PaperPane(props: Props): JSX.Element {
   const [reviewId, setReviewId] = useState<number | null>(null)
   const [zoom, setZoom] = useState(1.1)
   const [geo, setGeo] = useState<PageGeometry | null>(null)
-  const [blockRects, setBlockRects] = useState<Map<string, PdfRect>>(new Map())
+  // Per-page boxes per block: a block straddling a page break has a box on
+  // each page it touches, so neither page's wash drops out (BUG-16).
+  const [blockRects, setBlockRects] = useState<Map<string, PdfRect[]>>(new Map())
   const [activeFlash, setActiveFlash] = useState<PdfFlash | null>(null)
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -83,9 +85,9 @@ export function PaperPane(props: Props): JSX.Element {
   // padded so it frames the text instead of cutting glyphs (BUG-10/13).
   const SELECT_PAD = 5
   const boxesFor = (ids: string[]): PdfRect[] =>
-    selectionBounds(
-      ids.map((id) => blockRects.get(id)).filter((r): r is PdfRect => r != null)
-    ).map((box) => padBox(box, SELECT_PAD))
+    selectionBounds(ids.flatMap((id) => blockRects.get(id) ?? [])).map((box) =>
+      padBox(box, SELECT_PAD)
+    )
 
   // Active selection: union over the whole selected subtree (expandIds already
   // populated the task's blockIds, so marks-active covers chapter → section →
@@ -97,7 +99,15 @@ export function PaperPane(props: Props): JSX.Element {
   const hoverBoxes =
     state.view === 'select' && hover ? boxesFor(expandIds(props.blocks, hover)) : []
 
-  // Block geometry: one synctex:forward per block, bounding box of its rects.
+  // Re-map geometry whenever any span MOVES — keyed by a value signature of
+  // the spans, not the block COUNT. An in-place edit that shifts line numbers
+  // without changing the count still re-runs synctex against the fresh PDF,
+  // so overlays track the live source instead of the old positions (BUG-15).
+  const blocksSig = pageBlocks
+    .map((b) => `${b.id}:${b.span.file}:${b.span.startLine}:${b.span.endLine}`)
+    .join('|')
+
+  // Block geometry: one synctex:forward per block, per-page boxes of its rects.
   // Assumes top-left-origin y from the backend — verify against the fixture.
   useEffect(() => {
     if (!pdf) return
@@ -105,11 +115,11 @@ export function PaperPane(props: Props): JSX.Element {
     void Promise.all(
       pageBlocks.map(async (b) => {
         const rects = await client.synctexForward(b.span).catch((): PdfRect[] => [])
-        // Drop page-break artifacts and pick the page by coverage, so a
-        // \chapter heading resolves to its real page, not a 0-height box on
-        // the preceding one (BUG-5).
-        const box = blockBoxFromRects(rects)
-        return box ? ([b.id, box] as const) : null
+        // Drop page-break artifacts (the solid-rect filter) and keep one box
+        // per page, so a \chapter heading adds no 0-height box on the preceding
+        // page (BUG-5) and a block straddling a break is washed on both (BUG-16).
+        const boxes = blockBoxesByPage(rects)
+        return boxes.length ? ([b.id, boxes] as const) : null
       })
     ).then((entries) => {
       if (alive) setBlockRects(new Map(entries.filter((e): e is NonNullable<typeof e> => e != null)))
@@ -118,7 +128,7 @@ export function PaperPane(props: Props): JSX.Element {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pdf, pageBlocks.length])
+  }, [pdf, blocksSig])
 
   // F7 forward flash: scroll to the rect, glow briefly.
   useEffect(() => {
@@ -161,24 +171,35 @@ export function PaperPane(props: Props): JSX.Element {
   const overlaysFor = (pageNo: number): JSX.Element[] => {
     const out: JSX.Element[] = []
     for (const b of pageBlocks) {
-      const rect = blockRects.get(b.id)
-      if (!rect || rect.page !== pageNo) continue
-      out.push(
-        <BlockOverlay
-          key={b.id}
-          block={b}
-          rect={{ page: rect.page, x: rect.x * zoom, y: rect.y * zoom, width: rect.width * zoom, height: rect.height * zoom }}
-          mark={marks[b.id] ?? null}
-          hovered={state.view === 'select' && hover === b.id}
-          selectMode={state.view === 'select'}
-          refCb={(el) => {
-            blockEls.current[b.id] = el
-          }}
-          onEnter={() => setHover(b.id)}
-          onLeave={() => setHover((h) => (h === b.id ? null : h))}
-          onClick={(e) => props.onToggleBlock(b.id, state.adding || e.shiftKey || e.metaKey || e.ctrlKey)}
-        />
-      )
+      const boxes = blockRects.get(b.id)
+      if (!boxes) continue
+      // The topmost box (lowest page — boxes are page-ascending) anchors the
+      // rail card; boxes on other pages render their wash without rebinding the
+      // ref, so a straddling block gets an overlay on every page it touches.
+      const anchor = boxes[0]
+      for (const rect of boxes) {
+        if (rect.page !== pageNo) continue
+        out.push(
+          <BlockOverlay
+            key={`${b.id}@${rect.page}`}
+            block={b}
+            rect={{ page: rect.page, x: rect.x * zoom, y: rect.y * zoom, width: rect.width * zoom, height: rect.height * zoom }}
+            mark={marks[b.id] ?? null}
+            hovered={state.view === 'select' && hover === b.id}
+            selectMode={state.view === 'select'}
+            refCb={
+              rect === anchor
+                ? (el) => {
+                    blockEls.current[b.id] = el
+                  }
+                : () => undefined
+            }
+            onEnter={() => setHover(b.id)}
+            onLeave={() => setHover((h) => (h === b.id ? null : h))}
+            onClick={(e) => props.onToggleBlock(b.id, state.adding || e.shiftKey || e.metaKey || e.ctrlKey)}
+          />
+        )
+      }
     }
     // Hover preview: a faint padded envelope of the block (or whole section)
     // under the cursor — what a click would select (BUG-12).

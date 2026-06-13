@@ -92,19 +92,18 @@ export function padBox(box: PdfRect, pad: number): PdfRect {
   }
 }
 
-/** One selection bounds box per page: the union envelope of the given block
- *  boxes (typically a section's heading + members, looked up in blockRects),
- *  grouped by page. Content rects anchor the envelope, so a heading's loose
- *  full-line synctex rect no longer skews the box (BUG-10). A section
- *  crossing pages yields one segment per page; a single block yields its own
- *  rect. Pages are returned in ascending order. */
-export function selectionBounds(boxes: PdfRect[]): PdfRect[] {
+/** Union a set of rects into one box per page, dropping degenerate rects
+ *  (height ≤ 0 || width ≤ 0 — e.g. the 0-height artifact a \chapter leaves on
+ *  the preceding page, BUG-5). Pages ascending. Shared per-page-envelope core
+ *  of selectionBounds (a selection's wash) and blockBoxesByPage (one block's
+ *  overlay boxes). */
+function unionRectsByPage(rects: PdfRect[]): PdfRect[] {
   const byPage = new Map<number, PdfRect[]>()
-  for (const b of boxes) {
-    if (b.width <= 0 || b.height <= 0) continue
-    const arr = byPage.get(b.page)
-    if (arr) arr.push(b)
-    else byPage.set(b.page, [b])
+  for (const r of rects) {
+    if (r.width <= 0 || r.height <= 0) continue
+    const arr = byPage.get(r.page)
+    if (arr) arr.push(r)
+    else byPage.set(r.page, [r])
   }
   return [...byPage.entries()]
     .sort(([a], [b]) => a - b)
@@ -117,38 +116,25 @@ export function selectionBounds(boxes: PdfRect[]): PdfRect[] {
     })
 }
 
-/** Bounding box of a block's synctex forward rects. Degenerate rects
- *  (height ≤ 0 or width ≤ 0 — e.g. page-break artifacts a \chapter leaves
- *  on the preceding page) are dropped; the page is chosen by coverage (most
- *  rects, then largest area), not rects[0], so a page-breaking heading
- *  resolves to the page it actually lands on (BUG-5). Null when nothing
- *  solid remains. */
-export function blockBoxFromRects(rects: PdfRect[]): PdfRect | null {
-  const solid = rects.filter((r) => r.height > 0 && r.width > 0)
-  if (!solid.length) return null
+/** One selection bounds box per page: the union envelope of the given block
+ *  boxes (typically a section's heading + members, looked up in blockRects),
+ *  grouped by page. Content rects anchor the envelope, so a heading's loose
+ *  full-line synctex rect no longer skews the box (BUG-10). A section
+ *  crossing pages yields one segment per page; a single block yields its own
+ *  rect. Pages are returned in ascending order. */
+export function selectionBounds(boxes: PdfRect[]): PdfRect[] {
+  return unionRectsByPage(boxes)
+}
 
-  const byPage = new Map<number, PdfRect[]>()
-  for (const r of solid) {
-    const arr = byPage.get(r.page)
-    if (arr) arr.push(r)
-    else byPage.set(r.page, [r])
-  }
-
-  let best: PdfRect[] = []
-  let bestArea = -1
-  for (const group of byPage.values()) {
-    const area = group.reduce((a, r) => a + r.width * r.height, 0)
-    if (group.length > best.length || (group.length === best.length && area > bestArea)) {
-      best = group
-      bestArea = area
-    }
-  }
-
-  const x = Math.min(...best.map((r) => r.x))
-  const y = Math.min(...best.map((r) => r.y))
-  const right = Math.max(...best.map((r) => r.x + r.width))
-  const bottom = Math.max(...best.map((r) => r.y + r.height))
-  return { page: best[0]!.page, x, y, width: right - x, height: bottom - y }
+/** Per-page boxes for one block, from its synctex:forward rects. Solid rects
+ *  are unioned per page, so a paragraph/section that straddles a page break
+ *  gets a box on BOTH pages instead of only its higher-coverage one — the
+ *  un-washed leftover lines on the other page are gone (BUG-16). The same
+ *  solid-rect filter preserves the BUG-5 dodge: a \chapter's 0-height artifact
+ *  on the preceding page adds no box. One box per page the block occupies,
+ *  ascending; [] when nothing solid remains. */
+export function blockBoxesByPage(rects: PdfRect[]): PdfRect[] {
+  return unionRectsByPage(rects)
 }
 
 const basename = (path: string): string => path.split('/').pop() ?? path

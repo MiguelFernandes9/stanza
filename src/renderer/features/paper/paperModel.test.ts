@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { BlockNode } from '../../../shared/blocks/types'
 import type { PdfRect } from '../../../shared/ipc'
 import {
-  blockBoxFromRects,
+  blockBoxesByPage,
   combinedSpanLabel,
   expandIds,
   flattenBlocks,
@@ -211,30 +211,59 @@ describe('padBox — breathing room around the bounds (BUG-13)', () => {
   })
 })
 
-describe('blockBoxFromRects — page-breaking macros (BUG-5)', () => {
-  it('drops degenerate rects and resolves to the page the block lands on', () => {
+describe('blockBoxesByPage — per-page boxes for a straddling block (BUG-16)', () => {
+  it('returns one box per page a block actually occupies', () => {
     const rects: PdfRect[] = [
-      { page: 4, x: 10, y: 700, width: 300, height: 0 }, // \chapter page-break artifact
+      { page: 2, x: 72, y: 700, width: 300, height: 12 }, // last line, bottom of page 2
+      { page: 3, x: 72, y: 60, width: 280, height: 12 }, // continues at top of page 3
+      { page: 3, x: 72, y: 74, width: 260, height: 12 }
+    ]
+    const boxes = blockBoxesByPage(rects)
+    expect(boxes.map((b) => b.page)).toEqual([2, 3])
+    expect(boxes[0]).toEqual({ page: 2, x: 72, y: 700, width: 300, height: 12 })
+    // page-3 rects unioned: y 60..86, x 72..352
+    expect(boxes[1]).toEqual({ page: 3, x: 72, y: 60, width: 280, height: 26 })
+  })
+
+  it('unions multiple rects on the same page into a single box', () => {
+    expect(
+      blockBoxesByPage([
+        { page: 1, x: 80, y: 100, width: 100, height: 10 },
+        { page: 1, x: 70, y: 120, width: 90, height: 10 }
+      ])
+    ).toEqual([{ page: 1, x: 70, y: 100, width: 110, height: 30 }])
+  })
+
+  it('drops a degenerate rect so a \\chapter page-break artifact adds no box', () => {
+    const rects: PdfRect[] = [
+      { page: 4, x: 10, y: 720, width: 300, height: 0 }, // 0-height artifact on the prev page
       { page: 5, x: 72, y: 90, width: 200, height: 14 },
       { page: 5, x: 72, y: 104, width: 180, height: 14 }
     ]
-    const box = blockBoxFromRects(rects)
-    expect(box?.page).toBe(5)
-    expect(box).toMatchObject({ x: 72, y: 90 })
-    expect(box!.height).toBeGreaterThan(0)
+    const boxes = blockBoxesByPage(rects)
+    expect(boxes.map((b) => b.page)).toEqual([5]) // page-4 artifact dropped (BUG-5 dodge)
+    expect(boxes[0]).toMatchObject({ page: 5, x: 72, y: 90, height: 28 })
   })
 
-  it('picks the page with the most coverage, not rects[0]', () => {
-    const rects: PdfRect[] = [
-      { page: 2, x: 0, y: 0, width: 100, height: 10 },
-      { page: 7, x: 0, y: 0, width: 100, height: 10 },
-      { page: 7, x: 0, y: 20, width: 100, height: 10 }
-    ]
-    expect(blockBoxFromRects(rects)?.page).toBe(7)
+  it('returns no boxes when every rect is degenerate or there are none', () => {
+    expect(blockBoxesByPage([{ page: 3, x: 0, y: 0, width: 0, height: 0 }])).toEqual([])
+    expect(blockBoxesByPage([])).toEqual([])
   })
+})
 
-  it('returns null when every rect is degenerate or there are none', () => {
-    expect(blockBoxFromRects([{ page: 3, x: 0, y: 0, width: 0, height: 0 }])).toBe(null)
-    expect(blockBoxFromRects([])).toBe(null)
+describe('selectionBounds — straddling block reaches both pages (BUG-16)', () => {
+  it('a block spanning pages 2 and 3 contributes to each page union, not just one', () => {
+    const straddle = blockBoxesByPage([
+      { page: 2, x: 72, y: 690, width: 300, height: 12 }, // bottom of page 2
+      { page: 3, x: 72, y: 60, width: 280, height: 12 } // top of page 3
+    ])
+    const heading: PdfRect = { page: 2, x: 72, y: 100, width: 350, height: 14 }
+    const out = selectionBounds([heading, ...straddle])
+    expect(out.map((b) => b.page)).toEqual([2, 3])
+    // The page-2 union now reaches the straddling block's last line (y 690+12),
+    // instead of stopping one paragraph short on the page it didn't "win".
+    const p2 = out.find((b) => b.page === 2)!
+    expect(p2.y + p2.height).toBeGreaterThanOrEqual(702)
+    expect(out.find((b) => b.page === 3)).toMatchObject({ page: 3, x: 72, y: 60 })
   })
 })
