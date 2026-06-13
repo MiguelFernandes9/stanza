@@ -78,6 +78,31 @@ export function expandIds(roots: BlockNode[], blockId: string): string[] {
   return node && node.kind === 'section' ? subtree(node) : [blockId]
 }
 
+/** One selection bounds box per page: the union envelope of the given block
+ *  boxes (typically a section's heading + members, looked up in blockRects),
+ *  grouped by page. Content rects anchor the envelope, so a heading's loose
+ *  full-line synctex rect no longer skews the box (BUG-10). A section
+ *  crossing pages yields one segment per page; a single block yields its own
+ *  rect. Pages are returned in ascending order. */
+export function selectionBounds(boxes: PdfRect[]): PdfRect[] {
+  const byPage = new Map<number, PdfRect[]>()
+  for (const b of boxes) {
+    if (b.width <= 0 || b.height <= 0) continue
+    const arr = byPage.get(b.page)
+    if (arr) arr.push(b)
+    else byPage.set(b.page, [b])
+  }
+  return [...byPage.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([page, rs]) => {
+      const x = Math.min(...rs.map((r) => r.x))
+      const y = Math.min(...rs.map((r) => r.y))
+      const right = Math.max(...rs.map((r) => r.x + r.width))
+      const bottom = Math.max(...rs.map((r) => r.y + r.height))
+      return { page, x, y, width: right - x, height: bottom - y }
+    })
+}
+
 /** Bounding box of a block's synctex forward rects. Degenerate rects
  *  (height ≤ 0 or width ≤ 0 — e.g. page-break artifacts a \chapter leaves
  *  on the preceding page) are dropped; the page is chosen by coverage (most

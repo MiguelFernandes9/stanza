@@ -68,12 +68,10 @@ export function BlockOverlay({
         cursor: locked && mark?.phase === 'busy' ? 'progress' : selectMode ? 'pointer' : 'default',
         pointerEvents: selectMode ? 'auto' : 'none',
         transition: 'background var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out)',
-        boxShadow:
-          mark?.active === true
-            ? 'inset 0 0 0 1.5px var(--select-edge)'
-            : hovered
-              ? 'inset 0 0 0 1px var(--hover-edge)'
-              : 'inset 0 0 0 1px transparent',
+        // Per-block active outline removed — the selection's single union box
+        // (PaperPane) is the bounds indicator now (BUG-10). Keep the fill tint
+        // so each member stays individually visible, plus the hover edge.
+        boxShadow: hovered ? 'inset 0 0 0 1px var(--hover-edge)' : 'inset 0 0 0 1px transparent',
         background: mark?.active === true ? 'var(--select-fill)' : hovered ? 'var(--hover-fill)' : 'transparent'
       }}
     >

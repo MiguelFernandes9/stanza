@@ -12,7 +12,7 @@ import type { PaneView, TaskState } from '../tasks/taskStore'
 import { BlockOverlay } from './BlockOverlay'
 import { FillerPage } from './FillerPage'
 import { PaperToolbar } from './PaperToolbar'
-import { blockBoxFromRects, combinedSpanLabel, spanLabel } from './paperModel'
+import { blockBoxFromRects, combinedSpanLabel, selectionBounds, spanLabel } from './paperModel'
 import type { BlockMark, PageBlock } from './paperModel'
 
 const FALLBACK_PAGE_WIDTH = 564
@@ -74,6 +74,17 @@ export function PaperPane(props: Props): JSX.Element {
   const marks: Record<string, BlockMark> = {}
   for (const t of state.tasks)
     for (const id of t.blockIds) marks[id] = { phase: t.phase, active: t.id === state.activeTask }
+
+  // BUG-10: one bounds box per page = the union envelope of the active
+  // selection's block boxes. Content rects anchor it, so a heading's loose
+  // full-line synctex rect no longer skews the box. Per-block tint stays
+  // (BlockOverlay); this is the single bounds indicator.
+  const selectionBoxes = selectionBounds(
+    pageBlocks
+      .filter((b) => marks[b.id]?.active)
+      .map((b) => blockRects.get(b.id))
+      .filter((r): r is PdfRect => r != null)
+  )
 
   // Block geometry: one synctex:forward per block, bounding box of its rects.
   // Assumes top-left-origin y from the backend — verify against the fixture.
@@ -158,6 +169,42 @@ export function PaperPane(props: Props): JSX.Element {
         />
       )
     }
+    // Selection bounds: one union box per page (+ a left edge-bar) framing
+    // the active selection. Replaces the per-block active outline (BUG-10).
+    for (const sb of selectionBoxes) {
+      if (sb.page !== pageNo) continue
+      out.push(
+        <div
+          key="sel-bar"
+          style={{
+            position: 'absolute',
+            left: sb.x * zoom - 7,
+            top: sb.y * zoom,
+            width: 3,
+            height: sb.height * zoom,
+            background: 'var(--select-edge)',
+            borderRadius: 2,
+            pointerEvents: 'none'
+          }}
+        />
+      )
+      out.push(
+        <div
+          key="sel-box"
+          style={{
+            position: 'absolute',
+            left: sb.x * zoom,
+            top: sb.y * zoom,
+            width: sb.width * zoom,
+            height: sb.height * zoom,
+            boxShadow: 'inset 0 0 0 1.5px var(--select-edge)',
+            borderRadius: 'var(--radius-sm)',
+            pointerEvents: 'none'
+          }}
+        />
+      )
+    }
+
     if (activeFlash && activeFlash.page === pageNo) {
       out.push(
         <div

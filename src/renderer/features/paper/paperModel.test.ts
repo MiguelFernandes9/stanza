@@ -6,6 +6,7 @@ import {
   combinedSpanLabel,
   expandIds,
   flattenBlocks,
+  selectionBounds,
   spanLabel,
   taskSpans
 } from './paperModel'
@@ -161,6 +162,36 @@ describe('expandIds — full subtree (BUG-8)', () => {
   })
   it('a leaf stays itself', () => {
     expect(expandIds(deep, 'eq1')).toEqual(['eq1'])
+  })
+})
+
+describe('selectionBounds — per-page union envelope (BUG-10)', () => {
+  it('unions a loose heading rect with content rects into one tight envelope', () => {
+    const boxes: PdfRect[] = [
+      { page: 5, x: 72, y: 90, width: 358, height: 10 }, // heading: full-width, loose, slightly low
+      { page: 5, x: 80, y: 110, width: 300, height: 40 }, // paragraph
+      { page: 5, x: 90, y: 160, width: 200, height: 120 } // figure
+    ]
+    expect(selectionBounds(boxes)).toEqual([{ page: 5, x: 72, y: 90, width: 358, height: 190 }])
+  })
+
+  it('emits one box segment per page when the selection crosses pages', () => {
+    const out = selectionBounds([
+      { page: 5, x: 72, y: 60, width: 300, height: 50 },
+      { page: 4, x: 72, y: 700, width: 300, height: 20 }
+    ])
+    expect(out.map((b) => b.page)).toEqual([4, 5]) // sorted by page
+    expect(out[0]).toMatchObject({ page: 4, x: 72, y: 700, width: 300, height: 20 })
+    expect(out[1]).toMatchObject({ page: 5, x: 72, y: 60, width: 300, height: 50 })
+  })
+
+  it('a single-block selection is its own rect, unchanged', () => {
+    const one: PdfRect = { page: 2, x: 72, y: 100, width: 350, height: 12 }
+    expect(selectionBounds([one])).toEqual([one])
+  })
+
+  it('no boxes → no envelope', () => {
+    expect(selectionBounds([])).toEqual([])
   })
 })
 
