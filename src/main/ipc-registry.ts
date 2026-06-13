@@ -16,7 +16,7 @@ import type {
   RecentProject,
   ReviewDecision,
 } from '@shared/ipc'
-import { parseBlocks, parseProjectBlocks } from '@shared/blocks/parse'
+import { parseProjectBlocks } from '@shared/blocks/parse'
 import { armSettleWatcher } from './infra/FileWatcher'
 import { DefaultProcessRunner } from './infra/ProcessRunner'
 import { GitClient } from './infra/GitClient'
@@ -93,11 +93,6 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IpcChannels.documentFiles, (): FileEntry[] =>
     listFiles(requireSession().info.root),
   )
-
-  ipcMain.handle(IpcChannels.documentBlocks, (_e, file: string) => {
-    const { root } = requireSession().info
-    return parseBlocks(file, readFileSync(join(root, file), 'utf8'))
-  })
 
   // All project files' blocks in one merged tree — overlays must cover
   // \include'd chapters, not just the main file (BUG-2/3).
