@@ -410,3 +410,39 @@ Optionally add a left edge-bar on the same envelope for extra clarity.
 **Lane.** Renderer only — `PaperPane.tsx` (compute per-page section
 extent), `BlockOverlay.tsx`/`paperModel.ts` (bar rendering). Family-select
 logic (`expandIds`, `taskSpans`) already correct — don't touch it.
+
+## Round 3 — selection-bounds polish (post #24)
+
+Union bounds box landed (#24) and reads much better, but dogfooding a
+chapter surfaced four refinements. All renderer (`PaperPane.tsx`,
+`BlockOverlay.tsx`, `paperModel.ts`).
+
+**BUG-11 — pressing a whole chapter boxes only the heading.** Selecting a
+`\chapter` (e.g. "Results") frames only the chapter title, not its
+sections/figure/paragraphs. NOT geometry: all of ch2's content (lines
+1/4/8/15/17) maps to the same page 5 with valid synctex rects, and
+`expandIds` is recursive (returns the whole subtree). So at runtime
+`selectionBounds` is only receiving the heading's rect → either the
+subtree isn't `active` for a chapter click, or the descendants' entries
+are missing from `blockRects` when the box renders. Repro in-app, log
+`expandIds` output + the active id set + `blockRects` keys for a chapter
+selection, fix so the box spans the whole chapter (per page).
+
+**BUG-12 — hover shows only the hovered line, not the whole block.**
+Hovering a heading highlights just its heading-line rect (post-BUG-5
+geometry). Hover should preview the block's full bounds; for a section
+heading, preview the section's union bounds (same envelope a click would
+select) so hovering a chapter outlines the whole chapter.
+
+**BUG-13 — bounds box too tight, overlaps the text.** Pad the union box
+(~5–6px each side, scaled) so it frames the text with breathing room
+instead of cutting into the glyphs. Apply to the hover preview too.
+
+**BUG-14 (note) — whitespace inside the box.** A single union rectangle
+spans inter-block gaps (e.g. around a figure). Inherent to one bounding
+box; with padding it should read as intentional framing. Only revisit if
+Miguel wants per-block boxes instead of one envelope.
+
+**Lane.** Renderer only — `PaperPane.tsx`, `BlockOverlay.tsx`,
+`paperModel.ts`. Don't touch `expandIds`/`taskSpans` logic (correct);
+BUG-11 is about why the rects don't all reach `selectionBounds`.
