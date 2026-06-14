@@ -27,7 +27,12 @@ const DEFAULT_TIMEOUT_MS = 120_000
 export class DefaultProcessRunner implements ProcessRunner {
   run(spec: RunSpec): Promise<ProcResult> {
     return new Promise((resolve, reject) => {
-      const child = spawn(spec.cmd, spec.args, { cwd: spec.cwd })
+      // stdin from /dev/null ('ignore'): every command here takes its input as
+      // args (claude's prompt, tectonic's file, synctex's query) and none reads
+      // written stdin. An open, unwritten stdin pipe makes the claude CLI wait
+      // for piped input, warn ("no stdin data received in 3s"), and exit 1 —
+      // killing every op (BUG-28). /dev/null gives an immediate EOF instead.
+      const child = spawn(spec.cmd, spec.args, { cwd: spec.cwd, stdio: ['ignore', 'pipe', 'pipe'] })
       let stdout = ''
       let stderr = ''
       let timedOut = false
