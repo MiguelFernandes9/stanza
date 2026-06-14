@@ -4,6 +4,24 @@ The iteration ledger between this design system and the implementation.
 Each entry is a designed, reviewable unit. Claude Code: implement against a
 version tag; report drift or constraints back as notes under that version.
 
+## v0.4 — 2026-06-14 — File-management 2: upload · drag-move · nested outline
+Overleaf-style file workflow on the v0.2 base. Handoff:
+`design_handoff_edit_loop/V04_FILE_MGMT_2.md`. One sibling, off main.
+
+- **Upload**: header Upload button + folder "Upload here" → OS file picker
+  (main), copies images/files into the dir, `wip:`-commits. New
+  `FileService.importFiles` + `document:upload` IPC.
+- **Drag-and-drop move**: drag a file/folder onto another folder (or root)
+  to move it — reuses `document:rename` (a cross-dir rename is a `git mv`);
+  tab/`activeFile` remap; self/descendant + collision guarded.
+- **Nested file outline**: the Sidebar OUTLINE renders the full block tree
+  (sections → subsections → named leaves), collapsible, click-to-select —
+  replacing the top-level-only list.
+- New-file-opens-in-rename already shipped in v0.2 (#32).
+
+### Implementation notes (Claude Code: append here)
+- _none yet_
+
 ## v0.3 — 2026-06-14 — PDF-pane rework: centering · bubble model · two-column
 Reworks the preview pane's task presentation and paper layout. Handoff:
 `design_handoff_edit_loop/V03_PANE_REWORK.md`. Adopted wholesale; shipped
