@@ -145,26 +145,34 @@ export function isTightAbove(box: PdfRect, neighbors: PdfRect[], threshold: numb
   return gapAbove(box, neighbors) < threshold
 }
 
-/** Multiplier on the upper box's line-height: a vertical gap up to this many
- *  lines between page-adjacent boxes is settled (a synctex-dropped wrapped
- *  line is ~1 line; structural gaps before floats/sections are larger). */
-const SETTLE_GAP_K = 1.8
+/** Multiplier on the upper box's line-height: a downward gap up to this many
+ *  lines below a box is treated as a synctex-dropped wrapped line and settled.
+ *  ~2.5 covers a paragraph-before-a-list gap (~1.83 lines) while genuine
+ *  structural gaps (before floats/sections) stay larger and untouched. */
+const SETTLE_GAP_K = 2.5
 /** Line-height cap (pt) for the settle threshold. The boxes reaching here are
  *  unioned to one rect per page, so per-line H is gone — estimate it as the
  *  box's own height capped at a typical body line, so a tall multi-line box
  *  doesn't earn a proportionally huge gap budget. */
 const LINE_H_CAP = 16
+/** Whitespace (pt) left between an extended box and the block below, so the
+ *  reclaimed line doesn't touch the next block. */
+const MIN_GAP = 2
 
 /** Settle vertical relationships between page-adjacent block boxes so a
  *  block's wash/selection neither bleeds into its neighbour nor stops short of
- *  it. Per page, boxes are sorted top-to-bottom; for each adjacent pair the
- *  shared edge is pulled to the midpoint `m = (aBottom + bTop) / 2` when they
- *  OVERLAP (a float's `\end` strut over the next paragraph, BUG-19) OR sit
- *  within ~1.8 line-heights of each other (a paragraph whose synctex-dropped
- *  last wrapped line left its box a line short, BUG-25). Genuine structural
- *  gaps (before floats/equations/section breaks) and the last box on a page
- *  exceed the threshold and stay put. Returns a new map; inputs aren't
- *  mutated. */
+ *  it. Per page, boxes are sorted top-to-bottom; for each adjacent pair:
+ *   - OVERLAP (`bTop < aBottom`): meet at the midpoint of the overlapping band
+ *     (a float's `\end` strut over the next paragraph, BUG-19).
+ *   - SMALL GAP (`0 ≤ gap ≤ ~2.5 line-heights`): extend the upper box DOWN by
+ *     up to one line — `min(aBottom + lineHeight, bTop − MIN_GAP)` — and leave
+ *     the lower box put. synctex sometimes collapses a wrapped last source line
+ *     onto the previous baseline, so the real last visual line has no rect and
+ *     the box stops a line short; this reclaims exactly that line without going
+ *     to the midpoint (which still clips it) and leaves genuine whitespace
+ *     clear when the gap is bigger than one line (BUG-25).
+ *  Genuine structural gaps (> ~2.5 lines) and the last box on a page stay put.
+ *  Returns a new map; inputs aren't mutated. */
 export function resolveBoxOverlaps(rects: Map<string, PdfRect[]>): Map<string, PdfRect[]> {
   const out = new Map<string, PdfRect[]>()
   const byPage = new Map<number, PdfRect[]>()
@@ -184,14 +192,18 @@ export function resolveBoxOverlaps(rects: Map<string, PdfRect[]>): Map<string, P
       const b = boxes[i + 1]!
       const aBottom = a.y + a.height
       const lineHeight = Math.min(a.height, LINE_H_CAP)
-      // gap < 0 is overlap (BUG-19); 0 ≤ gap ≤ ~1.8 lines is an undershoot
-      // (BUG-25). Either way, meet at the midpoint of the band between them.
-      if (b.y - aBottom <= SETTLE_GAP_K * lineHeight) {
+      if (b.y < aBottom) {
+        // overlap: meet at the midpoint of the overlapping band (BUG-19)
         const bBottom = b.y + b.height
         const m = (aBottom + b.y) / 2
         a.height = m - a.y
         b.y = m
         b.height = Math.max(0, bBottom - m)
+      } else if (b.y - aBottom <= SETTLE_GAP_K * lineHeight) {
+        // small gap: extend a by ≤ one line to reclaim the dropped wrapped
+        // line; leave b put so real whitespace beyond one line stays clear.
+        const newBottom = Math.min(aBottom + lineHeight, b.y - MIN_GAP)
+        a.height = Math.max(a.height, newBottom - a.y)
       }
     }
   }

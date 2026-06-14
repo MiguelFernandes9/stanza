@@ -399,21 +399,33 @@ describe('resolveBoxOverlaps — settle overlaps and small gaps (BUG-19 / BUG-25
     expect(para.y + para.height).toBeCloseTo(622.5, 6)
   })
 
-  it('settles a ~1-line undershoot gap to the midpoint (BUG-25)', () => {
+  it('extends the upper box by ~one line into a small gap, leaving b put (BUG-25)', () => {
     // A paragraph whose synctex-dropped last wrapped line left its box bottom
-    // a line high (256), with the next block ~16pt below (272).
+    // a line high (256), with the next block ~16pt below (272). lineHeight 16.
     const rects = new Map<string, PdfRect[]>([
       ['a', [{ page: 1, x: 72, y: 200, width: 300, height: 56 }]], // bottom 256
       ['b', [{ page: 1, x: 72, y: 272, width: 300, height: 40 }]] // top 272, 16pt gap
     ])
     const out = resolveBoxOverlaps(rects)
     const a = out.get('a')![0]!
-    const b = out.get('b')![0]!
-    // both pulled to the gap midpoint 264 — the upper box reclaims its last line
-    expect(a.y + a.height).toBe(264)
-    expect(b.y).toBe(264)
-    expect(a.y).toBe(200) // outer edges preserved
-    expect(b.y + b.height).toBe(312)
+    // a extends to min(aBottom+lineHeight=272, bTop-MIN_GAP=270) = 270 — reclaims
+    // the dropped line; midpoint (264) would still clip it. b is untouched, so
+    // the 2pt of genuine whitespace stays clear.
+    expect(a.y + a.height).toBe(270)
+    expect(a.y).toBe(200)
+    expect(out.get('b')![0]).toEqual({ page: 1, x: 72, y: 272, width: 300, height: 40 })
+  })
+
+  it('settles a 1.83-line gap (29pt) thanks to the widened band K=2.5 (BUG-25 reopened)', () => {
+    // 29 > old 1.8×16 = 28.8 (the para→list case #42 missed) but ≤ 2.5×16 = 40.
+    const rects = new Map<string, PdfRect[]>([
+      ['a', [{ page: 1, x: 72, y: 200, width: 300, height: 56 }]], // bottom 256
+      ['b', [{ page: 1, x: 72, y: 285, width: 300, height: 40 }]] // top 285, 29pt gap
+    ])
+    const out = resolveBoxOverlaps(rects)
+    // extend by one line: min(256+16=272, 285-2=283) = 272
+    expect(out.get('a')![0]!.y + out.get('a')![0]!.height).toBe(272)
+    expect(out.get('b')![0]).toEqual({ page: 1, x: 72, y: 285, width: 300, height: 40 })
   })
 
   it('leaves a large structural gap untouched (e.g. before a float)', () => {
