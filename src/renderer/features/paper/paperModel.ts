@@ -244,15 +244,26 @@ export function selectionBounds(boxes: PdfRect[]): PdfRect[] {
   return unionRectsByPage(boxes)
 }
 
+/** A page box shorter than this fraction of the block's tallest page box is a
+ *  phantom forward-map fragment, not real content (BUG-30). */
+const PHANTOM_SHARE = 0.15
+
 /** Per-page boxes for one block, from its synctex:forward rects. Solid rects
  *  are unioned per page, so a paragraph/section that straddles a page break
  *  gets a box on BOTH pages instead of only its higher-coverage one — the
  *  un-washed leftover lines on the other page are gone (BUG-16). The same
  *  solid-rect filter preserves the BUG-5 dodge: a \chapter's 0-height artifact
- *  on the preceding page adds no box. One box per page the block occupies,
- *  ascending; [] when nothing solid remains. */
+ *  on the preceding page adds no box. When the block spans multiple pages, a
+ *  page box that's a negligible fraction of the tallest one is dropped — a
+ *  paragraph-start `\ref` at a page break forward-maps a stray ~8pt fragment
+ *  onto the previous page's header band, which otherwise puts the block's
+ *  box/pill/badge on the chapter heading (BUG-30). One box per page the block
+ *  occupies, ascending; [] when nothing solid remains. */
 export function blockBoxesByPage(rects: PdfRect[]): PdfRect[] {
-  return unionRectsByPage(rects)
+  const boxes = unionRectsByPage(rects)
+  if (boxes.length <= 1) return boxes
+  const maxHeight = Math.max(...boxes.map((b) => b.height))
+  return boxes.filter((b) => b.height >= PHANTOM_SHARE * maxHeight)
 }
 
 /** One padded box per block — NOT a union envelope. Each selected block's
