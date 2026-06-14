@@ -229,6 +229,37 @@ export function blockBoxesByPage(rects: PdfRect[]): PdfRect[] {
   return unionRectsByPage(rects)
 }
 
+/** Geometry query span for a block, excluding an environment's \begin/\end
+ *  delimiter lines: they carry no visible content and forward-map to stray
+ *  galley positions — e.g. \end{figure} lands on the next paragraph's first
+ *  line, dragging the figure box bottom onto the paragraph below (BUG-21).
+ *  Returns the interior span startLine+1..endLine-1 for an environment, or
+ *  null (caller uses the full span) for a non-environment or a too-small
+ *  interior. Only the geometry query narrows — the block's own span is
+ *  unchanged, so taskSpans/Claude still see \begin..\end. */
+export function environmentInteriorSpan(block: PageBlock): BlockSpan | null {
+  if (block.kind !== 'environment') return null
+  const startLine = block.span.startLine + 1
+  const endLine = block.span.endLine - 1
+  return endLine >= startLine ? { ...block.span, startLine, endLine } : null
+}
+
+/** Forward-map a block to its PDF rects, excluding environment delimiter
+ *  lines (BUG-21). Queries the interior span for environments; falls back to
+ *  the full span when there is no interior (tiny env) or the interior yields
+ *  no rects (so a content-less env still gets a box). */
+export async function blockGeometryRects(
+  block: PageBlock,
+  forward: (span: BlockSpan) => Promise<PdfRect[]>,
+): Promise<PdfRect[]> {
+  const interior = environmentInteriorSpan(block)
+  if (interior) {
+    const rects = await forward(interior)
+    if (rects.length > 0) return rects
+  }
+  return forward(block.span)
+}
+
 /** Geometry-anchored ideal top (px, within the page-stack wrap) for each
  *  task's rail card — derived from the block's topmost synctex box, not the
  *  DOM, so a card stays beside its block even when the block's page is

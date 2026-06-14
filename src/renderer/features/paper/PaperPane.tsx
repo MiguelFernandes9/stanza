@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { JSX } from 'react'
 import { client } from '@renderer/lib/client'
 import type { CompileState } from '@renderer/components'
-import type { PdfRect } from '@shared/ipc'
+import type { BlockSpan, PdfRect } from '@shared/ipc'
 import type { BlockNode } from '@shared/blocks/types'
 import { usePdfDocument } from '../pdf/usePdfDocument'
 import { PdfPageStack } from '../pdf/PdfPageStack'
@@ -13,7 +13,7 @@ import type { PaneView, TaskState } from '../tasks/taskStore'
 import { BlockOverlay } from './BlockOverlay'
 import { FillerPage } from './FillerPage'
 import { PaperToolbar } from './PaperToolbar'
-import { blockBoxesByPage, cardAnchorTops, combinedSpanLabel, expandIds, isTightAbove, padBoxClamped, resolveBoxOverlaps, selectionBounds, spanLabel } from './paperModel'
+import { blockBoxesByPage, blockGeometryRects, cardAnchorTops, combinedSpanLabel, expandIds, isTightAbove, padBoxClamped, resolveBoxOverlaps, selectionBounds, spanLabel } from './paperModel'
 import type { BlockMark, PageBlock } from './paperModel'
 
 const FALLBACK_PAGE_WIDTH = 564
@@ -119,9 +119,13 @@ export function PaperPane(props: Props): JSX.Element {
   useEffect(() => {
     if (!pdf) return
     let alive = true
+    const forward = (span: BlockSpan) => client.synctexForward(span).catch((): PdfRect[] => [])
     void Promise.all(
       pageBlocks.map(async (b) => {
-        const rects = await client.synctexForward(b.span).catch((): PdfRect[] => [])
+        // Environment blocks query their INTERIOR span — \begin/\end delimiter
+        // lines carry no content and forward-map to stray galley rects (\end
+        // lands on the paragraph below, BUG-21). Falls back to the full span.
+        const rects = await blockGeometryRects(b, forward)
         // Drop page-break artifacts (the solid-rect filter) and keep one box
         // per page, so a \chapter heading adds no 0-height box on the preceding
         // page (BUG-5) and a block straddling a break is washed on both (BUG-16).
