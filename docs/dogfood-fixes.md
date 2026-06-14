@@ -1211,3 +1211,59 @@ priming a fresh project completes.
 
 **Lane.** Main process infra (`ProcessRunner.ts` + test) — one line.
 **Showstopper** — unblocks the entire edit loop; do this first.
+
+## BUG-30 — a phantom synctex rect on the wrong page puts a block's box/pill/badge on the chapter heading
+
+A paragraph block's selection box covers empty space, its block pill lands on
+the **chapter-title / running-header band**, and its badge+bubble anchor to the
+wrong place (and drift). Reported as "bubbles move around / not in the correct
+location" + "covers the text" + "detected as a block of a paragraph that has
+nothing to do with that."
+
+**Root cause — a stray (phantom) forward-map rect on a page the block barely
+occupies.** Measured (ch1 §Outline, block `ch1.tex:109-132`, coherent
+snapshot): the paragraph's real content is **24 lines all on page 6**
+(`p6[123-363]`), but its **first** line forward-maps to extra rects on
+**page 5**:
+
+```
+L109 ("Chapter~\ref{ch:results} gathers…"): p5[78-86]  p5[71-71]  p5[745-745]  p6[123-133]
+L110-132: p6[...] only
+```
+
+The `p5[71-71]`/`p5[745-745]` are 0-height (already dropped by `unionRectsByPage`),
+but `p5[78-86]` (~8pt, page-5 **top**, the header band) survives. So
+`blockBoxesByPage` returns **two** boxes: a phantom `p5[78-86]` + the real
+`p6[123-363]`. Consequences:
+- the page-5 box renders the block's overlay/**pill on the chapter heading**;
+- `cardAnchorTops` anchors the badge/bubble off `rects[0]` = the **phantom**
+  (BUG-17 made anchors geometry-based), so the bubble sits on page 5 / drifts;
+- a stray wash box sits on a blank band.
+
+It's the same phantom family as BUG-20/21 (a macro/para-start forward-maps to a
+galley position): here a `\ref` at a paragraph start that begins right at a page
+break drops a rect on the previous page's header.
+
+**Fix (`paperModel.ts`, `blockBoxesByPage`).** After unioning to one box per
+page, when a block spans **multiple** pages, drop any page box whose height is a
+negligible fraction of the block's tallest page box — a phantom fragment, not
+real content: `boxes.filter(b => b.height >= PHANTOM_SHARE * maxHeight)` with
+`PHANTOM_SHARE ≈ 0.15`. Single-page blocks are untouched. Verified: page-5 8pt
+< 0.15×240=36 → dropped; page-6 kept. A genuine cross-page straddle (e.g. 50pt
++ 190pt) keeps both (50 ≥ 28.5). Apply only in `blockBoxesByPage` (one block),
+**not** in the shared `unionRectsByPage`/`selectionBounds` (a multi-block
+section legitimately spans pages with small per-page shares).
+
+**Test (`paperModel.test.ts`).** Rects = 24 page-6 line boxes + one 8pt page-5
+box → `blockBoxesByPage` returns a single page-6 box (phantom dropped). A real
+straddle (5 lines page N + 19 lines page N+1) keeps both. A single-page block is
+unchanged. Live gate (Miguel): the 109-132 pill/box/bubble sit on the real
+paragraph, not the heading.
+
+**Caveat / follow-up.** This removes the *positional* phantom. If "bubbles drift"
+persists after it, the remaining cause is anchor recomputation on
+recompile/virtualization (the `transition: top` animating when `geo`/`blockRects`
+update) — separate, file under a BUG-31 if it survives the live gate.
+
+**Lane.** Renderer paper geometry (`paperModel.ts` + test) — small. No
+paper-geometry work in flight (BUG-25/26/27 all merged); branch off main.
