@@ -1,5 +1,5 @@
 import { cpSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import type { GitClient } from '../infra/GitClient'
 
 /** Resolve `rel` under `root` and assert it stays inside. Rejects absolute
@@ -76,6 +76,23 @@ export class FileService {
     return rel
   }
 
+  /** Copy external files into `dir` ('' = root), auto-suffixing a colliding
+   *  name (the same " copy" scheme as duplicate); one wip commit. Returns the
+   *  new rel paths. Bytes come from the OS picker on the main side, not IPC. */
+  async importFiles(dir: string, srcAbsPaths: string[]): Promise<string[]> {
+    const rels: string[] = []
+    for (const srcPath of srcAbsPaths) {
+      const wanted = dir ? `${dir}/${basename(srcPath)}` : basename(srcPath)
+      const rel = this.freeImportPath(wanted)
+      const destAbs = safeJoin(this.root, rel)
+      mkdirSync(dirname(destAbs), { recursive: true })
+      cpSync(srcPath, destAbs)
+      rels.push(rel)
+    }
+    await this.commitIfDirty(`wip: upload ${rels.length} file(s)`)
+    return rels
+  }
+
   /** Create an empty directory under `dir` ('' = root). */
   async createFolder(dir: string, name: string): Promise<void> {
     const rel = dir ? `${dir}/${name}` : name
@@ -84,6 +101,11 @@ export class FileService {
     mkdirSync(abs, { recursive: true })
     // An empty dir is invisible to git — nothing to commit, tree stays clean.
     // It surfaces in document:files once it holds a file.
+  }
+
+  /** `rel` itself if free, else the collision-suffixed " copy" variant. */
+  private freeImportPath(rel: string): string {
+    return existsSync(safeJoin(this.root, rel)) ? this.freeDupPath(rel) : rel
   }
 
   /** First free "<base> copy[.ext]" variant, incrementing to stay unique. */

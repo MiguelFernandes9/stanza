@@ -26,6 +26,7 @@ export const IpcChannels = {
   documentDuplicate: 'document:duplicate', // invoke {relPath: string} → FileMutationResult
   documentDelete: 'document:delete',       // invoke {relPath: string} → FileMutationResult
   documentCreateFile: 'document:createFile',     // invoke {dir: string; name: string} → FileMutationResult
-  documentCreateFolder: 'document:createFolder'  // invoke {dir: string; name: string} → FileMutationResult
+  documentCreateFolder: 'document:createFolder', // invoke {dir: string; name: string} → FileMutationResult
+  documentUpload: 'document:upload'              // invoke {dir: string} → FileMutationResult (main shows OS picker)
 } as const
 export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels]

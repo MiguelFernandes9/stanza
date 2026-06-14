@@ -32,10 +32,11 @@ describe('menuItemsForKind', () => {
     ])
   })
 
-  it('orders the folder menu: new file/folder, rename, copy, delete', () => {
+  it('orders the folder menu: new file/folder, upload, rename, copy, delete', () => {
     expect(tokens(menuItemsForKind('dir'))).toEqual([
       'newFile',
       'newFolder',
+      'upload',
       '—',
       'rename',
       'copyPath',

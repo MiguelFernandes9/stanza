@@ -12,6 +12,7 @@ export type FileMenuId =
   | 'delete'
   | 'newFile'
   | 'newFolder'
+  | 'upload'
 
 export interface MenuItemSpec {
   id: FileMenuId
@@ -54,6 +55,7 @@ export function menuItemsForKind(kind: FileMenuKind, opts: { locked?: boolean } 
   return [
     { id: 'newFile', label: 'New file' },
     { id: 'newFolder', label: 'New folder' },
+    { id: 'upload', label: 'Upload here' },
     { sep: true },
     rename,
     copyPath,

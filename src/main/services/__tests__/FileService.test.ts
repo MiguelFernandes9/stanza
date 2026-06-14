@@ -154,3 +154,46 @@ describe('FileService.createFolder', () => {
     await expect(files.createFolder('', 'chapters')).rejects.toThrow('NAME_EXISTS')
   })
 })
+
+describe('FileService.importFiles (upload)', () => {
+  let srcDir: string
+  beforeEach(() => {
+    srcDir = mkdtempSync(join(tmpdir(), 'stanza-src-'))
+  })
+  afterEach(() => rmSync(srcDir, { recursive: true, force: true }))
+
+  const src = (name: string, content = 'x'): string => {
+    const p = join(srcDir, name)
+    writeFileSync(p, content)
+    return p
+  }
+
+  test('copies sources into the target dir and commits a clean tree', async () => {
+    const rels = await files.importFiles('chapters', [src('fig.png', 'PNG')])
+    expect(rels).toEqual(['chapters/fig.png'])
+    expect(read('chapters/fig.png')).toBe('PNG')
+    expect(await git.isClean()).toBe(true)
+    expect((await git.log(1))[0]).toMatchObject({ kind: 'wip' })
+  })
+
+  test('imports into the root when dir is empty', async () => {
+    const rels = await files.importFiles('', [src('logo.svg')])
+    expect(rels).toEqual(['logo.svg'])
+    expect(has('logo.svg')).toBe(true)
+  })
+
+  test('auto-suffixes a colliding name (" copy" before the extension)', async () => {
+    await files.importFiles('', [src('fig.png')])
+    const rels = await files.importFiles('', [src('fig.png')])
+    expect(rels).toEqual(['fig copy.png'])
+    expect(has('fig.png')).toBe(true)
+    expect(has('fig copy.png')).toBe(true)
+  })
+
+  test('imports several files under one wip commit', async () => {
+    const before = (await git.log(50)).length
+    const rels = await files.importFiles('', [src('a.png'), src('b.pdf')])
+    expect(rels).toEqual(['a.png', 'b.pdf'])
+    expect((await git.log(50)).length).toBe(before + 1)
+  })
+})

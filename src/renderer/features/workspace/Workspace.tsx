@@ -23,6 +23,7 @@ import { expandIds, flattenBlocks, spanLabel, taskSpans } from '../paper/paperMo
 import { resolveToKnownFile } from '@renderer/lib/paths'
 import { blockLabel, tagKind } from '../tasks/TaskCard'
 import { initialTaskState, taskReducer } from '../tasks/taskStore'
+import { planMove } from './fileDrag'
 import { ResizeHandle } from './ResizeHandle'
 import { Sidebar } from './Sidebar'
 import { usePaneWidths } from './usePaneWidths'
@@ -325,6 +326,18 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
     runFileOp(() => client.documentCreateFolder({ dir, name }))
   }
 
+  // Upload: main shows the OS picker and copies the bytes; result flows through
+  // applyMutation like any other file op.
+  const onUploadFiles = (dir: string): void => runFileOp(() => client.documentUpload({ dir }))
+
+  // Drag-drop move = a cross-dir rename (git mv). planMove guards no-op /
+  // folder-into-descendant; onRenameFile carries the tab remap + NAME_EXISTS
+  // toast for collisions.
+  const onMoveFile = (from: string, toDir: string): void => {
+    const plan = planMove(from, toDir)
+    if (plan.ok) onRenameFile(from, plan.to)
+  }
+
   /** Fire claude:run for a task already in busy phase and wire its result
    *  back by taskId (op-started → proposal/noop, or op-failed). */
   const runOp = (taskId: number, instruction: string, spans: BlockSpan[]): void => {
@@ -463,6 +476,8 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
           onDelete={onDeleteFile}
           onCreateFile={onCreateFile}
           onCreateFolder={onCreateFolder}
+          onUpload={onUploadFiles}
+          onMove={onMoveFile}
           lockedFiles={lockedFiles}
           renameOnAppear={renameOnAppear}
           onRenameHandled={clearRenameOnAppear}
