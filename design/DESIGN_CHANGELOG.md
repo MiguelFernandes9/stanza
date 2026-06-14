@@ -4,6 +4,29 @@ The iteration ledger between this design system and the implementation.
 Each entry is a designed, reviewable unit. Claude Code: implement against a
 version tag; report drift or constraints back as notes under that version.
 
+## v0.3 — 2026-06-14 — PDF-pane rework: centering · bubble model · two-column
+Reworks the preview pane's task presentation and paper layout. Handoff:
+`design_handoff_edit_loop/V03_PANE_REWORK.md`. Adopted wholesale; shipped
+in two phases.
+
+- **Centered page + right rail** (Phase 1): the compiled page is centered in
+  the pane; the task rail moves to the right of it (replaces today's
+  left-rail-then-page layout).
+- **On-demand bubble model** (Phase 1): each task is a circular state badge
+  at the page edge (PenLine draft · Sparkles busy · Check review; phase
+  colors blue/clay/green). Clicking a badge opens its bubble (card) in the
+  rail with a bezier connector; collision-stacked; a fresh draft auto-opens
+  once. Selection becomes per-task phase-toned washes + edge bar.
+- **Two-column paper** (Phase 2): full-width blocks + L/R columns; badges
+  and bubbles route to the margin nearest each block's column; dual rails;
+  column-aware selection. Block column derived from the synctex x-position;
+  single-column docs collapse to the Phase-1 single right rail.
+- Builds on (does not discard) the v0.2-era BUG-10..23 block geometry —
+  that still supplies block positions; v0.3 changes presentation + chrome.
+
+### Implementation notes (Claude Code: append here)
+- _none yet_
+
 ## v0.2 — 2026-06-13 — File-tree management
 Adds direct file management to the workspace sidebar.
 
