@@ -1084,3 +1084,53 @@ the text.
 
 **Lane.** Renderer paper (`PaperPane.tsx`) — small. Pairs with BUG-25
 (`paperModel.ts`, different file) — one sibling can do both in one PR.
+
+## BUG-25 (reopened) — #42's midpoint settle still leaves the last line out
+
+#42 (`f19e57f`) made `resolveBoxOverlaps` settle small gaps to the **midpoint**
+(`m=(aBottom+b.y)/2`) within `gap ≤ 1.8 × lineHeight`. Dogfood: the box still
+stops a line short — "Dirac matrices." and "follows:" both hang below their
+boxes. Two geometric flaws, both measured on the live doc (ch1 Outline §,
+page 6, coherent snapshot):
+
+| pair | box bottom | next top | gap | what #42 did |
+|---|---|---|---|---|
+| para @126-155 → para @157-162 | 466.46 | 482.54 | **16.1** (1.0 line) | settled to midpoint **474.5** — dropped line "matrices." is at **~479**, still below |
+| para @157-162 → itemize @164-170 | 533.12 | 562.36 | **29.24** (1.83 line) | **29.24 > 1.8×16=28.8 → not settled at all**; "follows:" (~546) hangs |
+
+**Confirmed dropped-line mechanism.** Source lines 154 ("…γ the") and 155
+("Dirac matrices.") **both forward-map to v=466.46** — synctex collapses the
+wrapped last source line onto the previous baseline, so the real last visual
+line (~479) has **no rect**. Same for 161/162. The box is genuinely one line
+short; the gap below *is* that dropped line.
+
+**Two fixes to `resolveBoxOverlaps` (`paperModel.ts`):**
+1. **Reclaim a full line, don't go to the midpoint.** For the *gap* case
+   (`b.y > aBottom`), extend `a`'s bottom to
+   `min(aBottom + lineHeight, b.y − MIN_GAP)` (e.g. `MIN_GAP=2`) and **leave
+   `b` put** — this covers the dropped line and, when the gap is bigger than
+   one line (pre-list space), still leaves the genuine whitespace clear.
+   Keep the **overlap** case (`b.y < aBottom`) on the midpoint split (BUG-19).
+   - Verified: para1 → `min(482.46, 480.54)=480.54` covers 479 ✓; para2 →
+     `min(549.12, 560.36)=549.12` covers 546 and leaves 549→562 clear ✓.
+2. **Widen the band** so the paragraph-before-a-list case is included:
+   `SETTLE_GAP_K` 1.8 → **~2.5** (band 40pt > the 29.24 gap). A genuinely
+   large structural gap (> ~2.5 lines, e.g. before a figure) still exceeds it
+   and stays untouched, so a no-dropped-line paragraph before big whitespace
+   isn't over-covered by more than one line (the cap in #1 limits the reach to
+   one line anyway).
+
+`lineHeight = min(a.height, LINE_H_CAP=16)` stays. Cosmetic tradeoff: a
+medium-gap (1–2.5 line) paragraph with *no* dropped line could gain ~one line
+of bottom pad — acceptable vs. clipping real text (Miguel's call at the gate).
+
+**Tests (`paperModel.test.ts`).** Update the #42 "settles ~1-line undershoot
+to midpoint" test → now asserts `a` extends to `min(aBottom+lineHeight,
+b.y−MIN_GAP)` (not the midpoint), `b` unchanged. Add: a 1.83-line gap (29 vs
+lineHeight 16) now settles (regression of the para→itemize miss); a > 2.5-line
+gap stays untouched; overlap still meets at midpoint. Live gate (Miguel):
+"matrices." and "follows:" sit inside their boxes at real zoom.
+
+**Lane.** `paperModel.ts` + test — small. Different file from BUG-26
+(`PaperPane.tsx`, the per-block-wash work in flight on `fix/paper-wash`), so
+it can land in parallel; both feed the same `blockRects` and compose cleanly.
