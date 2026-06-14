@@ -63,6 +63,14 @@ export class ReviewService {
 
   async resolve(decision: ReviewDecision): Promise<ReviewResolution> {
     const branch = BRANCH_PREFIX + decision.opId
+    // The branch is gone — a prior resolve already merged+deleted it (or a
+    // duplicate review card's twin is re-resolving the same op). Treat it as
+    // already-resolved instead of letting subject/merge/delete throw on a
+    // dead ref (BUG-18; also quiets BUG-6 stale-branch noise).
+    if (!(await this.git.branchExists(branch))) {
+      this.pendingSpans.delete(decision.opId)
+      return decision.accept ? { committed: true } : { committed: false }
+    }
     if (!decision.accept) {
       await this.git.deleteBranch(branch)
       this.pendingSpans.delete(decision.opId)

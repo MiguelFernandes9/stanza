@@ -106,6 +106,13 @@ export class GitClient {
     return res.stdout.split('\n').filter((line) => line.trim() !== '')
   }
 
+  /** True when `branch` resolves to a commit. Non-throwing (mirrors the
+   *  internal HEAD check) so a caller can treat an already merged-and-deleted
+   *  op branch as gone instead of crashing on a dead ref (BUG-18). */
+  async branchExists(branch: string): Promise<boolean> {
+    return (await this.run(['rev-parse', '--verify', '--quiet', branch])).code === 0
+  }
+
   /** Changes introduced by `to` since it diverged from `from`
    *  (three-dot: merge-base diff), so later commits on `from` don't
    *  pollute a proposal's diff. */

@@ -197,7 +197,11 @@ async function runClaudeOp(req: ClaudeRequest): Promise<ClaudeResult> {
     note: op.note,
     accepted: null,
   })
-  if (proposal) sendToAll(IpcChannels.reviewProposal, proposal)
+  // The proposal travels back on this return — the initiating renderer wires
+  // it into the busy task. Do NOT also broadcast review:proposal here: that
+  // duplicate raced op-started's opId and spawned a twin review card whose
+  // second accept hit an already-merged branch (BUG-18). The broadcast path
+  // is reserved for reEmitPendingProposals (open-time crash recovery).
   return { opId: op.opId, note: op.note, proposal }
 }
 

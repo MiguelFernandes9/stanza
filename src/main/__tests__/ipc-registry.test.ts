@@ -165,7 +165,12 @@ esac`)
     expect(result.proposal!.diff).toContain('+edited by whole-doc op')
     // working tree restored; the edit lives on the op branch
     expect(readFileSync(join(root, 'main.tex'), 'utf8')).toBe(ARTICLE)
-    expect(h.sent.filter((e) => e.channel === 'review:proposal')).toHaveLength(1)
+    // The proposal reaches the renderer ONCE, via the claude:run return — it
+    // is no longer ALSO broadcast on review:proposal. That duplicate raced
+    // op-started and spawned a twin review card whose second accept hit a
+    // dead branch (BUG-18). Only open-time reEmitPendingProposals broadcasts,
+    // and nothing is pending here.
+    expect(h.sent.filter((e) => e.channel === 'review:proposal')).toHaveLength(0)
   }, 20_000)
 
   test('a pending whole-doc proposal blocks a later scoped op (SPANS_LOCKED)', async () => {

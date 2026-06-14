@@ -153,6 +153,26 @@ describe('ReviewService.resolve', () => {
     const resolution = await review.resolve({ opId: 'op1', accept: true })
     expect(resolution.commitSubject).toBe(`claude: ${'x'.repeat(60)}`)
   })
+
+  test('re-accepting an op whose branch was already merged+deleted is a no-op, not a throw (BUG-18)', async () => {
+    write('main.tex', 'ACCEPTED\nline2\nline3\n')
+    await review.capture('op1', 'rewrite', [])
+    await review.resolve({ opId: 'op1', accept: true }) // merges + deletes the branch
+    expect(await git.listBranches('stanza/op-*')).toEqual([])
+
+    // a duplicate review card's twin re-resolves the same (now-gone) op:
+    // tolerated as already-resolved instead of throwing on the dead ref
+    const again = await review.resolve({ opId: 'op1', accept: true })
+    expect(again).toEqual({ committed: true })
+  })
+
+  test('re-rejecting an op whose branch is gone returns committed:false, not a throw (BUG-18)', async () => {
+    write('main.tex', 'X\nline2\nline3\n')
+    await review.capture('op2', 'bad', [])
+    await review.resolve({ opId: 'op2', accept: false }) // deletes the branch
+    const again = await review.resolve({ opId: 'op2', accept: false })
+    expect(again).toEqual({ committed: false })
+  })
 })
 
 describe('ReviewService.list (crash recovery)', () => {
