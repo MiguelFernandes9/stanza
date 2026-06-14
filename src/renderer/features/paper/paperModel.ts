@@ -243,6 +243,22 @@ export function blockBoxesByPage(rects: PdfRect[]): PdfRect[] {
   return unionRectsByPage(rects)
 }
 
+/** One padded box per block — NOT a union envelope. Each selected block's
+ *  per-page rects (looked up in `rects`), padded via padBoxClamped, so a
+ *  multi-block task's wash covers only the real text blocks and leaves
+ *  inter-block gaps and heading/title whitespace clear (BUG-26). Contrast
+ *  selectionBounds, which unions a section's blocks into one slab over the
+ *  whole span. A missing block contributes nothing; a block straddling a page
+ *  contributes one box per page. */
+export function washBoxes(
+  ids: string[],
+  rects: Map<string, PdfRect[]>,
+  pad: number,
+  neighbors: PdfRect[],
+): PdfRect[] {
+  return ids.flatMap((id) => (rects.get(id) ?? []).map((b) => padBoxClamped(b, pad, neighbors)))
+}
+
 const MATH_ENV_NAMES = new Set([
   'equation',
   'align',

@@ -16,7 +16,8 @@ import {
   resolveBoxOverlaps,
   selectionBounds,
   spanLabel,
-  taskSpans
+  taskSpans,
+  washBoxes
 } from './paperModel'
 import type { PageBlock } from './paperModel'
 
@@ -347,6 +348,35 @@ describe('isTightAbove — pill placement for flush floats (BUG-19)', () => {
   it('ignores side-by-side and below neighbors', () => {
     expect(isTightAbove(fig, [{ page: 1, x: 300, y: 100, width: 100, height: 40 }], 12)).toBe(false)
     expect(isTightAbove(fig, [{ page: 1, x: 72, y: 200, width: 100, height: 40 }], 12)).toBe(false)
+  })
+})
+
+describe('washBoxes — one padded box per block, not a union (BUG-26)', () => {
+  const rects = new Map<string, PdfRect[]>([
+    ['a', [{ page: 1, x: 72, y: 100, width: 300, height: 20 }]],
+    ['b', [{ page: 1, x: 72, y: 160, width: 300, height: 20 }]], // 40pt gap below a
+    ['c', [{ page: 1, x: 72, y: 220, width: 300, height: 20 }]]
+  ])
+
+  it('returns one box per block (N boxes for N blocks), inter-block gaps preserved', () => {
+    const out = washBoxes(['a', 'b', 'c'], rects, 5, [])
+    expect(out).toHaveLength(3) // a union would be a single box spanning 100–240
+    // boxes stay distinct — the gap between a and b is not filled
+    expect(out[0]!.y + out[0]!.height).toBeLessThan(out[1]!.y)
+    expect(out[1]!.y + out[1]!.height).toBeLessThan(out[2]!.y)
+    // each box is padded (SELECT_PAD), unlike a tight union
+    expect(out[0]!.width).toBe(310)
+  })
+
+  it('skips a missing block and keeps each block per page', () => {
+    expect(washBoxes(['a', 'missing'], rects, 5, [])).toHaveLength(1)
+    const straddle = new Map<string, PdfRect[]>([
+      ['s', [
+        { page: 1, x: 72, y: 700, width: 300, height: 12 },
+        { page: 2, x: 72, y: 60, width: 300, height: 12 }
+      ]]
+    ])
+    expect(washBoxes(['s'], straddle, 0, [])).toHaveLength(2) // one per page
   })
 })
 

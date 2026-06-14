@@ -14,7 +14,7 @@ import type { PaneView, TaskPhase, TaskState } from '../tasks/taskStore'
 import { BlockOverlay } from './BlockOverlay'
 import { FillerPage } from './FillerPage'
 import { PaperToolbar } from './PaperToolbar'
-import { blockBoxesByPage, blockGeometryRects, cardAnchorTops, combinedSpanLabel, expandIds, isMathEnvName, isTightAbove, mathBoxesByPage, padBoxClamped, resolveBoxOverlaps, selectionBounds, spanLabel } from './paperModel'
+import { blockBoxesByPage, blockGeometryRects, cardAnchorTops, combinedSpanLabel, expandIds, isMathEnvName, isTightAbove, mathBoxesByPage, resolveBoxOverlaps, spanLabel, washBoxes } from './paperModel'
 import type { BlockMark, PageBlock } from './paperModel'
 import { BADGE, PAD, RAIL, connectorPath, paneLayout, phaseTone, stackTops } from './paperPaneLayout'
 
@@ -103,27 +103,27 @@ export function PaperPane(props: Props): JSX.Element {
   // cross into the block above/below (BUG-19). A selection's own rects overlap
   // its union envelope, so they're ignored by the above/below gap checks.
   const allBoxes = [...blockRects.values()].flat()
-  const boxesFor = (ids: string[]): PdfRect[] =>
-    selectionBounds(ids.flatMap((id) => blockRects.get(id) ?? [])).map((box) =>
-      padBoxClamped(box, SELECT_PAD, allBoxes)
-    )
+  // One padded box PER BLOCK (not a union envelope): a section / multi-block
+  // task washes only its real text blocks, leaving inter-block gaps and the
+  // heading/title whitespace clear instead of slabbing the whole span (BUG-26).
+  const washBoxesFor = (ids: string[]): PdfRect[] => washBoxes(ids, blockRects, SELECT_PAD, allBoxes)
 
-  // Hover preview: the same envelope a click would select — a section heading
-  // previews its whole section; a leaf previews its own box (BUG-12). Only for
-  // UNSELECTED blocks (an owned block already carries its task's wash).
+  // Hover preview: the blocks a click would select — a section heading previews
+  // each block in its subtree; a leaf previews its own box (BUG-12/26). Only
+  // for UNSELECTED blocks (an owned block already carries its task's wash).
   const hoverBoxes =
-    state.view === 'select' && hover && !marks[hover] ? boxesFor(expandIds(props.blocks, hover)) : []
+    state.view === 'select' && hover && !marks[hover] ? washBoxesFor(expandIds(props.blocks, hover)) : []
 
-  // One phase-toned wash per task (computed once, filtered per page in
-  // overlaysFor — which PdfPageStack calls for every page). noop owns no live
-  // selection, so it gets no wash.
+  // One phase-toned wash per task, one rect per block (computed once, filtered
+  // per page in overlaysFor — which PdfPageStack calls for every page). noop
+  // owns no live selection, so it gets no wash.
   const taskWashes = state.tasks
     .filter((t) => t.phase !== 'noop')
     .map((t) => ({
       taskId: t.id,
       active: t.id === state.activeTask,
       tone: phaseTone(t.phase),
-      boxes: boxesFor(t.blockIds)
+      boxes: washBoxesFor(t.blockIds)
     }))
 
   // Re-map geometry whenever any span MOVES — keyed by a value signature of
@@ -274,11 +274,11 @@ export function PaperPane(props: Props): JSX.Element {
     }
     // Hover preview: a faint padded envelope of the block (or whole section)
     // under the cursor — what a click would select (BUG-12).
-    for (const hb of hoverBoxes) {
-      if (hb.page !== pageNo) continue
+    hoverBoxes.forEach((hb, i) => {
+      if (hb.page !== pageNo) return // per-block preview → multiple boxes/page
       out.push(
         <div
-          key="hover-box"
+          key={`hover-${i}`}
           style={{
             position: 'absolute',
             left: hb.x * zoom,
@@ -291,17 +291,18 @@ export function PaperPane(props: Props): JSX.Element {
           }}
         />
       )
-    }
+    })
 
     // One phase-toned wash per task over its block boxes (replaces the single
     // union selection box). Active task = wash + edge bar + 1px ring; an owned
     // but inactive task = tint + edge bar.
     for (const w of taskWashes) {
-      for (const sb of w.boxes) {
-        if (sb.page !== pageNo) continue
+      // Per-block boxes can share a page, so key by box index, not page.
+      w.boxes.forEach((sb, i) => {
+        if (sb.page !== pageNo) return
         out.push(
           <div
-            key={`wash-${w.taskId}@${sb.page}`}
+            key={`wash-${w.taskId}-${i}`}
             style={{
               position: 'absolute',
               left: sb.x * zoom,
@@ -317,7 +318,7 @@ export function PaperPane(props: Props): JSX.Element {
             }}
           />
         )
-      }
+      })
     }
 
     if (activeFlash && activeFlash.page === pageNo) {
