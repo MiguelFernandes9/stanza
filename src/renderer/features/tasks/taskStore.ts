@@ -70,6 +70,18 @@ const removeTask = (s: TaskState, id: number): TaskState => {
   return { ...s, tasks, activeTask }
 }
 
+/** A non-additive selection MOVE discards the active task iff it's an
+ *  untouched compose draft (blank/whitespace instruction) — a plain click
+ *  should move the selection, not pile up empty washes over the text (BUG-27).
+ *  Drafts that already carry an instruction (intentional parallel edits) and
+ *  busy/review/noop tasks are kept. */
+const dropAbandonedDraft = (s: TaskState): TaskState => {
+  const active = s.tasks.find((t) => t.id === s.activeTask)
+  return active && active.phase === 'compose' && active.instruction.trim() === ''
+    ? removeTask(s, active.id)
+    : s
+}
+
 function toggleBlock(s: TaskState, ids: string[], additive: boolean): TaskState {
   const owner = s.tasks.find((t) => t.blockIds.some((x) => ids.includes(x)))
   const active = s.tasks.find((t) => t.id === s.activeTask)
@@ -94,16 +106,21 @@ function toggleBlock(s: TaskState, ids: string[], additive: boolean): TaskState 
       const rest = owner.blockIds.filter((x) => !ids.includes(x))
       return rest.length ? patchTask(s, owner.id, { blockIds: rest }) : removeTask(s, owner.id)
     }
-    return { ...s, activeTask: owner.id }
+    // Focusing a DIFFERENT owner abandons the active empty draft (BUG-27);
+    // refocusing the active task itself keeps it.
+    const base = owner.id !== s.activeTask ? dropAbandonedDraft(s) : s
+    return { ...base, activeTask: owner.id }
   }
 
-  const id = s.nextId
+  // New selection on an unowned block — drop the abandoned empty draft first.
+  const base = dropAbandonedDraft(s)
+  const id = base.nextId
   return {
-    ...s,
+    ...base,
     nextId: id + 1,
     adding: false,
     activeTask: id,
-    tasks: [...s.tasks, { id, blockIds: ids, instruction: '', phase: 'compose', proposal: null }]
+    tasks: [...base.tasks, { id, blockIds: ids, instruction: '', phase: 'compose', proposal: null }]
   }
 }
 
