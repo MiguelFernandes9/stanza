@@ -1176,3 +1176,38 @@ through blocks shows only the current selection washed; no leftover boxes.
 **Lane.** Renderer task store (`taskStore.ts` + test) — small. Independent of
 all paper-geometry work (`paperModel.ts`/`PaperPane.tsx`); no conflict with
 BUG-25-reopen or BUG-26.
+
+## BUG-28 — every Claude op fails: "claude exited with code 1: no stdin data received in 3s"
+
+All `claude:run` ops fail instantly (and `prime`): main-process throw
+`claude exited with code 1: Warning: no stdin data received in 3s, proceeding
+without it. If piping from a slow command, redirect stdin explicitly:
+< /dev/null to skip, or wait longer.` (loops in the dev console). The whole
+edit loop is dead — no proposals, no priming.
+
+**Root cause — environment, not our code.** `ProcessRunner.run`
+(`src/main/infra/ProcessRunner.ts:30`) does `spawn(cmd, args, { cwd })` with
+**default stdio** → the child's stdin is an open pipe that's never written or
+closed. `ClaudeService` passes the prompt as a **positional arg**
+(`opPrompt(req)` / `primePrompt`), not via stdin, so the pipe is dead weight.
+The `claude` CLI (2.1.163) with `-p` + default `--input-format text` treats a
+non-TTY stdin as "input is being piped", waits 3s for it, warns, then exits 1.
+Older CLI builds ignored the empty pipe — hence "worked before, broke now"
+with **zero** changes to `ProcessRunner.ts`/`ClaudeService.ts` (last touched
+`f67cf35`/`de0a10b`). git confirms the regression is the CLI, not us.
+
+**Fix (one line, `ProcessRunner.ts`).** Spawn with stdin redirected from
+/dev/null: `spawn(spec.cmd, spec.args, { cwd: spec.cwd, stdio: ['ignore',
+'pipe', 'pipe'] })`. claude then sees no piped input, doesn't wait, and uses
+the positional prompt. Safe for **every** command run through ProcessRunner —
+claude, tectonic, synctex all take args and none consume written stdin. This
+is exactly what claude's own error message prescribes ("redirect stdin
+explicitly: < /dev/null").
+
+**Test (`ProcessRunner.test.ts`).** A command that echoes whether stdin is a
+TTY / reads stdin sees EOF immediately (no hang); existing run/timeout/abort
+tests still pass. Live gate (Miguel): a Claude edit produces a proposal again;
+priming a fresh project completes.
+
+**Lane.** Main process infra (`ProcessRunner.ts` + test) — one line.
+**Showstopper** — unblocks the entire edit loop; do this first.

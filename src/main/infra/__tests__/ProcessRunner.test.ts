@@ -50,6 +50,17 @@ describe('DefaultProcessRunner', () => {
     expect(Date.now() - started).toBeLessThan(2000)
   })
 
+  test('does not hang on a command that reads stdin — stdin is /dev/null (BUG-28)', async () => {
+    // `cat` with no args reads stdin to EOF. With stdin redirected from
+    // /dev/null it gets an immediate EOF and exits 0; an open, unwritten stdin
+    // pipe (the old default) would block until the timeout — which is exactly
+    // what made the claude CLI wait 3s and exit 1.
+    const result = await runner.run({ cmd: 'cat', args: [], cwd, timeoutMs: 1000 })
+    expect(result.timedOut).toBe(false)
+    expect(result.code).toBe(0)
+    expect(result.stdout).toBe('')
+  })
+
   test('rejects when the binary does not exist', async () => {
     await expect(
       runner.run({ cmd: 'definitely-not-a-real-binary-xyz', args: [], cwd }),
