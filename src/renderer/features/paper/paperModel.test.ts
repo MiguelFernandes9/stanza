@@ -509,6 +509,41 @@ describe('blockBoxesByPage — per-page boxes for a straddling block (BUG-16)', 
   })
 })
 
+describe('blockBoxesByPage — drop a phantom page box (BUG-30)', () => {
+  it('drops a tiny stray page box when the block really lives on another page', () => {
+    // L109 forward-maps an ~8pt fragment onto page 5's header band; the block's
+    // real 24 lines are all on page 6.
+    const page6 = Array.from({ length: 24 }, (_, i) => ({
+      page: 6,
+      x: 72,
+      y: 123 + i * 10,
+      width: 300,
+      height: 10
+    })) // union → page-6 box of height 240
+    const stray = { page: 5, x: 72, y: 78, width: 120, height: 8 }
+    const boxes = blockBoxesByPage([stray, ...page6])
+    expect(boxes).toHaveLength(1) // 8 < 0.15×240 = 36 → phantom dropped
+    expect(boxes[0]!.page).toBe(6)
+  })
+
+  it('keeps both pages of a genuine cross-page straddle', () => {
+    const boxes = blockBoxesByPage([
+      { page: 2, x: 72, y: 700, width: 300, height: 50 }, // 5 lines, bottom of page 2
+      { page: 3, x: 72, y: 60, width: 300, height: 190 } // 19 lines, top of page 3
+    ])
+    expect(boxes.map((b) => b.page)).toEqual([2, 3]) // 50 ≥ 0.15×190 = 28.5 → kept
+  })
+
+  it('leaves a single-page block unchanged', () => {
+    expect(
+      blockBoxesByPage([
+        { page: 1, x: 72, y: 100, width: 300, height: 12 },
+        { page: 1, x: 72, y: 114, width: 300, height: 12 }
+      ])
+    ).toEqual([{ page: 1, x: 72, y: 100, width: 300, height: 26 }])
+  })
+})
+
 describe('selectionBounds — straddling block reaches both pages (BUG-16)', () => {
   it('a block spanning pages 2 and 3 contributes to each page union, not just one', () => {
     const straddle = blockBoxesByPage([
