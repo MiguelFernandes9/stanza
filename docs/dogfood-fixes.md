@@ -639,3 +639,65 @@ first (topmost) box for the anchor.
 non-zero top derived from its rect; a whole-doc task (empty `blockIds`)
 anchors at the viewport scrollTop, not 0. **Lane.** `PaperPane.tsx`
 (card-alignment `useLayoutEffect`), renderer only — small.
+(Landed: PR #28, ceaf351 — `cardAnchorTops` geometry anchor, retired
+`blockEls`/`wrapRef`/`refCb`.)
+
+## BUG-18 — review card survives accept; second accept throws "unknown revision"
+
+After accepting a proposal the bubble stays; clicking Accept again throws:
+`git log -1 --format=%s stanza/op-<opId> failed: fatal: ambiguous
+argument … unknown revision`. The first accept *did* land (the branch was
+merged and deleted) — a **duplicate** card for the same op is what's left.
+
+**Root cause — the proposal is delivered to the renderer twice, and a
+race spawns a second task.** `runClaudeOp` both returns the proposal AND
+broadcasts it (`ipc-registry.ts:200`):
+
+```
+if (proposal) sendToAll(IpcChannels.reviewProposal, proposal)
+return { opId: op.opId, note: op.note, proposal }
+```
+
+The renderer consumes both: the `claude:run` **return** →
+`dispatch('proposal')` (patches the busy task to review), and the
+`review:proposal` **event** → `dispatch('restore-proposal')`.
+`restore-proposal` (`taskStore.ts:151`) de-dupes by matching `opId`, but
+`op-started` (which sets the task's `opId`) is dispatched in the *same*
+`claude:run` `.then` as the proposal. If the broadcast event arrives
+before that runs, no task matches → `restore-proposal` **creates a second
+task** (`blockIds: []`, phase review, same op). For a whole-doc edit both
+tasks have `blockIds: []`, so they anchor at the same scrollTop and
+**overlap into one visible bubble**. Accept removes one; the twin remains;
+accepting the twin calls `ReviewService.resolve` → `git.subject(branch)`
+on the already-deleted `stanza/op-<opId>` → the raw git error.
+
+The inline broadcast at line 200 is redundant: the `claude:run` return
+already delivers the proposal to the initiating renderer. The
+`review:proposal` event exists for **re-emit on session open**
+(`reEmitPendingProposals`, the crash-recovery path) — that one stays.
+
+**Fix — two parts (backend).**
+1. **Kill the duplicate at the source:** delete the
+   `if (proposal) sendToAll(IpcChannels.reviewProposal, proposal)` line in
+   `runClaudeOp` (`ipc-registry.ts:200`). Keep the `return`. Keep
+   `reEmitPendingProposals` (open-time re-emit) untouched.
+2. **Make resolve tolerant of a missing branch** (robustness; also covers
+   BUG-6 stale-branch noise). Add `GitClient.branchExists(branch)` using
+   the existing non-throwing `run`:
+   `(await this.run(['rev-parse', '--verify', '--quiet', branch])).code === 0`
+   (mirrors `hasHead` at `GitClient.ts:152`). In `ReviewService.resolve`,
+   if `!(await this.git.branchExists(branch))` short-circuit to an
+   "already resolved" result — `{ committed: true }` for accept,
+   `{ committed: false }` for reject — instead of letting
+   `subject`/`mergeNoFF`/`deleteBranch` throw. A stale or double resolve
+   becomes a no-op, never a raw git crash.
+
+Optional defense-in-depth (renderer): `resolve` should remove **all**
+tasks for an `opId`, not just the one taskId (dispatch a resolve-by-opId),
+so any stray duplicate also clears.
+
+**Test.** `ipc-registry`: a successful op emits `review:proposal` **zero**
+extra times beyond the return (only `reEmitPendingProposals` emits).
+`ReviewService.resolve`: resolving an opId whose branch is gone returns
+`committed:true`/`false` and does not throw. **Lane.** `ipc-registry.ts`,
+`ReviewService.ts`, `GitClient.ts` — backend, small/medium.
