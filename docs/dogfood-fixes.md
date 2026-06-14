@@ -838,3 +838,57 @@ paragraph, per the existing transparent-macro handling.)
 block starts at the prose line. **Lane.** Shared parser only
 (`src/shared/blocks/parse.ts`) — tiny. Conflict-free: `shared/blocks` is
 untouched by #33 (paper/*) and the merged file-mgmt lanes.
+
+## BUG-21 — `\end{figure}` delimiter forward-maps onto the next paragraph
+
+The figure residual #33 only softened. Measured synctex (ch2.tex, page 6):
+
+| line | top | bottom |
+|------|-----|--------|
+| 13 `\includegraphics` | 364.7 | 544.1 |
+| 14 caption | 364.7 | **569.9** ← figure's real content ends |
+| 16 `\end{figure}` | **585.6** | **595.4** |
+| 18 para-below 1st line | **585.6** | **595.4** ← identical box |
+
+`\end{figure}` (in the env block's span `11-16`) forward-maps to the
+**exact same rect as para-18's first line**. That strut drags the figure
+block box bottom from its real content end (569.9) down to 595.4 — onto
+para-18. #33's `resolveBoxOverlaps` midpoint-split only moved the boundary
+to ~590.5, still inside para-18's first line, so the overlap persisted
+("better but not there yet"). Same phantom class as BUG-11/20, but it's an
+**environment delimiter line**, not a macro.
+
+**Fix (renderer geometry).** An environment block's *geometry* must
+exclude its `\begin`/`\end` delimiter lines — they carry no visible
+content and map to stray galley positions. In the `PaperPane` block-rect
+effect, for `block.kind === 'environment'` query synctex with the interior
+span `startLine+1 .. endLine-1`; fall back to the full span if the interior
+yields no rects. Figure box then = `[364.7, 569.9]`, clearing para-18
+(585.6) by ~16pt; `resolveBoxOverlaps` never fires. **Lane.** Renderer
+paper geometry (`src/renderer/features/paper/PaperPane.tsx`) — small.
+Conflict-free (paper/* idle since #33 merged).
+
+## BUG-22 — abstract paragraphs unselectable: `{\large …}` group fuses them
+
+The abstract's two prose paragraphs can't be selected individually — they
+hover/select as one block (`¶ main.tex:26-42` post-BUG-20). Not stale
+blocks (BUG-15 fixed); not the overlap (BUG-20 fixed). A **parse** issue.
+
+main.tex abstract is `{\large …para1…\n\n…para2… \par}` — a single brace
+**group** spanning 26-42. `walkBody` (`parse.ts`) has no group recursion:
+a `group` node falls into the "anything else … joins a paragraph" bucket
+(line ~55), so the whole group becomes **one** paragraph block and the
+internal `parbreak` (the blank line between the two paragraphs) is never
+seen.
+
+**Fix (parser).** Make `walkBody` **recurse into body-level group nodes** —
+process a `group` node's `.content` inline with the same section/paragraph
+state, so an internal `parbreak` flushes the paragraph. `{\large …}`,
+`{\small …}` etc. become transparent for paragraph-splitting; an inline
+`{\bf x}` (no parbreak inside) still just joins its paragraph, so it's
+safe. After this the abstract is two selectable blocks.
+
+**Test (`parse.test.ts`).** `{\large a\n\nb}` → two paragraph blocks; `x
+{\bf y} z` → one paragraph (inline group doesn't split). **Lane.** Shared
+parser (`src/shared/blocks/parse.ts`) — small/medium. Off current main
+(has BUG-20). Different file from BUG-21 → the two run in parallel.
