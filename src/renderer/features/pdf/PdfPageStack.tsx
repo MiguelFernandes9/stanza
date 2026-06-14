@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { JSX, ReactNode } from 'react'
+import { canvasDims } from './canvasDims'
 import { pagesToEvict, visiblePageRange } from './pageWindow'
 import type { PDFDocumentProxy, PDFPageProxy } from './pdfjsSetup'
 
@@ -36,10 +37,14 @@ function PageCanvas({ page, scale }: { page: PDFPageProxy; scale: number }): JSX
     if (!canvas) return
     const viewport = page.getViewport({ scale })
     const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR)
-    canvas.width = Math.floor(viewport.width * dpr)
-    canvas.height = Math.floor(viewport.height * dpr)
-    canvas.style.width = `${viewport.width}px`
-    canvas.style.height = `${viewport.height}px`
+    // Align the CSS size to whole backing pixels so the browser never resamples
+    // the bitmap — otherwise the page is sharp only at zooms where the page
+    // width happens to land on an integer device pixel, blurry elsewhere.
+    const dims = canvasDims(viewport.width, viewport.height, dpr)
+    canvas.width = dims.backingWidth
+    canvas.height = dims.backingHeight
+    canvas.style.width = `${dims.cssWidth}px`
+    canvas.style.height = `${dims.cssHeight}px`
     const ctx = canvas.getContext('2d')
     if (!ctx) return
     const task = page.render({
