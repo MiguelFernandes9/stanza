@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { initialTaskState, taskReducer } from './taskStore'
-import type { TaskAction, TaskState } from './taskStore'
+import type { EditTask, TaskAction, TaskState } from './taskStore'
 import type { ReviewProposal } from '../../../shared/ipc'
 
 const run = (state: TaskState, ...actions: TaskAction[]): TaskState =>
@@ -255,5 +255,48 @@ describe('taskReducer — locks', () => {
       .filter((t) => t.phase !== 'compose')
       .flatMap((t) => t.blockIds)
     expect(locked).toEqual(['p1'])
+  })
+})
+
+describe('taskReducer — reanchor (BUG-33)', () => {
+  const withTasks = (tasks: EditTask[]): TaskState => ({ ...initialTaskState, tasks, nextId: 99 })
+
+  it('remaps blockIds of review and busy tasks through the remap', () => {
+    const s = withTasks([
+      { id: 1, blockIds: ['par2#bbbbbb'], instruction: 'x', phase: 'review', proposal: null },
+      { id: 2, blockIds: ['par4#dddddd'], instruction: 'y', phase: 'busy', proposal: null }
+    ])
+    const out = taskReducer(s, {
+      type: 'reanchor',
+      remap: { 'par2#bbbbbb': 'par3#bbbbbb', 'par4#dddddd': 'par5#dddddd' }
+    })
+    expect(out.tasks[0].blockIds).toEqual(['par3#bbbbbb'])
+    expect(out.tasks[1].blockIds).toEqual(['par5#dddddd'])
+  })
+
+  it('leaves compose and noop tasks untouched even if their ids are remapped', () => {
+    const s = withTasks([
+      { id: 1, blockIds: ['par2#bbbbbb'], instruction: '', phase: 'compose', proposal: null },
+      { id: 2, blockIds: ['par2#bbbbbb'], instruction: 'n', phase: 'noop', proposal: null }
+    ])
+    const out = taskReducer(s, { type: 'reanchor', remap: { 'par2#bbbbbb': 'par3#bbbbbb' } })
+    expect(out.tasks[0].blockIds).toEqual(['par2#bbbbbb'])
+    expect(out.tasks[1].blockIds).toEqual(['par2#bbbbbb'])
+  })
+
+  it('keeps ids absent from the remap as-is within a remapped task', () => {
+    const s = withTasks([
+      { id: 1, blockIds: ['par2#bbbbbb', 'par7#eeeeee'], instruction: 'x', phase: 'review', proposal: null }
+    ])
+    const out = taskReducer(s, { type: 'reanchor', remap: { 'par2#bbbbbb': 'par3#bbbbbb' } })
+    expect(out.tasks[0].blockIds).toEqual(['par3#bbbbbb', 'par7#eeeeee'])
+  })
+
+  it('returns the same state when no review/busy task is affected', () => {
+    const s = withTasks([
+      { id: 1, blockIds: ['par2#bbbbbb'], instruction: 'x', phase: 'review', proposal: null }
+    ])
+    expect(taskReducer(s, { type: 'reanchor', remap: {} })).toBe(s)
+    expect(taskReducer(s, { type: 'reanchor', remap: { 'zzz#000000': 'yyy#000000' } })).toBe(s)
   })
 })

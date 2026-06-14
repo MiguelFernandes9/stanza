@@ -23,6 +23,7 @@ import { expandIds, flattenBlocks, spanLabel, taskSpans } from '../paper/paperMo
 import { resolveToKnownFile } from '@renderer/lib/paths'
 import { blockLabel, tagKind } from '../tasks/TaskCard'
 import { initialTaskState, taskReducer } from '../tasks/taskStore'
+import { pendingRemap } from '../tasks/reanchor'
 import { planMove } from './fileDrag'
 import { ResizeHandle } from './ResizeHandle'
 import { Sidebar } from './Sidebar'
@@ -54,6 +55,12 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
   const [compile, setCompile] = useState<CompileInfo>({ state: 'idle', errors: 0, warnings: 0 })
   const [toast, setToast] = useState<{ title: string; message: string; tone: 'danger' | 'success' } | null>(null)
   const [state, dispatch] = useReducer(taskReducer, initialTaskState)
+  // Latest tree + tasks, read inside loadBlocks' async resolve without making
+  // it depend on (and re-create on) every blocks/tasks change (BUG-33).
+  const blocksRef = useRef(blocks)
+  blocksRef.current = blocks
+  const tasksRef = useRef(state.tasks)
+  tasksRef.current = state.tasks
 
   useEffect(() => {
     if (!toast) return
@@ -98,7 +105,14 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
   // instead of the pre-edit ones (BUG-15). Accept→recompile and debounced
   // save both surface through onCompileStatus('ok').
   const loadBlocks = useCallback(() => {
-    void client.documentProjectBlocks().then(setBlocks, () => setBlocks([]))
+    void client.documentProjectBlocks().then((fresh) => {
+      // A reparse can renumber a pending block's positional id while its hash
+      // holds; re-anchor busy/review tasks to the new ids before swapping the
+      // tree, so their PDF overlays follow instead of vanishing (BUG-33).
+      const remap = pendingRemap(blocksRef.current, fresh, tasksRef.current)
+      if (Object.keys(remap).length) dispatch({ type: 'reanchor', remap })
+      setBlocks(fresh)
+    }, () => setBlocks([]))
   }, [])
 
   const loadFiles = useCallback(() => {

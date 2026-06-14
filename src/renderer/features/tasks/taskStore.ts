@@ -52,6 +52,7 @@ export type TaskAction =
   | { type: 'op-noop'; taskId: number; note: string }
   | { type: 'op-failed'; taskId: number; error: string }
   | { type: 'restore-proposal'; proposal: ReviewProposal }
+  | { type: 'reanchor'; remap: Record<string, string> }
   | { type: 'resolve'; taskId: number }
   | { type: 'dismiss'; taskId: number }
   | { type: 'activate'; taskId: number }
@@ -188,6 +189,22 @@ export function taskReducer(s: TaskState, a: TaskAction): TaskState {
           }
         ]
       }
+    }
+    case 'reanchor': {
+      // A reparse after accept/reject (or any recompile) can renumber a still-
+      // pending block's positional id while its content hash stays put. Remap
+      // the held ids of busy/review tasks so their PDF overlays follow the new
+      // tree instead of silently dropping (BUG-33). Compose drafts track the
+      // live selection and noop is terminal — both are left alone.
+      const { remap } = a
+      let changed = false
+      const tasks = s.tasks.map((t) => {
+        if (t.phase !== 'busy' && t.phase !== 'review') return t
+        if (!t.blockIds.some((id) => remap[id])) return t
+        changed = true
+        return { ...t, blockIds: t.blockIds.map((id) => remap[id] ?? id) }
+      })
+      return changed ? { ...s, tasks } : s
     }
     case 'resolve':
       return removeTask(s, a.taskId)
