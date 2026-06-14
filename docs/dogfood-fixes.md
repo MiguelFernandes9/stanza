@@ -798,3 +798,43 @@ Repro fixture: figure 364.7–595.4 vs para 585.6–622.5 → figure bottom ≤
 para top after resolution. **Lane.** Renderer paper geometry
 (`paperModel.ts`, `PaperPane.tsx`) — small/medium. Conflict-free with the
 file-mgmt lanes (they don't touch `features/paper/*`).
+
+## BUG-20 — `\addcontentsline` phantom drags the abstract block onto its title
+
+The abstract paragraph's box + `¶` pill overlap the "Abstract" title above
+it. NOT a geometry bug (the #33 box-overlap work doesn't touch it) — it's
+the **same parser-phantom class as BUG-11** (`\label`), with a different
+macro.
+
+`main.tex` abstract: line 24 `\chapter*{Abstract}`, line 25
+`\addcontentsline{toc}{chapter}{Abstract}`, lines 26-42 `{\large …prose… \par}`.
+The block is parsed as `¶ main.tex:25-42` — it **starts at line 25**, the
+`\addcontentsline`. Measured synctex (page 2):
+
+| line | top | bottom |
+|------|-----|--------|
+| 24 `\chapter*{Abstract}` (title) | 179.1 | 196.6 |
+| 25 `\addcontentsline` | **179.1** | 196.6 |
+| 26-42 prose | 241.8 | 406.1 |
+
+`\addcontentsline` is invisible but forward-maps onto the **title**
+position (179.1), so the paragraph block's box top = 179.1 — right on
+"Abstract" — even though the prose starts at 241.8 (a 45pt gap below the
+title). The pill at `top:-9` then sits on the title.
+
+**Root cause.** `\addcontentsline` isn't in `TRANSPARENT_MACROS`
+(`src/shared/blocks/parse.ts`), so — exactly like `\label` in BUG-11 — it
+joins the paragraph and steals the title's position (it starts the
+paragraph at line 25).
+
+**Fix.** Add `addcontentsline` (and its sibling `addtocontents`) to
+`TRANSPARENT_MACROS`. Then the bare `\addcontentsline` after `\chapter*`
+is skipped without starting a paragraph; the block becomes `26-42`, box
+top 241.8, well clear of the title. (Inline use still absorbs into an open
+paragraph, per the existing transparent-macro handling.)
+
+**Test (`parse.test.ts`).** `\chapter*{X}\n\addcontentsline{toc}{chapter}{X}\n\n{\large prose \par}`
+→ no paragraph block starting at the `\addcontentsline` line; the prose
+block starts at the prose line. **Lane.** Shared parser only
+(`src/shared/blocks/parse.ts`) — tiny. Conflict-free: `shared/blocks` is
+untouched by #33 (paper/*) and the merged file-mgmt lanes.
