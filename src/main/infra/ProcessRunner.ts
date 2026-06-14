@@ -13,6 +13,10 @@ export interface RunSpec {
   cwd: string
   timeoutMs?: number // default 120_000
   signal?: AbortSignal
+  /** Child environment. Omit to inherit the parent process env. Callers pass
+   *  this to scrub vars — e.g. ClaudeService strips ANTHROPIC_API_KEY so the
+   *  claude CLI uses the logged-in subscription, not a pay-per-token key. */
+  env?: NodeJS.ProcessEnv
 }
 
 export interface ProcessRunner {
@@ -32,7 +36,11 @@ export class DefaultProcessRunner implements ProcessRunner {
       // written stdin. An open, unwritten stdin pipe makes the claude CLI wait
       // for piped input, warn ("no stdin data received in 3s"), and exit 1 —
       // killing every op (BUG-28). /dev/null gives an immediate EOF instead.
-      const child = spawn(spec.cmd, spec.args, { cwd: spec.cwd, stdio: ['ignore', 'pipe', 'pipe'] })
+      const child = spawn(spec.cmd, spec.args, {
+        cwd: spec.cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        ...(spec.env ? { env: spec.env } : {}),
+      })
       let stdout = ''
       let stderr = ''
       let timedOut = false
