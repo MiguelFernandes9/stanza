@@ -21,6 +21,11 @@ export const IpcChannels = {
   reviewProposal: 'review:proposal',  // main→renderer event: ReviewProposal
   reviewResolve: 'review:resolve',    // invoke ReviewDecision → ReviewResolution
   reviewList: 'review:list',          // invoke → ReviewProposal[] (pending op branches)
-  reviewFileAt: 'review:fileAt'       // invoke {opId, file} → {before: string; after: string}
+  reviewFileAt: 'review:fileAt',      // invoke {opId, file} → {before: string; after: string}
+  documentRename: 'document:rename',       // invoke {from: string; to: string} → FileMutationResult
+  documentDuplicate: 'document:duplicate', // invoke {relPath: string} → FileMutationResult
+  documentDelete: 'document:delete',       // invoke {relPath: string} → FileMutationResult
+  documentCreateFile: 'document:createFile',     // invoke {dir: string; name: string} → FileMutationResult
+  documentCreateFolder: 'document:createFolder'  // invoke {dir: string; name: string} → FileMutationResult
 } as const
 export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels]

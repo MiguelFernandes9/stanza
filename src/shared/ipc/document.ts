@@ -36,3 +36,14 @@ export interface PrimeStep {
   state: 'pending' | 'running' | 'done'
   detail?: string            // e.g. "7 files", "142 blocks"
 }
+
+/** Result of a structural file op (rename/duplicate/delete/create). `files`
+ *  is the post-op listing (drop-in for the sidebar). `doc` is set only when
+ *  the op changed DocumentInfo (mainFile/texFiles) — e.g. renaming a .tex.
+ *  `newRelPath` is the path to focus/open (duplicate, createFile). All paths
+ *  root-relative, same convention as FileEntry.relPath. */
+export interface FileMutationResult {
+  files: FileEntry[]
+  doc?: DocumentInfo
+  newRelPath?: string
+}
