@@ -892,3 +892,43 @@ safe. After this the abstract is two selectable blocks.
 {\bf y} z` → one paragraph (inline group doesn't split). **Lane.** Shared
 parser (`src/shared/blocks/parse.ts`) — small/medium. Off current main
 (has BUG-20). Different file from BUG-21 → the two run in parallel.
+
+## BUG-23 — display-equation selection box is full-width (container, not ink)
+
+A display equation's hover/selection box spans the full text column while
+the centered/aligned formula is narrower — looks oversized vs a paragraph.
+**Not a leak/phantom** (BUG-21's interior-span didn't change it); the box
+is geometrically the equation's *layout box*, which is full-width. Decision
+(Miguel): **tighten to the visible formula ink.**
+
+Measured (ch1.tex `\begin{equation}…\end{equation}` span 62-76, page 5),
+the block's synctex rects fall into two groups:
+- **Container rects** spanning the **full block height** (264.2→320.5,
+  ~56pt): `w=432.0` (=`\textwidth`), `w=485.5` (textwidth + the `(1.1)`
+  number margin), `w=324.9`, `w=22.4`. These are the display row / rule /
+  number boxes.
+- **Per-line glyph rects** at single-line height (~26pt): line 1
+  `[264.2, 290.3]` w≈283.4; line 2 `[294.3, 320.5]` w≈324.9/277.9.
+
+Union of all → top 264.2, bottom 320.5, **width 485.5** (full column).
+para-above ends 240.9, para-below starts 332.5 → no overlap; vertically
+tight already. Only the **width** is the problem.
+
+**Fix (renderer geometry).** For **math-environment blocks only**, bound
+the box's **width from the per-line glyph rects** (those whose height is
+< ~0.7 × the block's full height), while keeping **top/bottom from all
+rects**. That drops the full-height container/number rects and hugs the
+formula. Fallbacks: if there are no sub-full-height rects (a single-line
+equation), keep all rects (full width is then the only signal) — optional
+extra: drop a single width-outlier rect (≥1.25× the next-widest) as the
+container. Restrict to math envs (envName ∈ {equation, align, gather,
+multline, split, eqnarray, displaymath, alignat, flalign, … + starred} or
+kind `displaymath`/`mathenv`) so figures/tables/verbatim are untouched.
+
+**Test (`paperModel.test.ts`).** Fixture = the equation rects above
+(2 full-height container rects w432/w485.5 + per-line glyph rects
+w283/w325): tightened box height stays `[264.2, 320.5]`, width drops to
+~325 (the glyph extent), not 485.5. A single-line all-full-height-rect
+equation falls back to full width unchanged. A figure block (non-math env)
+is untouched. **Lane.** Renderer paper geometry (`paperModel.ts`,
+`PaperPane.tsx`) — small. Conflict-free (paper/* idle since #35).
