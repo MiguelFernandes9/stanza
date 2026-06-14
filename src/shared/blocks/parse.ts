@@ -36,9 +36,11 @@ const STANDALONE_MACROS = new Set([
 /** Invisible marker macros that emit nothing on the page. They must NOT
  *  flush (unlike STANDALONE_MACROS) — a bare `\label` after `\chapter` would
  *  otherwise become a phantom paragraph that forward-maps onto the chapter
- *  title and steals the click (BUG-11). Skipped without starting a paragraph;
- *  an already-open paragraph absorbs them, so an inline `\label` doesn't
- *  split its prose. */
+ *  title and steals the click (BUG-11). `\addcontentsline`/`\addtocontents`
+ *  are the same hazard: invisible, but synctex maps them onto the heading
+ *  above, dragging the following paragraph's box onto the title (BUG-20).
+ *  Skipped without starting a paragraph; an already-open paragraph absorbs
+ *  them, so an inline use doesn't split its prose. */
 const TRANSPARENT_MACROS = new Set([
   'label',
   'index',
@@ -46,6 +48,8 @@ const TRANSPARENT_MACROS = new Set([
   'nomenclature',
   'hypertarget',
   'phantomsection',
+  'addcontentsline',
+  'addtocontents',
 ])
 
 /** Parse .tex source into the block tree: preamble, nested sections,

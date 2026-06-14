@@ -123,6 +123,35 @@ describe('transparent marker macros (\\label etc.)', () => {
     expect(roots.map((b) => b.kind)).toEqual(['paragraph'])
     expect(roots[0]!.span).toMatchObject({ startLine: 1, endLine: 1 })
   })
+
+  test('a bare \\addcontentsline after \\chapter makes no phantom paragraph block', () => {
+    const roots = parseBlocks('main.tex', '\\chapter{X}\n\\addcontentsline{toc}{chapter}{X}\n\n\\section{Z}')
+    expect(roots.map((b) => b.kind)).toEqual(['section'])
+    const chapter = roots[0]!
+    expect(chapter.name).toBe('X')
+    // \addcontentsline emits nothing but forward-maps onto the title — it must
+    // not become a block that drags the abstract onto its heading (BUG-20).
+    expect(chapter.children.map((c) => c.kind)).toEqual(['section'])
+    expect(blockAtLine(roots, 'main.tex', 2)).toBe(chapter)
+  })
+
+  test('a bare \\addcontentsline does not pull the following paragraph onto its line', () => {
+    // The real abstract shape: chapter, \addcontentsline, blank, then prose.
+    const roots = parseBlocks(
+      'main.tex',
+      '\\chapter{Abstract}\n\\addcontentsline{toc}{chapter}{Abstract}\n\nAbstract prose here.',
+    )
+    const chapter = roots[0]!
+    expect(chapter.children.map((c) => c.kind)).toEqual(['paragraph'])
+    // prose block starts at line 4, NOT line 2 (the invisible \addcontentsline)
+    expect(chapter.children[0]!.span.startLine).toBe(4)
+  })
+
+  test('an inline \\addcontentsline / \\addtocontents is absorbed, not split', () => {
+    const roots = parseBlocks('x.tex', 'Some text \\addtocontents{toc}{x} more text.')
+    expect(roots.map((b) => b.kind)).toEqual(['paragraph'])
+    expect(roots[0]!.span).toMatchObject({ startLine: 1, endLine: 1 })
+  })
 })
 
 describe('parseProjectBlocks', () => {
