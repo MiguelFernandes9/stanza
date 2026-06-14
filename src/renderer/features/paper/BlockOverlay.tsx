@@ -18,6 +18,9 @@ interface Props {
   mark: BlockMark | null
   hovered: boolean
   selectMode: boolean
+  /** Block sits flush under another — render the hover pill inside the box so
+   *  its label doesn't land on the line above (BUG-19). */
+  tight: boolean
   onEnter: () => void
   onLeave: () => void
   onClick: (e: React.MouseEvent) => void
@@ -34,6 +37,7 @@ export function BlockOverlay({
   mark,
   hovered,
   selectMode,
+  tight,
   onEnter,
   onLeave,
   onClick
@@ -80,8 +84,10 @@ export function BlockOverlay({
       {hovered && (
         <span
           style={{
+            // Flush float → keep the pill inside the box (top 2) so its label
+            // never sits on the prose line above; otherwise the usual -9 lift.
             position: 'absolute',
-            top: -9,
+            top: tight ? 2 : -9,
             left: -1,
             zIndex: 2,
             display: 'inline-flex',

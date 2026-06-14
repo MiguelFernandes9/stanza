@@ -78,18 +78,57 @@ export function expandIds(roots: BlockNode[], blockId: string): string[] {
   return node && node.kind === 'section' ? subtree(node) : [blockId]
 }
 
-/** Grow a box by `pad` on every side (PDF pt, scaled with the page at
- *  render) so the bounds frame the text instead of cutting into glyphs
- *  (BUG-13). The origin is clamped to 0 so a block near the page edge
- *  doesn't pad off-canvas. */
-export function padBox(box: PdfRect, pad: number): PdfRect {
+/** Smallest vertical gap from `box`'s top to a block box directly above it on
+ *  the same page (Infinity when nothing sits above). Boxes that overlap `box`
+ *  vertically (side-by-side) or sit below it are ignored. */
+function gapAbove(box: PdfRect, neighbors: PdfRect[]): number {
+  let gap = Infinity
+  for (const n of neighbors) {
+    if (n.page !== box.page) continue
+    const nBottom = n.y + n.height
+    if (nBottom <= box.y) gap = Math.min(gap, box.y - nBottom)
+  }
+  return gap
+}
+
+/** Smallest vertical gap from `box`'s bottom to a block box directly below it
+ *  on the same page (Infinity when nothing sits below). */
+function gapBelow(box: PdfRect, neighbors: PdfRect[]): number {
+  let gap = Infinity
+  const bottom = box.y + box.height
+  for (const n of neighbors) {
+    if (n.page !== box.page) continue
+    if (n.y >= bottom) gap = Math.min(gap, n.y - bottom)
+  }
+  return gap
+}
+
+/** Grow a box by `pad` on every side (PDF pt, scaled with the page at render)
+ *  so the bounds frame the text instead of cutting into glyphs (BUG-13) — but
+ *  never let the VERTICAL pad cross into a neighbouring block: each side is
+ *  capped at half the gap to the nearest neighbour above/below, so two
+ *  adjacent padded boxes meet without overlapping (a float placed flush under
+ *  a paragraph no longer covers its last line, BUG-19). Horizontal pad is
+ *  always full. The origin is clamped to 0 so a block near the page edge
+ *  doesn't pad off-canvas. Pass `[]` for the original symmetric pad. */
+export function padBoxClamped(box: PdfRect, pad: number, neighbors: PdfRect[]): PdfRect {
+  const topPad = Math.min(pad, gapAbove(box, neighbors) / 2)
+  const botPad = Math.min(pad, gapBelow(box, neighbors) / 2)
   return {
     page: box.page,
     x: Math.max(0, box.x - pad),
-    y: Math.max(0, box.y - pad),
+    y: Math.max(0, box.y - topPad),
     width: box.width + pad * 2,
-    height: box.height + pad * 2
+    height: box.height + topPad + botPad
   }
+}
+
+/** True when `box`'s top is within `threshold` pt of the nearest block box
+ *  above it on the same page — the block sits flush under another, so a
+ *  negative-offset hover pill would land on the line above and should instead
+ *  render inside the box (BUG-19). */
+export function isTightAbove(box: PdfRect, neighbors: PdfRect[], threshold: number): boolean {
+  return gapAbove(box, neighbors) < threshold
 }
 
 /** Union a set of rects into one box per page, dropping degenerate rects
