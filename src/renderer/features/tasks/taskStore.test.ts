@@ -38,7 +38,9 @@ describe('taskReducer — selection', () => {
       { type: 'toggle-block', ids: ['p2'], additive: false },
       { type: 'toggle-block', ids: ['p1'], additive: false }
     )
-    expect(s.tasks).toHaveLength(2)
+    // p2's untouched draft is dropped when focus returns to the busy owner
+    // (BUG-27); only the busy task remains, and it's re-focused.
+    expect(s.tasks).toHaveLength(1)
     expect(s.activeTask).toBe(id)
   })
 
@@ -61,6 +63,47 @@ describe('taskReducer — selection', () => {
     let s = run(initialTaskState, { type: 'toggle-block', ids: ['p1'], additive: false })
     s = run(s, { type: 'remove-block', taskId: s.tasks[0].id, blockId: 'p1' })
     expect(s.tasks).toHaveLength(0)
+  })
+})
+
+describe('taskReducer — abandoned draft cleanup (BUG-27)', () => {
+  it('drops an untouched empty draft when a non-additive click moves to a new block', () => {
+    let s = run(initialTaskState, { type: 'toggle-block', ids: ['A'], additive: false })
+    s = run(s, { type: 'toggle-block', ids: ['B'], additive: false })
+    expect(s.tasks).toHaveLength(1) // A's empty draft gone, not accumulated
+    expect(s.tasks[0].blockIds).toEqual(['B'])
+    expect(s.activeTask).toBe(s.tasks[0].id)
+  })
+
+  it('treats a whitespace-only instruction as an untouched draft', () => {
+    let s = run(initialTaskState, { type: 'toggle-block', ids: ['A'], additive: false })
+    s = run(s, { type: 'update-instruction', taskId: s.tasks[0].id, instruction: '   ' })
+    s = run(s, { type: 'toggle-block', ids: ['B'], additive: false })
+    expect(s.tasks).toHaveLength(1)
+    expect(s.tasks[0].blockIds).toEqual(['B'])
+  })
+
+  it('keeps a draft that already has an instruction (intentional parallel edit)', () => {
+    let s = run(initialTaskState, { type: 'toggle-block', ids: ['A'], additive: false })
+    s = run(s, { type: 'update-instruction', taskId: s.tasks[0].id, instruction: 'tighten' })
+    s = run(s, { type: 'toggle-block', ids: ['B'], additive: false })
+    expect(s.tasks.map((t) => t.blockIds)).toEqual([['A'], ['B']])
+  })
+
+  it('keeps a busy task when selecting a new block', () => {
+    let s = run(initialTaskState, { type: 'toggle-block', ids: ['A'], additive: false })
+    const id = s.tasks[0].id
+    s = run(s, { type: 'update-instruction', taskId: id, instruction: 'x' }, { type: 'submit', taskId: id })
+    s = run(s, { type: 'toggle-block', ids: ['B'], additive: false })
+    expect(s.tasks).toHaveLength(2)
+    expect(s.tasks.find((t) => t.id === id)?.phase).toBe('busy')
+  })
+
+  it('additive click still grows the active draft (no drop)', () => {
+    let s = run(initialTaskState, { type: 'toggle-block', ids: ['A'], additive: false })
+    s = run(s, { type: 'toggle-block', ids: ['B'], additive: true })
+    expect(s.tasks).toHaveLength(1)
+    expect(s.tasks[0].blockIds).toEqual(['A', 'B'])
   })
 })
 
