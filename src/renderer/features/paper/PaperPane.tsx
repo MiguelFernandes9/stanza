@@ -13,7 +13,7 @@ import type { PaneView, TaskState } from '../tasks/taskStore'
 import { BlockOverlay } from './BlockOverlay'
 import { FillerPage } from './FillerPage'
 import { PaperToolbar } from './PaperToolbar'
-import { blockBoxesByPage, cardAnchorTops, combinedSpanLabel, expandIds, padBox, selectionBounds, spanLabel } from './paperModel'
+import { blockBoxesByPage, cardAnchorTops, combinedSpanLabel, expandIds, isTightAbove, padBoxClamped, selectionBounds, spanLabel } from './paperModel'
 import type { BlockMark, PageBlock } from './paperModel'
 
 const FALLBACK_PAGE_WIDTH = 564
@@ -82,9 +82,17 @@ export function PaperPane(props: Props): JSX.Element {
   // One bounds box per page = the union envelope of a set of blocks' boxes,
   // padded so it frames the text instead of cutting glyphs (BUG-10/13).
   const SELECT_PAD = 5
+  // A block top within this many pt of the block above is "tight" — its hover
+  // pill renders inside the box so the label doesn't sit on the line above.
+  const TIGHT_GAP = 12
+  // Every block's boxes: neighbours for the pad clamp and the tight-pill test,
+  // so a padded box (or pill) on a float placed flush against prose can't
+  // cross into the block above/below (BUG-19). A selection's own rects overlap
+  // its union envelope, so they're ignored by the above/below gap checks.
+  const allBoxes = [...blockRects.values()].flat()
   const boxesFor = (ids: string[]): PdfRect[] =>
     selectionBounds(ids.flatMap((id) => blockRects.get(id) ?? [])).map((box) =>
-      padBox(box, SELECT_PAD)
+      padBoxClamped(box, SELECT_PAD, allBoxes)
     )
 
   // Active selection: union over the whole selected subtree (expandIds already
@@ -184,6 +192,7 @@ export function PaperPane(props: Props): JSX.Element {
             mark={marks[b.id] ?? null}
             hovered={state.view === 'select' && hover === b.id}
             selectMode={state.view === 'select'}
+            tight={isTightAbove(rect, allBoxes, TIGHT_GAP)}
             onEnter={() => setHover(b.id)}
             onLeave={() => setHover((h) => (h === b.id ? null : h))}
             onClick={(e) => props.onToggleBlock(b.id, state.adding || e.shiftKey || e.metaKey || e.ctrlKey)}

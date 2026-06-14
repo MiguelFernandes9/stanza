@@ -7,7 +7,8 @@ import {
   combinedSpanLabel,
   expandIds,
   flattenBlocks,
-  padBox,
+  isTightAbove,
+  padBoxClamped,
   selectionBounds,
   spanLabel,
   taskSpans
@@ -235,9 +236,9 @@ describe('cardAnchorTops — geometry-anchored rail cards (BUG-17)', () => {
   })
 })
 
-describe('padBox — breathing room around the bounds (BUG-13)', () => {
-  it('grows the box by pad on every side, keeping the page', () => {
-    expect(padBox({ page: 5, x: 72, y: 90, width: 300, height: 100 }, 6)).toEqual({
+describe('padBoxClamped — breathing room without crossing neighbors (BUG-13/19)', () => {
+  it('grows an isolated box by full pad on every side (no neighbors)', () => {
+    expect(padBoxClamped({ page: 5, x: 72, y: 90, width: 300, height: 100 }, 6, [])).toEqual({
       page: 5,
       x: 66,
       y: 84,
@@ -245,8 +246,49 @@ describe('padBox — breathing room around the bounds (BUG-13)', () => {
       height: 112
     })
   })
+
   it('never pushes the origin negative', () => {
-    expect(padBox({ page: 2, x: 3, y: 1, width: 50, height: 50 }, 6)).toMatchObject({ x: 0, y: 0 })
+    expect(padBoxClamped({ page: 2, x: 3, y: 1, width: 50, height: 50 }, 6, [])).toMatchObject({
+      x: 0,
+      y: 0
+    })
+  })
+
+  it('clamps vertical pad so adjacent padded boxes meet but never overlap (BUG-19)', () => {
+    // A sits flush above B with only a 4pt gap (< 2·pad=10) — the float case.
+    const A = { page: 1, x: 72, y: 80, width: 100, height: 16 } // bottom 96
+    const B = { page: 1, x: 72, y: 100, width: 100, height: 40 } // top 100, gap 4
+    const pa = padBoxClamped(A, 5, [B])
+    const pb = padBoxClamped(B, 5, [A])
+    // top pad capped at gap/2 = 2; bottom (no neighbor below) keeps full pad
+    expect(pb).toEqual({ page: 1, x: 67, y: 98, width: 110, height: 47 })
+    // the two padded boxes touch at 98, they do not overlap
+    expect(pa.y + pa.height).toBeLessThanOrEqual(pb.y)
+  })
+
+  it('keeps full pad against far, off-page, or side-by-side neighbors', () => {
+    const box = { page: 1, x: 72, y: 200, width: 100, height: 40 }
+    // far above (gap ≫ 2·pad) → full pad
+    expect(padBoxClamped(box, 5, [{ page: 1, x: 72, y: 0, width: 100, height: 20 }]).y).toBe(195)
+    // neighbor on another page is ignored
+    expect(padBoxClamped(box, 5, [{ page: 2, x: 72, y: 190, width: 100, height: 40 }]).y).toBe(195)
+    // vertically-overlapping (side-by-side) neighbor does not clamp
+    expect(padBoxClamped(box, 5, [{ page: 1, x: 300, y: 200, width: 100, height: 40 }]).y).toBe(195)
+  })
+})
+
+describe('isTightAbove — pill placement for flush floats (BUG-19)', () => {
+  const fig = { page: 1, x: 72, y: 100, width: 100, height: 40 }
+  it('true when a block sits within the threshold below another', () => {
+    expect(isTightAbove(fig, [{ page: 1, x: 72, y: 80, width: 100, height: 16 }], 12)).toBe(true)
+  })
+  it('false when nothing is close above (far / none)', () => {
+    expect(isTightAbove(fig, [{ page: 1, x: 72, y: 0, width: 100, height: 20 }], 12)).toBe(false)
+    expect(isTightAbove(fig, [], 12)).toBe(false)
+  })
+  it('ignores side-by-side and below neighbors', () => {
+    expect(isTightAbove(fig, [{ page: 1, x: 300, y: 100, width: 100, height: 40 }], 12)).toBe(false)
+    expect(isTightAbove(fig, [{ page: 1, x: 72, y: 200, width: 100, height: 40 }], 12)).toBe(false)
   })
 })
 
