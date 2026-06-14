@@ -74,9 +74,16 @@ export function PdfPageStack({ pdf, scale, scrollRef, onGeometry, overlay, onPag
 
   // New document (recompile / open): drop the old page cache so stale proxies
   // can't render, and re-measure geometry. Cleanup releases the old proxies.
+  // We deliberately do NOT null `geo` here — keeping the previous geometry
+  // until the new page-1 measurement lands below keeps the `if (!geo)` guard
+  // from collapsing the stack to an empty <div/>. That collapse zeroed the
+  // scroll height, so the browser clamped scrollTop to 0 and the view snapped
+  // to the top on every recompile (BUG-31).
   useEffect(() => {
     for (const page of pagesRef.current.values()) void page.cleanup()
-    setGeo(null)
+    // Reset the page cache/range so stale proxies can't render; the slots still
+    // render at the old geo.height while canvases re-fetch, so the content
+    // height (and scrollTop) holds until the new geo lands (BUG-31).
     setRange([1, 0])
     setPages(new Map())
     let alive = true
