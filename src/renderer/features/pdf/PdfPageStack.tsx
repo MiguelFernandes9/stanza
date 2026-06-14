@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { JSX, ReactNode } from 'react'
 import { canvasDims } from './canvasDims'
+import { observeDevicePixelRatio } from './devicePixelRatio'
 import { pagesToEvict, visiblePageRange } from './pageWindow'
 import type { PDFDocumentProxy, PDFPageProxy } from './pdfjsSetup'
 
@@ -30,13 +31,27 @@ const PAGE_BUFFER = 1
  *  renderer (L6). */
 const MAX_DPR = 2
 
+/** Current devicePixelRatio (capped at MAX_DPR), re-rendering the component
+ *  whenever the ratio changes — e.g. the window is dragged to a display with a
+ *  different DPI. Capping here means a change above the cap (2→3) doesn't churn
+ *  a re-raster: the capped value, and so the canvas backing store, is
+ *  unchanged. */
+function useCappedDevicePixelRatio(): number {
+  const [dpr, setDpr] = useState(() => (typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1))
+  useEffect(() => observeDevicePixelRatio(setDpr), [])
+  return Math.min(dpr || 1, MAX_DPR)
+}
+
 function PageCanvas({ page, scale }: { page: PDFPageProxy; scale: number }): JSX.Element {
   const ref = useRef<HTMLCanvasElement | null>(null)
+  // Re-rasterize on DPI change too, not just [page, scale] — otherwise dragging
+  // the window to a different-DPI display leaves the page blurry until the next
+  // zoom/scroll (M2-1 follow-up).
+  const dpr = useCappedDevicePixelRatio()
   useEffect(() => {
     const canvas = ref.current
     if (!canvas) return
     const viewport = page.getViewport({ scale })
-    const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR)
     // Align the CSS size to whole backing pixels so the browser never resamples
     // the bitmap — otherwise the page is sharp only at zooms where the page
     // width happens to land on an integer device pixel, blurry elsewhere.
@@ -61,7 +76,7 @@ function PageCanvas({ page, scale }: { page: PDFPageProxy; scale: number }): JSX
       canvas.width = 0
       canvas.height = 0
     }
-  }, [page, scale])
+  }, [page, scale, dpr])
   return <canvas ref={ref} style={{ display: 'block' }} />
 }
 
