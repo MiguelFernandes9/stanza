@@ -1134,3 +1134,45 @@ gap stays untouched; overlap still meets at midpoint. Live gate (Miguel):
 **Lane.** `paperModel.ts` + test — small. Different file from BUG-26
 (`PaperPane.tsx`, the per-block-wash work in flight on `fix/paper-wash`), so
 it can land in parallel; both feed the same `blockRects` and compose cleanly.
+
+## BUG-27 — abandoned draft selections linger and cover the text
+
+Repro (Miguel): click a block → an edit bubble appears; click **another**
+block → the *previous* block's wash stays painted over its text. Keep
+clicking and washes accumulate, "the block covers the text." Has **nothing to
+do** with recompile, geometry, or wash opacity — those are all correct
+(verified: honey paragraph @53-61 maps tight to page 5 [190→282];
+`washBoxes` is per-block). It is a **selection-lifecycle** bug introduced by
+the task model, not the v0.3 wash work.
+
+**Root cause (`taskStore.ts`, `toggleBlock` 73-108).** A non-additive click
+on a not-yet-owned block falls through to the create branch (line 100): it
+pushes a **new** compose task and sets it active, but **never discards the
+previously-active compose task**. That earlier task has an empty
+`instruction` (the user never typed one — they just clicked) yet stays in
+`state.tasks`, and `taskWashes` (`PaperPane.tsx:120`) renders a wash for
+*every* non-noop task. So every abandoned single-click selection leaves its
+wash behind; selecting elsewhere stacks more. The `owner`-focus branch
+(line 97) has the same gap — focusing a different task leaves the empty draft
+behind too.
+
+**Fix.** On a **non-additive** toggle that moves the selection (creates a new
+task, or focuses a different owner), **drop the currently-active task iff it
+is a `compose` task with a blank/whitespace `instruction`** (an untouched
+draft) before applying the new selection. Preserve: drafts that already have
+an instruction (intentional parallel edits), and any `busy`/`review` task
+(in-flight/locked). Additive (⇧/⌘-click, "+ blocks") is unchanged — it grows
+the active draft. Clicking the same block to toggle it off is unchanged
+(lines 90-96). Net behaviour: a plain click *moves* the selection instead of
+accumulating empty drafts.
+
+**Test (`taskStore.test.ts`).** (a) toggle block A (compose, no instruction),
+then toggle block B non-additive → only one task remains (B active), A's
+empty draft gone. (b) Same but type an instruction on A first → both tasks
+persist (A kept). (c) A is `busy` → selecting B keeps A. (d) Additive click
+still grows the active draft (no removal). Live gate (Miguel): clicking
+through blocks shows only the current selection washed; no leftover boxes.
+
+**Lane.** Renderer task store (`taskStore.ts` + test) — small. Independent of
+all paper-geometry work (`paperModel.ts`/`PaperPane.tsx`); no conflict with
+BUG-25-reopen or BUG-26.
