@@ -229,6 +229,54 @@ export function blockBoxesByPage(rects: PdfRect[]): PdfRect[] {
   return unionRectsByPage(rects)
 }
 
+const MATH_ENV_NAMES = new Set([
+  'equation',
+  'align',
+  'gather',
+  'multline',
+  'split',
+  'eqnarray',
+  'displaymath',
+  'alignat',
+  'flalign',
+])
+
+/** Is this a display-math environment name (starred variants included)? Only
+ *  these get width-tightened to the formula ink (BUG-23); figure/table/verbatim
+ *  keep their full union box (so BUG-21's figure geometry isn't regressed). */
+export function isMathEnvName(name: string | undefined): boolean {
+  return name !== undefined && MATH_ENV_NAMES.has(name.replace(/\*$/, ''))
+}
+
+/** Per-page box for a display-math block, width hugged to the formula ink.
+ *  synctex returns full-block-height container rects (\textwidth, and
+ *  textwidth+number) alongside narrower per-line glyph rects; unioning all
+ *  gives a full-column box wider than the formula (BUG-23). Take top/bottom
+ *  from every rect, but left/right from the per-line glyph rects only — those
+ *  shorter than 0.7× the block height — so the box hugs the formula. Fallback:
+ *  when no rect is sub-full-height (single-line equation, all rects the same
+ *  height), keep the full width — it's the only signal. */
+export function mathBoxesByPage(rects: PdfRect[]): PdfRect[] {
+  const byPage = new Map<number, PdfRect[]>()
+  for (const r of rects) {
+    if (r.width <= 0 || r.height <= 0) continue
+    const arr = byPage.get(r.page)
+    if (arr) arr.push(r)
+    else byPage.set(r.page, [r])
+  }
+  return [...byPage.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([page, rs]) => {
+      const y = Math.min(...rs.map((r) => r.y))
+      const bottom = Math.max(...rs.map((r) => r.y + r.height))
+      const glyphs = rs.filter((r) => r.height < 0.7 * (bottom - y))
+      const widthRects = glyphs.length ? glyphs : rs
+      const x = Math.min(...widthRects.map((r) => r.x))
+      const right = Math.max(...widthRects.map((r) => r.x + r.width))
+      return { page, x, y, width: right - x, height: bottom - y }
+    })
+}
+
 /** Geometry query span for a block, excluding an environment's \begin/\end
  *  delimiter lines: they carry no visible content and forward-map to stray
  *  galley positions — e.g. \end{figure} lands on the next paragraph's first

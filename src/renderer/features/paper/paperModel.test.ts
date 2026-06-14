@@ -9,7 +9,9 @@ import {
   environmentInteriorSpan,
   expandIds,
   flattenBlocks,
+  isMathEnvName,
   isTightAbove,
+  mathBoxesByPage,
   padBoxClamped,
   resolveBoxOverlaps,
   selectionBounds,
@@ -199,6 +201,49 @@ describe('selectionBounds — per-page union envelope (BUG-10)', () => {
 
   it('no boxes → no envelope', () => {
     expect(selectionBounds([])).toEqual([])
+  })
+})
+
+describe('isMathEnvName — display-math detection (BUG-23)', () => {
+  it('matches display-math envs incl. starred variants', () => {
+    for (const n of ['equation', 'equation*', 'align', 'align*', 'gather', 'multline', 'split', 'eqnarray', 'displaymath', 'alignat*', 'flalign'])
+      expect(isMathEnvName(n)).toBe(true)
+  })
+  it('rejects non-math envs and undefined', () => {
+    for (const n of ['figure', 'table', 'verbatim', 'itemize', undefined])
+      expect(isMathEnvName(n)).toBe(false)
+  })
+})
+
+describe('mathBoxesByPage — hug the formula ink (BUG-23)', () => {
+  it('takes width from the per-line glyph rects, not the full-height containers', () => {
+    // real ch2 display equation: two full-height container rects (\textwidth,
+    // textwidth+number) + two narrower per-line glyph rects.
+    const rects: PdfRect[] = [
+      { page: 6, x: 72, y: 264.2, width: 432, height: 56.3 }, // \textwidth container
+      { page: 6, x: 72, y: 264.2, width: 485.5, height: 56.3 }, // textwidth + number
+      { page: 6, x: 72, y: 264.2, width: 283, height: 26.1 }, // line 1 glyphs
+      { page: 6, x: 72, y: 294.3, width: 325, height: 26.2 } // line 2 glyphs
+    ]
+    const [box] = mathBoxesByPage(rects)
+    expect(box!.y).toBeCloseTo(264.2, 5) // top from all rects
+    expect(box!.y + box!.height).toBeCloseTo(320.5, 5) // bottom from all rects
+    expect(box!.x).toBe(72)
+    expect(box!.width).toBeCloseTo(325, 5) // glyph width, not 485.5 (the number container)
+  })
+
+  it('keeps full width for a single-line equation (all rects same height)', () => {
+    const rects: PdfRect[] = [
+      { page: 2, x: 72, y: 100, width: 400, height: 20 }, // container
+      { page: 2, x: 72, y: 100, width: 250, height: 20 } // single glyph line, same height
+    ]
+    // no rect is < 0.7×blockHeight → no glyph signal → keep full width
+    expect(mathBoxesByPage(rects)[0]!.width).toBe(400)
+  })
+
+  it('drops degenerate rects and returns nothing when none remain', () => {
+    expect(mathBoxesByPage([{ page: 1, x: 0, y: 0, width: 0, height: 0 }])).toEqual([])
+    expect(mathBoxesByPage([])).toEqual([])
   })
 })
 
