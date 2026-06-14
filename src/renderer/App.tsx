@@ -21,5 +21,5 @@ export default function App(): JSX.Element {
   }, [])
 
   if (!doc) return <OpenScreen onOpened={setDoc} />
-  return <Workspace doc={doc} />
+  return <Workspace doc={doc} onDocChanged={setDoc} />
 }

@@ -1,20 +1,29 @@
-import { useState } from 'react'
-import type { JSX, ReactNode } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { JSX, MouseEvent as ReactMouseEvent, ReactNode } from 'react'
 import {
   ChevronDown,
   ChevronRight,
+  CornerUpRight,
+  Copy,
   FileText,
   Folder,
   GitCommitHorizontal,
   History,
   Image,
+  Link,
   List,
-  PenLine
+  PenLine,
+  Plus,
+  Trash2
 } from 'lucide-react'
 import type { BlockNode } from '@shared/blocks/types'
 import type { CommitInfo, DocumentInfo, FileEntry } from '@shared/ipc'
 import { buildFileTree, relativeTime } from './sidebarData'
 import type { FileTreeNode } from './sidebarData'
+import { composeSiblingPath, menuItemsForKind } from './fileMenu'
+import type { FileMenuId, FileMenuKind } from './fileMenu'
+import { FileContextMenu } from './FileContextMenu'
+import type { ContextMenuEntry } from './FileContextMenu'
 
 interface Props {
   doc: DocumentInfo
@@ -23,6 +32,39 @@ interface Props {
   history: CommitInfo[]
   activeBlock: string | null
   onPickBlock: (id: string) => void
+  // v0.2 file management — actions live in Workspace (like onPickBlock); the
+  // menu/inline-rename UI state stays local to this component.
+  onOpenFile: (relPath: string) => void
+  onRename: (relPath: string, toRelPath: string) => void
+  onDuplicate: (relPath: string) => void
+  onDelete: (relPath: string) => void
+  onCreateFile: (dir: string) => void
+  onCreateFolder: (dir: string) => void
+  /** Files whose Rename/Delete must be blocked — a busy/review task owns a
+   *  block in them (UI mirror of the backend span lock). */
+  lockedFiles: Set<string>
+  /** A path Workspace just created and wants renamed inline (type-the-name). */
+  renameOnAppear?: string | null
+  onRenameHandled?: () => void
+}
+
+/** A folder is locked when any file inside it is locked — a folder rename or
+ *  delete would move/strand that in-flight edit. */
+function dirLocked(locked: Set<string>, dir: string): boolean {
+  for (const f of locked) {
+    if (f === dir || f.startsWith(`${dir}/`)) return true
+  }
+  return false
+}
+
+const MENU_ICON: Record<FileMenuId, ReactNode> = {
+  open: <CornerUpRight size={15} />,
+  rename: <PenLine size={15} />,
+  duplicate: <Copy size={15} />,
+  copyPath: <Link size={15} />,
+  delete: <Trash2 size={15} />,
+  newFile: <Plus size={15} />,
+  newFolder: <Folder size={15} />
 }
 
 function SectionLabel({ children, icon }: { children: ReactNode; icon: ReactNode }): JSX.Element {
@@ -50,13 +92,43 @@ interface RowProps {
   indent?: number
   accent?: string
   onClick?: () => void
+  onContextMenu?: (e: ReactMouseEvent) => void
+  menuOpen?: boolean
+  renaming?: boolean
+  /** Seed value for the inline-rename input (the current basename). */
+  renameValue?: string
+  onRenameCommit?: (value: string) => void
+  onRenameCancel?: () => void
 }
 
-function Row({ icon, label, meta, active = false, indent = 0, accent, onClick }: RowProps): JSX.Element {
+function Row({
+  icon,
+  label,
+  meta,
+  active = false,
+  indent = 0,
+  accent,
+  onClick,
+  onContextMenu,
+  menuOpen = false,
+  renaming = false,
+  renameValue,
+  onRenameCommit,
+  onRenameCancel
+}: RowProps): JSX.Element {
   const [hover, setHover] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (renaming && inputRef.current) {
+      inputRef.current.focus()
+      inputRef.current.select()
+    }
+  }, [renaming])
+  const highlight = active || menuOpen
   return (
     <div
-      onClick={onClick}
+      onClick={renaming ? undefined : onClick}
+      onContextMenu={onContextMenu}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
@@ -66,8 +138,9 @@ function Row({ icon, label, meta, active = false, indent = 0, accent, onClick }:
         height: 28,
         padding: `0 8px 0 ${8 + indent * 14}px`,
         borderRadius: 'var(--radius-sm)',
-        background: active ? 'var(--clay-50)' : hover ? 'var(--hover-fill)' : 'transparent',
-        color: active ? 'var(--clay-700)' : 'var(--ink-600)',
+        background: highlight ? 'var(--clay-50)' : hover ? 'var(--hover-fill)' : 'transparent',
+        color: highlight ? 'var(--clay-700)' : 'var(--ink-600)',
+        boxShadow: menuOpen ? 'inset 0 0 0 1px var(--clay-200)' : 'none',
         cursor: 'pointer',
         userSelect: 'none'
       }}
@@ -76,25 +149,59 @@ function Row({ icon, label, meta, active = false, indent = 0, accent, onClick }:
         <span
           style={{
             flex: '0 0 auto',
-            color: active ? 'var(--clay-500)' : accent ?? 'var(--ink-400)',
+            color: highlight ? 'var(--clay-500)' : accent ?? 'var(--ink-400)',
             display: 'inline-flex'
           }}
         >
           {icon}
         </span>
       )}
-      <span
-        style={{
-          flex: 1,
-          font: `var(--weight-${active ? 'semibold' : 'medium'}) var(--text-sm)/1 var(--font-sans)`,
-          whiteSpace: 'nowrap',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis'
-        }}
-      >
-        {label}
-      </span>
-      {meta && <span style={{ font: 'var(--text-2xs)/1 var(--font-mono)', color: 'var(--ink-300)' }}>{meta}</span>}
+      {renaming ? (
+        <input
+          ref={inputRef}
+          defaultValue={renameValue}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') onRenameCommit?.(e.currentTarget.value)
+            else if (e.key === 'Escape') {
+              e.stopPropagation()
+              onRenameCancel?.()
+            }
+          }}
+          // Spec: blur cancels (the mock commits on blur — deliberately not
+          // mirrored, so clicking away never renames by accident).
+          onBlur={() => onRenameCancel?.()}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            height: 20,
+            padding: '0 5px',
+            margin: 0,
+            border: '1px solid var(--clay-400)',
+            borderRadius: 'var(--radius-sm)',
+            outline: 'none',
+            background: 'var(--surface-card)',
+            color: 'var(--ink-900)',
+            font: 'var(--weight-medium) var(--text-sm)/1 var(--font-sans)',
+            boxShadow: '0 0 0 3px var(--clay-100)'
+          }}
+        />
+      ) : (
+        <span
+          style={{
+            flex: 1,
+            font: `var(--weight-${active ? 'semibold' : 'medium'}) var(--text-sm)/1 var(--font-sans)`,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis'
+          }}
+        >
+          {label}
+        </span>
+      )}
+      {meta && !renaming && (
+        <span style={{ font: 'var(--text-2xs)/1 var(--font-mono)', color: 'var(--ink-300)' }}>{meta}</span>
+      )}
     </div>
   )
 }
@@ -112,21 +219,60 @@ function fileIcon(entry: FileEntry): { icon: ReactNode; accent?: string } {
   }
 }
 
-function TreeNode({
+/** Handlers + transient UI state threaded down the recursive tree. */
+interface TreeCtx {
+  mainFile: string
+  lockedFiles: Set<string>
+  menuPath: string | null
+  renaming: string | null
+  forceOpen: Set<string>
+  openMenu: (e: ReactMouseEvent, path: string, kind: FileMenuKind, locked: boolean) => void
+  commitRename: (path: string, value: string) => void
+  cancelRename: () => void
+  onFileClick: (relPath: string) => void
+}
+
+function TreeNode({ node, indent, ctx }: { node: FileTreeNode; indent: number; ctx: TreeCtx }): JSX.Element {
+  if ('entry' in node) {
+    const relPath = node.entry.relPath
+    const name = relPath.split('/').pop() ?? relPath
+    const { icon, accent } = fileIcon(node.entry)
+    return (
+      <Row
+        indent={indent}
+        icon={icon}
+        label={name}
+        accent={accent}
+        active={relPath === ctx.mainFile}
+        menuOpen={ctx.menuPath === relPath}
+        renaming={ctx.renaming === relPath}
+        renameValue={name}
+        onRenameCommit={(v) => ctx.commitRename(relPath, v)}
+        onRenameCancel={ctx.cancelRename}
+        onContextMenu={(e) => ctx.openMenu(e, relPath, 'file', ctx.lockedFiles.has(relPath))}
+        onClick={() => ctx.onFileClick(relPath)}
+      />
+    )
+  }
+  return <DirNode node={node} indent={indent} ctx={ctx} />
+}
+
+function DirNode({
   node,
   indent,
-  mainFile
+  ctx
 }: {
-  node: FileTreeNode
+  node: { dir: string; children: FileTreeNode[] }
   indent: number
-  mainFile: string
+  ctx: TreeCtx
 }): JSX.Element {
   const [open, setOpen] = useState(indent === 0)
-  if ('entry' in node) {
-    const name = node.entry.relPath.split('/').pop() ?? node.entry.relPath
-    const { icon, accent } = fileIcon(node.entry)
-    return <Row indent={indent} icon={icon} label={name} accent={accent} active={node.entry.relPath === mainFile} />
-  }
+  // A New file/folder inside this dir auto-expands it.
+  useEffect(() => {
+    if (ctx.forceOpen.has(node.dir)) setOpen(true)
+  }, [ctx.forceOpen, node.dir])
+  const name = node.dir.split('/').pop() ?? node.dir
+  const locked = dirLocked(ctx.lockedFiles, node.dir)
   return (
     <div>
       <Row
@@ -137,23 +283,160 @@ function TreeNode({
             <Folder size={14} />
           </span>
         }
-        label={node.dir.split('/').pop() ?? node.dir}
+        label={name}
         meta={open ? undefined : String(node.children.length)}
+        menuOpen={ctx.menuPath === node.dir}
+        renaming={ctx.renaming === node.dir}
+        renameValue={name}
+        onRenameCommit={(v) => ctx.commitRename(node.dir, v)}
+        onRenameCancel={ctx.cancelRename}
+        onContextMenu={(e) => ctx.openMenu(e, node.dir, 'dir', locked)}
         onClick={() => setOpen((o) => !o)}
       />
       {open &&
         node.children.map((c) => (
-          <TreeNode key={'entry' in c ? c.entry.relPath : c.dir} node={c} indent={indent + 1} mainFile={mainFile} />
+          <TreeNode key={'entry' in c ? c.entry.relPath : c.dir} node={c} indent={indent + 1} ctx={ctx} />
         ))}
     </div>
   )
 }
 
-/** Sidebar — design §2: project header, FILES tree, OUTLINE, HISTORY. */
-export function Sidebar({ doc, files, blocks, history, activeBlock, onPickBlock }: Props): JSX.Element {
+interface MenuState {
+  x: number
+  y: number
+  path: string
+  kind: FileMenuKind
+  locked: boolean
+}
+
+/** Sidebar — design §2: project header, FILES tree (with v0.2 file management),
+ *  OUTLINE, HISTORY. */
+export function Sidebar({
+  doc,
+  files,
+  blocks,
+  history,
+  activeBlock,
+  onPickBlock,
+  onOpenFile,
+  onRename,
+  onDuplicate,
+  onDelete,
+  onCreateFile,
+  onCreateFolder,
+  lockedFiles,
+  renameOnAppear,
+  onRenameHandled
+}: Props): JSX.Element {
   const tree = buildFileTree(files)
   const outline = blocks.filter((b) => b.kind === 'section')
   const projectName = doc.root.split('/').pop() ?? doc.root
+
+  const [menu, setMenu] = useState<MenuState | null>(null)
+  const [renaming, setRenaming] = useState<string | null>(null)
+  const [forceOpen, setForceOpen] = useState<Set<string>>(new Set())
+
+  // Workspace created a file and asked for the type-the-name inline rename.
+  useEffect(() => {
+    if (renameOnAppear) {
+      setRenaming(renameOnAppear)
+      onRenameHandled?.()
+    }
+  }, [renameOnAppear, onRenameHandled])
+
+  const openMenu = (e: ReactMouseEvent, path: string, kind: FileMenuKind, locked: boolean): void => {
+    e.preventDefault()
+    e.stopPropagation()
+    setRenaming(null)
+    setMenu({ x: e.clientX, y: e.clientY, path, kind, locked })
+  }
+  const closeMenu = (): void => setMenu(null)
+
+  const commitRename = (path: string, value: string): void => {
+    setRenaming(null)
+    const next = value.trim()
+    const current = path.split('/').pop() ?? path
+    if (!next || next === current) return
+    onRename(path, composeSiblingPath(path, next))
+  }
+  const cancelRename = (): void => setRenaming(null)
+
+  const itemAction = (id: FileMenuId, path: string): void => {
+    switch (id) {
+      case 'open':
+        onOpenFile(path)
+        break
+      case 'rename':
+        setRenaming(path)
+        break
+      case 'duplicate':
+        onDuplicate(path)
+        break
+      case 'copyPath':
+        void navigator.clipboard?.writeText(path)
+        break
+      case 'delete':
+        onDelete(path)
+        break
+      case 'newFile':
+        setForceOpen((s) => new Set(s).add(path))
+        onCreateFile(path)
+        break
+      case 'newFolder':
+        setForceOpen((s) => new Set(s).add(path))
+        onCreateFolder(path)
+        break
+    }
+  }
+
+  const buildMenuItems = (path: string, kind: FileMenuKind, locked: boolean): ContextMenuEntry[] =>
+    menuItemsForKind(kind, { locked }).map((e): ContextMenuEntry =>
+      'sep' in e
+        ? e
+        : {
+            label: e.label,
+            icon: MENU_ICON[e.id],
+            kbd: e.kbd,
+            danger: e.danger,
+            disabled: e.disabled,
+            onSelect: () => itemAction(e.id, path)
+          }
+    )
+
+  const ctx: TreeCtx = {
+    mainFile: doc.mainFile,
+    lockedFiles,
+    menuPath: menu?.path ?? null,
+    renaming,
+    forceOpen,
+    openMenu,
+    commitRename,
+    cancelRename,
+    onFileClick: onOpenFile
+  }
+
+  const addBtn = (label: string, icon: ReactNode, onClick: () => void): JSX.Element => (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 20,
+        height: 20,
+        borderRadius: 'var(--radius-sm)',
+        border: 'none',
+        background: 'transparent',
+        color: 'var(--ink-400)',
+        cursor: 'pointer'
+      }}
+    >
+      {icon}
+    </button>
+  )
 
   return (
     <div
@@ -202,10 +485,29 @@ export function Sidebar({ doc, files, blocks, history, activeBlock, onPickBlock 
       </div>
 
       <div style={{ flex: 1, overflow: 'auto', padding: '14px 8px' }}>
-        <SectionLabel icon={<FileText size={12} />}>Files</SectionLabel>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 4px 6px' }}>
+          <span
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              color: 'var(--ink-400)',
+              font: 'var(--weight-bold) var(--text-2xs)/1 var(--font-sans)',
+              letterSpacing: 'var(--tracking-caps)',
+              textTransform: 'uppercase'
+            }}
+          >
+            <FileText size={12} />
+            Files
+          </span>
+          <span style={{ display: 'flex', gap: 2 }}>
+            {addBtn('New file', <Plus size={13} />, () => onCreateFile(''))}
+            {addBtn('New folder', <Folder size={13} />, () => onCreateFolder(''))}
+          </span>
+        </div>
         <div style={{ marginBottom: 18 }}>
           {tree.map((n) => (
-            <TreeNode key={'entry' in n ? n.entry.relPath : n.dir} node={n} indent={0} mainFile={doc.mainFile} />
+            <TreeNode key={'entry' in n ? n.entry.relPath : n.dir} node={n} indent={0} ctx={ctx} />
           ))}
         </div>
 
@@ -235,6 +537,15 @@ export function Sidebar({ doc, files, blocks, history, activeBlock, onPickBlock 
           ))}
         </div>
       </div>
+
+      {menu && (
+        <FileContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={buildMenuItems(menu.path, menu.kind, menu.locked)}
+          onClose={closeMenu}
+        />
+      )}
     </div>
   )
 }
