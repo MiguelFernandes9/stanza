@@ -972,3 +972,62 @@ and keep out of `ipc-registry.ts`. **Lane.** Main process — small/medium.
 **Test.** A source file changed on disk (outside an in-app save) triggers a
 recompile after the settle window; a build-artifact change (`.pdf` etc.)
 does not; an in-app save/accept doesn't double-fire.
+
+## BUG-25 — paragraph block box undershoots its last visual line
+
+The selection wash / overlay for a paragraph stops one line short — the
+final wrapped line (e.g. a paragraph ending "…with γ^μ the Dirac" then
+"matrices." alone) sits **below** the box. Surfaced by #39's solid per-task
+wash; the geometry limit is v0.1-era, **not a #39 regression**.
+
+**Root cause.** A block's per-page box bottom = `max(v)` over its source
+lines, and a synctex rect's bottom = `v` (the text **baseline**:
+`y = v − H`, `height = H` → `bottom = v`). Two ways the last visual line is
+lost:
+1. **SyncTeX drops the wrapped continuation.** When the *last source line*
+   wraps onto an extra PDF line, synctex sometimes records only ONE baseline
+   for that source line, so the union bottom = the **second-to-last** line's
+   baseline. Measured (ch1.tex paragraph span 107-136, page 6): in one
+   compile, line 136 forward-mapped to a **single** box at `v≈256.6` — the
+   same baseline as lines 134/135 — with the next paragraph a clear ~16pt
+   below (gap, no overlap), so "matrices." (one line lower) gets no box and
+   the union bottom lands a line high. (The demo recompiles live while
+   dogfooding, so exact `v` shifts compile-to-compile — in a later compile
+   line 136 *did* get two boxes 328.8/342.4; the dropped-line case is
+   intermittent, which is the point: the geometry must be robust to it.)
+2. **Bottom = baseline, not descender.** Even when the line *is* recorded,
+   `bottom = v` is the baseline, so descenders / the visual line bottom
+   always poke ~2-3pt out. Minor, always-present.
+
+`padBoxClamped` (selection wash, `SELECT_PAD` capped at half the gap below)
+can't recover a whole missing line. Both wash and overlay read `blockRects`,
+which flows through `resolveBoxOverlaps` — so one geometry fix covers both.
+
+**Fix (renderer geometry, `paperModel.ts`).** Generalize `resolveBoxOverlaps`
+(or add a sibling pass after it) to **settle small vertical gaps** between
+page-adjacent boxes, not just overlaps: for each adjacent top-to-bottom pair
+on a page, when the gap `bTop − aBottom` is **≤ ~1.8 × the upper box's
+line-height** (median rect `H` of box `a`), pull both to the gap midpoint
+(`aBottom = bTop = (aBottom + bTop)/2`) — exactly the midpoint move the
+overlap branch already does, extended to the small-gap case. This reclaims a
+synctex-dropped wrapped line **without** trusting synctex to record it, and
+**preserves genuine structural gaps** (before floats/equations/section
+breaks, or the last block on a page → no next neighbour) because they exceed
+the threshold. Key the threshold off the block's own line-height so it scales
+with font size. (Optional secondary: a small constant descender pad for
+mechanism #2 — defer unless the live gate still shows a sliver.)
+
+**Test (`paperModel.test.ts`).** (a) Two stacked boxes with a ~1-line gap
+(undershoot fixture: a `[…, bottom=256]` box above a `[top=272, …]` box,
+line-height ~13) settle so the upper bottom extends to the ~264 midpoint and
+the lower top rises to meet it. (b) Two boxes separated by a **large**
+structural gap (e.g. 40pt before a float) are left untouched. (c) The
+existing overlap case still meets at midpoint (no regression). (d) Single
+box / last-on-page → unchanged. Live gate (Miguel): the paragraph wash now
+reaches its true last line at real zoom.
+
+**⚠️ Sequencing.** Touches `paperModel.ts`, which `feat/v03-pane-bubbles`
+(#39, in review) also edits. **Branch off main *after* #39 merges** to avoid
+a `paperModel.ts`/`PaperPane.tsx` collision. No `PaperPane.tsx` change needed
+(it already calls `resolveBoxOverlaps`); keep the fix to `paperModel.ts` +
+its test. **Lane.** Renderer paper geometry — small.
