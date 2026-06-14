@@ -743,3 +743,58 @@ dup-proposal branch.
 **Test.** `paperModel`: a padded box whose neighbor is ≤ 2·pad away is
 clamped so the two don't overlap; an isolated block still gets full pad.
 **Lane.** Renderer paper geometry — small.
+
+## BUG-19 REOPENED (PR #30 incomplete) — figure box overlaps the paragraph BELOW
+
+PR #30 (`padBoxClamped` + `isTightAbove`) clamped the overlay *padding* but
+the overlap persists. Real boxes the renderer receives for ch2.tex page 6
+(measured by replicating `forward`/`parseViewOutput` per line):
+
+| block        | top   | bottom |
+|--------------|-------|--------|
+| PARA 6-9     | 315.7 | 352.7  |
+| FIGURE 11-16 | 364.7 | 595.4  |
+| PARA 18-20   | 585.6 | 622.5  |
+
+Two distinct defects:
+
+1. **Bottom (the real bug):** the figure's *raw, unpadded* box bottom
+   (595.4) already overlaps PARA-18's top (585.6) by ~10pt — a float's
+   `\end`/caption strut extends past where the next paragraph begins. PR
+   #30 can't touch this: it only trims the +5 pad, and worse, `gapBelow`
+   (`paperModel.ts:96`) counts only boxes **strictly below** (`n.y >= bottom`),
+   so the overlapping PARA-18 is treated as "nothing below" → `Infinity`
+   gap → full +5 pad → box bottom pushed to 600.4, overlapping *more*.
+2. **Top (the visible pill):** gap from FIGURE top (364.7) to PARA-6-9
+   bottom (352.7) is exactly **12.0pt**; `isTightAbove` uses
+   `TIGHT_GAP = 12` with strict `<`, so `12 < 12` is false → the pill stays
+   at `top:-9` and grazes the line above by ~2pt.
+
+**Root cause:** adjacent block *boxes* overlap in synctex layout
+coordinates (float struts vs the next paragraph's ascent). Clamping
+padding is insufficient — the box extents themselves must not overlap.
+
+**Fix.**
+1. **Resolve box-extent overlaps** (`paperModel.ts`): a
+   `resolveBoxOverlaps(rects: Map<string, PdfRect[]>)` that, per page,
+   sorts boxes by `y` and for any vertically-overlapping adjacent pair
+   sets their shared edge to the overlap **midpoint**
+   (`m = (a.bottom + b.top) / 2`; `a.height = m - a.y`; `b.y = m`,
+   `b.height = b.bottom - m`). Apply it in `PaperPane` right after
+   `setBlockRects`'s entries are built (`PaperPane.tsx:127-131`) so overlays,
+   `allBoxes`, selection and hover all consume non-overlapping boxes. After
+   this the figure bottom and PARA-18 top both land at ~590.5 — no overlap.
+2. **Defensive `gapBelow`/`gapAbove`:** treat an overlapping neighbor as
+   gap 0 (not `Infinity`), so `padBoxClamped` never pads into an overlap
+   even before resolution runs.
+3. **Pill threshold:** make `isTightAbove` trigger when the pill would
+   cross — raise `TIGHT_GAP` to the pill's upward extent (~18) or use `<=`
+   — so the `Σ` pill tucks inside whenever the gap above is ≤ a pill height.
+
+**Test.** `paperModel`: two vertically-overlapping block boxes are split
+at the midpoint with no overlap afterward; non-overlapping boxes are
+untouched; `gapBelow` returns 0 (not Infinity) for an overlapping neighbor.
+Repro fixture: figure 364.7–595.4 vs para 585.6–622.5 → figure bottom ≤
+para top after resolution. **Lane.** Renderer paper geometry
+(`paperModel.ts`, `PaperPane.tsx`) — small/medium. Conflict-free with the
+file-mgmt lanes (they don't touch `features/paper/*`).
