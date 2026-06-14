@@ -14,7 +14,8 @@ import {
   List,
   PenLine,
   Plus,
-  Trash2
+  Trash2,
+  Upload
 } from 'lucide-react'
 import type { BlockNode } from '@shared/blocks/types'
 import type { CommitInfo, DocumentInfo, FileEntry } from '@shared/ipc'
@@ -24,6 +25,9 @@ import { composeSiblingPath, menuItemsForKind } from './fileMenu'
 import type { FileMenuId, FileMenuKind } from './fileMenu'
 import { FileContextMenu } from './FileContextMenu'
 import type { ContextMenuEntry } from './FileContextMenu'
+import { OutlineTree } from './OutlineTree'
+import { useFileDrag } from './fileDrag'
+import type { FileDrag } from './fileDrag'
 
 interface Props {
   doc: DocumentInfo
@@ -42,6 +46,11 @@ interface Props {
   onDelete: (relPath: string) => void
   onCreateFile: (dir: string) => void
   onCreateFolder: (dir: string) => void
+  /** Upload files into a dir ('' = root) — main shows the OS picker (v0.4). */
+  onUpload: (dir: string) => void
+  /** Drag-drop move: relocate `from` into folder `toDir` ('' = root) — a
+   *  cross-dir rename (git mv). Workspace guards + applies it (v0.4). */
+  onMove: (from: string, toDir: string) => void
   /** Files whose Rename/Delete must be blocked — a busy/review task owns a
    *  block in them (UI mirror of the backend span lock). */
   lockedFiles: Set<string>
@@ -66,7 +75,8 @@ const MENU_ICON: Record<FileMenuId, ReactNode> = {
   copyPath: <Link size={15} />,
   delete: <Trash2 size={15} />,
   newFile: <Plus size={15} />,
-  newFolder: <Folder size={15} />
+  newFolder: <Folder size={15} />,
+  upload: <Upload size={15} />
 }
 
 function SectionLabel({ children, icon }: { children: ReactNode; icon: ReactNode }): JSX.Element {
@@ -101,6 +111,10 @@ interface RowProps {
   renameValue?: string
   onRenameCommit?: (value: string) => void
   onRenameCancel?: () => void
+  /** Drag source / drop target wiring (v0.4 drag-move) spread onto the row. */
+  dragProps?: ReturnType<FileDrag['sourceProps']>
+  dropProps?: ReturnType<FileDrag['targetProps']>
+  dropActive?: boolean
 }
 
 function Row({
@@ -116,7 +130,10 @@ function Row({
   renaming = false,
   renameValue,
   onRenameCommit,
-  onRenameCancel
+  onRenameCancel,
+  dragProps,
+  dropProps,
+  dropActive = false
 }: RowProps): JSX.Element {
   const [hover, setHover] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -129,6 +146,8 @@ function Row({
   const highlight = active || menuOpen
   return (
     <div
+      {...dragProps}
+      {...dropProps}
       onClick={renaming ? undefined : onClick}
       onContextMenu={onContextMenu}
       onMouseEnter={() => setHover(true)}
@@ -140,9 +159,19 @@ function Row({
         height: 28,
         padding: `0 8px 0 ${8 + indent * 14}px`,
         borderRadius: 'var(--radius-sm)',
-        background: highlight ? 'var(--clay-50)' : hover ? 'var(--hover-fill)' : 'transparent',
+        background: dropActive
+          ? 'var(--clay-50)'
+          : highlight
+            ? 'var(--clay-50)'
+            : hover
+              ? 'var(--hover-fill)'
+              : 'transparent',
         color: highlight ? 'var(--clay-700)' : 'var(--ink-600)',
-        boxShadow: menuOpen ? 'inset 0 0 0 1px var(--clay-200)' : 'none',
+        boxShadow: dropActive
+          ? 'inset 0 0 0 2px var(--clay-400)'
+          : menuOpen
+            ? 'inset 0 0 0 1px var(--clay-200)'
+            : 'none',
         cursor: 'pointer',
         userSelect: 'none'
       }}
@@ -232,6 +261,7 @@ interface TreeCtx {
   commitRename: (path: string, value: string) => void
   cancelRename: () => void
   onFileClick: (relPath: string) => void
+  drag: FileDrag
 }
 
 function TreeNode({ node, indent, ctx }: { node: FileTreeNode; indent: number; ctx: TreeCtx }): JSX.Element {
@@ -253,6 +283,7 @@ function TreeNode({ node, indent, ctx }: { node: FileTreeNode; indent: number; c
         onRenameCancel={ctx.cancelRename}
         onContextMenu={(e) => ctx.openMenu(e, relPath, 'file', ctx.lockedFiles.has(relPath))}
         onClick={() => ctx.onFileClick(relPath)}
+        dragProps={ctx.drag.sourceProps(relPath)}
       />
     )
   }
@@ -294,6 +325,9 @@ function DirNode({
         onRenameCancel={ctx.cancelRename}
         onContextMenu={(e) => ctx.openMenu(e, node.dir, 'dir', locked)}
         onClick={() => setOpen((o) => !o)}
+        dragProps={ctx.drag.sourceProps(node.dir)}
+        dropProps={ctx.drag.targetProps(node.dir)}
+        dropActive={ctx.drag.overDir === node.dir}
       />
       {open &&
         node.children.map((c) => (
@@ -327,13 +361,15 @@ export function Sidebar({
   onDelete,
   onCreateFile,
   onCreateFolder,
+  onUpload,
+  onMove,
   lockedFiles,
   renameOnAppear,
   onRenameHandled
 }: Props): JSX.Element {
   const tree = buildFileTree(files)
-  const outline = blocks.filter((b) => b.kind === 'section')
   const projectName = doc.root.split('/').pop() ?? doc.root
+  const drag = useFileDrag(onMove)
 
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
@@ -389,6 +425,10 @@ export function Sidebar({
         setForceOpen((s) => new Set(s).add(path))
         onCreateFolder(path)
         break
+      case 'upload':
+        setForceOpen((s) => new Set(s).add(path))
+        onUpload(path)
+        break
     }
   }
 
@@ -415,7 +455,8 @@ export function Sidebar({
     openMenu,
     commitRename,
     cancelRename,
-    onFileClick: onOpenFile
+    onFileClick: onOpenFile,
+    drag
   }
 
   const addBtn = (label: string, icon: ReactNode, onClick: () => void): JSX.Element => (
@@ -506,9 +547,17 @@ export function Sidebar({
           <span style={{ display: 'flex', gap: 2 }}>
             {addBtn('New file', <Plus size={13} />, () => onCreateFile(''))}
             {addBtn('New folder', <Folder size={13} />, () => onCreateFolder(''))}
+            {addBtn('Upload', <Upload size={13} />, () => onUpload(''))}
           </span>
         </div>
-        <div style={{ marginBottom: 18 }}>
+        <div
+          {...drag.targetProps('')}
+          style={{
+            marginBottom: 18,
+            borderRadius: 'var(--radius-sm)',
+            boxShadow: drag.overDir === '' ? 'inset 0 0 0 2px var(--clay-400)' : 'none'
+          }}
+        >
           {tree.map((n) => (
             <TreeNode key={'entry' in n ? n.entry.relPath : n.dir} node={n} indent={0} ctx={ctx} />
           ))}
@@ -516,15 +565,7 @@ export function Sidebar({
 
         <SectionLabel icon={<List size={12} />}>Outline</SectionLabel>
         <div style={{ marginBottom: 18 }}>
-          {outline.map((b) => (
-            <Row
-              key={b.id}
-              icon={<span style={{ font: 'var(--weight-semibold) 13px/1 var(--font-serif)' }}>§</span>}
-              label={b.name ?? 'Untitled section'}
-              active={activeBlock === b.id}
-              onClick={() => onPickBlock(b.id)}
-            />
-          ))}
+          <OutlineTree blocks={blocks} activeBlock={activeBlock} onPick={onPickBlock} />
         </div>
 
         <SectionLabel icon={<History size={12} />}>History</SectionLabel>
