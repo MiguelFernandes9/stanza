@@ -6,7 +6,8 @@ import type { ProcessRunner, ProcResult, RunSpec } from '../../infra/ProcessRunn
 import type { ClaudeStatus } from '../../../shared/ipc/claude'
 import type { DocumentInfo } from '../../../shared/ipc/document'
 import { Store } from '../../infra/Store'
-import { ClaudeService } from '../ClaudeService'
+import { ClaudeService, OP_SETTLE_GRACE_MS } from '../ClaudeService'
+import { EXTERNAL_SETTLE_MS } from '../../externalEditWatcher'
 
 const doc: DocumentInfo = {
   root: '/proj',
@@ -242,5 +243,62 @@ describe('ClaudeService.runOp', () => {
     await service.runOp({ instruction: 'x', spans: [] }, () => {})
 
     expect(runner.calls[0]!.cmd).toBe('/mocks/claude-mock.sh')
+  })
+})
+
+describe('ClaudeService.isRunning — op-in-flight guard (M2-2)', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  const make = (): ClaudeService =>
+    new ClaudeService(new MockRunner(() => claudeJson('x')), store, doc)
+
+  test('false before any op', () => {
+    expect(make().isRunning).toBe(false)
+  })
+
+  test('true from beginOp, then lingers past endOp until the settle grace elapses', () => {
+    const s = make()
+    s.beginOp()
+    expect(s.isRunning).toBe(true)
+    s.endOp()
+    // The external-edit watcher checks isBusy() at FIRE time, one settle window
+    // after capture()'s switchBack revert — the flag must outlive that window,
+    // not flip false the instant the op returns (M2-2 tail race).
+    expect(s.isRunning).toBe(true)
+    vi.advanceTimersByTime(OP_SETTLE_GRACE_MS - 1)
+    expect(s.isRunning).toBe(true)
+    vi.advanceTimersByTime(1)
+    expect(s.isRunning).toBe(false)
+  })
+
+  test('the linger grace outlasts the watcher settle window', () => {
+    expect(OP_SETTLE_GRACE_MS).toBeGreaterThan(EXTERNAL_SETTLE_MS)
+  })
+
+  test('a new op during the linger cancels the pending clear', () => {
+    const s = make()
+    s.beginOp()
+    s.endOp() // linger armed
+    vi.advanceTimersByTime(OP_SETTLE_GRACE_MS - 50)
+    s.beginOp() // second op starts before the linger expires
+    vi.advanceTimersByTime(100) // past the FIRST linger deadline
+    expect(s.isRunning).toBe(true) // still running — the clear was cancelled
+    s.endOp()
+    expect(s.isRunning).toBe(true)
+    vi.advanceTimersByTime(OP_SETTLE_GRACE_MS)
+    expect(s.isRunning).toBe(false)
+  })
+
+  test('nested begin/end stays running until the outermost endOp + grace', () => {
+    const s = make()
+    s.beginOp()
+    s.beginOp()
+    s.endOp()
+    expect(s.isRunning).toBe(true) // depth still > 0 — no linger yet
+    s.endOp()
+    expect(s.isRunning).toBe(true) // lingering
+    vi.advanceTimersByTime(OP_SETTLE_GRACE_MS)
+    expect(s.isRunning).toBe(false)
   })
 })

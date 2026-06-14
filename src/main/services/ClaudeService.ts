@@ -3,9 +3,18 @@ import type { ClaudeRequest, ClaudeStatus } from '../../shared/ipc/claude'
 import type { DocumentInfo } from '../../shared/ipc/document'
 import type { ProcessRunner, ProcResult } from '../infra/ProcessRunner'
 import type { Store } from '../infra/Store'
+import { EXTERNAL_SETTLE_MS } from '../externalEditWatcher'
 import { opPrompt, primePrompt } from './prompts'
 
 const DEFAULT_TIMEOUT_MS = 120_000
+
+/** How long `isRunning` stays true after the last op step (`endOp`). An op
+ *  writes the .tex twice — Claude's edit, then capture()'s switchBack revert —
+ *  and the external-edit watcher fires its recompile one settle window after
+ *  the LAST of those, i.e. AFTER endOp. The flag must outlive that fire or the
+ *  unsolicited recompile strands the task bubble (M2-2). One settle window plus
+ *  margin for filesystem-event delivery jitter. */
+export const OP_SETTLE_GRACE_MS = EXTERNAL_SETTLE_MS + 250
 
 /** One Claude Code CLI session per document: primed on first op,
  *  resumed for every op after (also across app restarts via Store).
@@ -16,13 +25,50 @@ const DEFAULT_TIMEOUT_MS = 120_000
  *  op behind this same method (spec §11). */
 export class ClaudeService {
   private queue: Promise<unknown> = Promise.resolve()
+  /** Active op-in-flight depth; > 0 between beginOp and its endOp. */
+  private opDepth = 0
+  /** Set after the last endOp, holding `isRunning` true through the watcher's
+   *  settle tail; cleared (and nulled) when it expires or a new op begins. */
+  private lingerTimer: ReturnType<typeof setTimeout> | null = null
 
   constructor(
     private runner: ProcessRunner,
     private store: Store,
     private doc: DocumentInfo,
     private timeoutMs: number = DEFAULT_TIMEOUT_MS,
+    private opSettleGraceMs: number = OP_SETTLE_GRACE_MS,
   ) {}
+
+  /** True while a Claude op (and its post-op capture/revert settle tail) is in
+   *  flight. The external-edit watcher ORs this into its busy guard so the op's
+   *  own .tex writes — including capture()'s switchBack revert — don't trigger
+   *  an unsolicited recompile mid-op (M2-2). */
+  get isRunning(): boolean {
+    return this.opDepth > 0 || this.lingerTimer !== null
+  }
+
+  /** Mark a Claude op as started (call before the op writes any file). */
+  beginOp(): void {
+    this.opDepth++
+    if (this.lingerTimer) {
+      clearTimeout(this.lingerTimer)
+      this.lingerTimer = null
+    }
+  }
+
+  /** Mark a Claude op as finished (call in a finally AFTER capture()). Keeps
+   *  `isRunning` true for one settle-grace window so the watcher's debounced
+   *  fire, scheduled off the switchBack revert, still sees the op as busy. */
+  endOp(): void {
+    this.opDepth = Math.max(0, this.opDepth - 1)
+    if (this.opDepth > 0) return
+    if (this.lingerTimer) clearTimeout(this.lingerTimer)
+    this.lingerTimer = setTimeout(() => {
+      this.lingerTimer = null
+    }, this.opSettleGraceMs)
+    // Don't let the linger timer keep the process alive on shutdown.
+    this.lingerTimer.unref?.()
+  }
 
   /** Establish the session without running an op (priming pipeline).
    *  The signal aborts the underlying CLI call (prime:cancel). */
