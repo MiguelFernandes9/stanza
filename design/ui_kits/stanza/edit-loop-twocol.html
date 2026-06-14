@@ -1,0 +1,57 @@
+<!-- @dsCard group="Stanza App" viewport="1320x824" name="Edit loop — two-column paper" subtitle="Claude bubbles route to the margin nearest each block's column · left + right in parallel" -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Stanza — two-column edit loop</title>
+<link rel="stylesheet" href="../../styles.css" />
+<style>
+  html, body { height: 100%; margin: 0; background: var(--surface-canvas); }
+  #root { height: 100vh; overflow: hidden; }
+  *::-webkit-scrollbar { width: 11px; height: 11px; }
+  *::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 999px; border: 3px solid transparent; background-clip: content-box; }
+  *::-webkit-scrollbar-thumb:hover { background: var(--line-ink); background-clip: content-box; }
+  *::-webkit-scrollbar-track { background: transparent; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="../../_ds_bundle.js"></script>
+<script src="icons.jsx"></script>
+<script src="paperData.js"></script>
+<script type="text/babel" data-presets="react" src="TitleBar.jsx"></script>
+<script type="text/babel" data-presets="react" src="Sidebar.jsx"></script>
+<script type="text/babel" data-presets="react" src="PdfPane.jsx"></script>
+<script type="text/babel" data-presets="react" src="PdfPaneTwoCol.jsx"></script>
+<script type="text/babel" data-presets="react" src="ChatPane.jsx"></script>
+<script type="text/babel" data-presets="react" src="SourceEditor.jsx"></script>
+<script type="text/babel" data-presets="react" src="OpenScreen.jsx"></script>
+<script type="text/babel" data-presets="react" src="Workspace.jsx"></script>
+<script type="text/babel" data-presets="react">
+  const paper = window.STZ_PAPER2;
+  // Two parallel tasks, one per column — left bubble under review, right
+  // bubble still running — so the side-routing is visible at a glance.
+  const preset = {
+    sourceOpen: false,
+    chatOpen: false,
+    tasks: [
+      { id: 1, blockIds: ['l-p2'], instruction: 'Make the contrast with prior work explicit.',
+        phase: 'review', proposal: paper.proposals['l-p2'] },
+      { id: 2, blockIds: ['r-p2'], instruction: 'Lead with the headline result; tighten the throughput numbers.',
+        phase: 'busy', proposal: null }
+    ],
+    activeTask: 1,
+    messages: [
+      { role: 'claude', text: 'Document primed — 15 blocks across 5 files. Click a block; bubbles appear in the margin nearest its column.' }
+    ]
+  };
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    React.createElement(window.Workspace, { preset, paper, Pane: window.PdfPaneTwoCol, onCloseDoc: () => {} })
+  );
+</script>
+</body>
+</html>

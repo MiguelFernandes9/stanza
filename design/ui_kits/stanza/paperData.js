@@ -110,4 +110,94 @@
       diff: '@@ -3,7 +3,6 @@\n Authors of technical documents think in terms of what they\n-see \u2014 a paragraph, an equation, a figure \u2014 not in terms of line\n-numbers in a source file. Yet every editing tool asks them to\n-translate between the two. The model is good and works well in\n-many cases, but the translation step is a persistent source of\n-friction.\n+see \u2014 a paragraph, an equation, a figure \u2014 not line numbers in a\n+source file. Yet editors force them to translate between the two,\n+a persistent source of friction we remove in \\S2.'
     }
   };
+
+  /* ---- A TWO-COLUMN paper (NeurIPS/IEEE-style). Blocks carry a column
+     hint (full | l | r) so the edit loop can hang each Claude bubble in
+     the margin nearest its column. ---- */
+  window.STZ_PAPER2 = {
+    project: 'sparse-routing',
+    mainFile: 'main.tex',
+    twoColumn: true,
+    files: [
+      { path: 'main.tex', active: true },
+      { path: 'macros.tex' },
+      { path: 'refs.bib' },
+      { dir: 'sections', open: true, children: [
+        { path: 'sections/intro.tex' },
+        { path: 'sections/method.tex' },
+        { path: 'sections/experiments.tex' }
+      ] },
+      { dir: 'figures', children: [
+        { path: 'figures/routing.pdf' },
+        { path: 'figures/scaling.png' }
+      ] }
+    ],
+    blocks: [
+      { id: 'title', kind: 'title', col: 'full', file: 'main.tex', span: '14–16',
+        text: 'Sparse Routing for Long-Context Attention' },
+      { id: 'authors', kind: 'authors', col: 'full', file: 'main.tex', span: '18–21',
+        text: 'A. Reis¹    M. Fernandes¹    J. Costa²' },
+      { id: 'affil', kind: 'affil', col: 'full', file: 'main.tex', span: '22',
+        text: '¹Instituto Superior Técnico    ²INESC-ID' },
+      { id: 'abs-h', kind: 'abshead', col: 'full', file: 'main.tex', span: '26', text: 'Abstract', sec: 'abs' },
+      { id: 'abstract', kind: 'abstract', col: 'full', file: 'main.tex', span: '27–34', sec: 'abs',
+        text: 'Attention over long contexts is dominated by the quadratic cost of all-pairs interaction. We introduce a learned router that sends each query to a sparse set of key blocks, reducing cost to near-linear while retaining the accuracy of dense attention. The router is trained end-to-end and adds no inference-time hyperparameters.' },
+
+      { id: 's1-h', kind: 'section', col: 'l', file: 'sections/intro.tex', span: '1', text: '1   Introduction', sec: 's1' },
+      { id: 'l-p1', kind: 'paragraph', col: 'l', file: 'sections/intro.tex', span: '3–11', sec: 's1',
+        text: 'Transformer attention compares every query with every key, so the cost grows with the square of the sequence length. For documents, codebases, and long dialogues this quickly dominates both compute and memory, and a range of sparse and low-rank schemes have been proposed to contain it.' },
+      { id: 'l-p2', kind: 'paragraph', col: 'l', file: 'sections/intro.tex', span: '13–19', sec: 's1',
+        text: 'Most such schemes fix the sparsity pattern in advance. We instead learn which key blocks each query should attend to, letting the model spend its budget where it matters and adapt the pattern per input.' },
+      { id: 's2-h', kind: 'section', col: 'l', file: 'sections/method.tex', span: '1', text: '2   Method', sec: 's2' },
+      { id: 'l-p3', kind: 'paragraph', col: 'l', file: 'sections/method.tex', span: '3–12', sec: 's2',
+        text: 'Keys are partitioned into contiguous blocks. For each query a lightweight router scores every block and selects the top-k; attention is then computed only against the selected blocks. The score is a dot product against a learned block summary, so routing adds negligible overhead.' },
+
+      { id: 'r-eq', kind: 'equation', col: 'r', file: 'sections/method.tex', span: '14–16',
+        text: 'router(q) = top-k( qᵀS )', num: '2' },
+      { id: 'r-p1', kind: 'paragraph', col: 'r', file: 'sections/method.tex', span: '18–25', sec: 's2',
+        text: 'Here S holds one summary vector per key block. Because the top-k operation is not differentiable, we train the router with a straight-through estimator and a small load-balancing penalty that discourages collapse onto a few blocks.' },
+      { id: 's3-h', kind: 'section', col: 'r', file: 'sections/experiments.tex', span: '1', text: '3   Experiments', sec: 's3' },
+      { id: 'r-p2', kind: 'paragraph', col: 'r', file: 'sections/experiments.tex', span: '3–10', sec: 's3',
+        text: 'On long-context language modeling the router matches dense attention within 0.2 perplexity while attending to a quarter of the keys. End-to-end throughput improves 2.3× at 32k tokens, and the gap widens with sequence length.' },
+      { id: 'r-fig', kind: 'figure', col: 'r', file: 'sections/experiments.tex', span: '12–15',
+        text: 'Figure 1: Perplexity vs. attended-key fraction. The router (clay) tracks dense attention down to ~25% of keys.' }
+    ],
+    proposals: {
+      'l-p2': {
+        note: 'Made the contrast with prior work explicit and named the contribution (learned, per-input routing) up front.',
+        files: ['sections/intro.tex'],
+        before: [
+          ['d', 'Most such schemes fix the sparsity pattern in advance.'],
+          ['k', ' We instead learn which key blocks each query should attend to, letting the model spend its budget where it matters '],
+          ['d', 'and adapt the pattern per input.']
+        ],
+        after: [
+          ['a', 'Prior schemes fix the sparsity pattern in advance and cannot adapt to the input.'],
+          ['k', ' We instead learn which key blocks each query should attend to, letting the model spend its budget where it matters '],
+          ['a', '— a pattern chosen per query, end-to-end.']
+        ],
+        diff: '@@ -13,7 +13,7 @@\n-Most such schemes fix the sparsity pattern in advance. We\n-instead learn which key blocks each query should attend to,\n-letting the model spend its budget where it matters and adapt\n-the pattern per input.\n+Prior schemes fix the sparsity pattern in advance and cannot\n+adapt to the input. We instead learn which key blocks each query\n+should attend to, letting the model spend its budget where it\n+matters; a pattern chosen per query, end-to-end.'
+      },
+      'r-p2': {
+        note: 'Led with the headline result and tightened the throughput claim.',
+        files: ['sections/experiments.tex'],
+        before: [
+          ['k', 'On long-context language modeling the router matches dense attention within 0.2 perplexity while attending to a quarter of the keys. '],
+          ['d', 'End-to-end throughput improves 2.3× at 32k tokens, and the gap widens with sequence length.']
+        ],
+        after: [
+          ['k', 'On long-context language modeling the router matches dense attention within 0.2 perplexity while attending to a quarter of the keys. '],
+          ['a', 'Throughput improves 2.3× at 32k tokens and 3.1× at 64k, so the advantage grows with context length.']
+        ],
+        diff: '@@ -3,8 +3,8 @@\n On long-context language modeling the router matches dense\n attention within 0.2 perplexity while attending to a quarter of\n-the keys. End-to-end throughput improves 2.3x at 32k tokens, and\n-the gap widens with sequence length.\n+the keys. Throughput improves 2.3x at 32k tokens and 3.1x at\n+64k, so the advantage grows with context length.'
+      },
+      default: {
+        note: 'Applied the requested edit; cross-references and equation labels preserved.',
+        files: ['main.tex'],
+        before: [['k', 'We introduce a learned router that sends each query to a sparse set of key blocks, '], ['d', 'reducing cost to near-linear while retaining the accuracy of dense attention.']],
+        after: [['k', 'We introduce a learned router that sends each query to a sparse set of key blocks, '], ['a', 'cutting attention cost to near-linear at no measurable loss in accuracy.']],
+        diff: '@@ -27,3 +27,3 @@\n a learned router that sends each query to a sparse set of key\n-blocks, reducing cost to near-linear while retaining the\n-accuracy of dense attention.\n+blocks, cutting attention cost to near-linear at no measurable\n+loss in accuracy.'
+      }
+    }
+  };
 })();

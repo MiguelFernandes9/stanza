@@ -4,6 +4,27 @@ The iteration ledger between this design system and the implementation.
 Each entry is a designed, reviewable unit. Claude Code: implement against a
 version tag; report drift or constraints back as notes under that version.
 
+## v0.2 — 2026-06-13 — File-tree management
+Adds direct file management to the workspace sidebar.
+
+- **File context menu**: right-click any file or folder row in the FILES
+  tree for a cursor-anchored, viewport-clamped menu (`stz-fade-up`,
+  shadow-xl, `--border-strong`). File items: Open · Rename · Duplicate ·
+  Copy path · Delete. Folder items: New file · New folder · Rename · Copy
+  path · Delete. Delete is destructive-styled (`--del-*`). Dismisses on
+  outside click / Esc / scroll / resize.
+- **Inline rename**: in-row `<input>` (clay focus ring), Enter commits,
+  Esc/blur cancels; folder rename rewrites descendant paths; open tabs +
+  `activeFile` stay in sync.
+- **Duplicate / Delete / New (nested)**: all mutate the `files` state via a
+  recursive `mapNode` helper; delete closes any tabs it covered; nested
+  New file/folder auto-expand the parent.
+- Spec updated in `design_handoff_edit_loop/README.md` (Sidebar → File
+  context menu; Interactions → File management).
+
+### Implementation notes (Claude Code: append here)
+- _none yet_
+
 ## v0.1 — 2026-06-12 — Stable initial version
 First complete interaction design. Spec: `design_handoff_edit_loop/README.md`.
 
@@ -26,70 +47,7 @@ First complete interaction design. Spec: `design_handoff_edit_loop/README.md`.
   marks) | Source (diff) toggle; Accept ⌘↵ / Reject; esc closes.
 
 ### Implementation notes (Claude Code: append here)
-- Recents rows show no relative-time meta — `RecentProject` in the frozen
-  contract carries no timestamp (fields: root, name, hasSession, blockCount).
-- Priming overlay Cancel only dismisses the overlay; the contract has no
-  abort channel for an in-flight open/prime. Needs a backend channel if
-  real cancel is wanted.
-- TitleBar uses native macOS traffic lights (hiddenInset window), not the
-  drawn dots; the design's lights-close-document gesture is deferred.
-- FD4 page renders deterministic filler text — the real compiled page
-  arrives with F5 (pdf.js); only block geometry drives the rail.
-- Card "Review" (maximize) button deferred to FD5 with the overlay itself;
-  the inline DiffHunk on the card carries review until then.
-- `document:open` gained an optional `{root}` request payload so recents
-  rows can open a specific project (additive; channel name unchanged).
-- FD5 review overlay: the Compiled view is HTML-typeset prose from
-  review:fileAt before/after with word-level `diffWords` marks — NOT a real
-  second PDF. Non-prose hunks (LaTeX environments) auto-fall back to Source.
-- Multi-file proposals (open question above): answered by stacking one
-  DiffHunk per file in the Source view, split from the unified diff.
-- Card "Review" button now opens the FD5 overlay (earlier deferral lifted).
-- Priming cancel (earlier note): `prime:cancel` channel added to the
-  contract, manager-approved; the UI calls it best-effort — the handler is
-  a backend follow-up. Plain-folder opens also emit no prime:status events
-  yet (only document:create wires them) — backend follow-up flagged.
-- FD6 chat pane rebuilds history from claude:history op records; user
-  messages show no block chips (OpRecord carries no spans). Composer chips
-  reflect live compose tasks only.
-- F5 supersedes the filler-page note: the pane renders the real compiled
-  PDF (pdf.js) with BlockOverlay hit-areas from synctex:forward rects; the
-  filler page survives only as the pre-first-compile fallback. Changed-page
-  detection is visible-page virtualization (operator-list hashing skipped).
-  Zoom control is live (50–200%). Synctex rect y-origin assumed top-left —
-  verify against the fixture in the E2E pass.
-- F4 editor: codemirror-lang-latex (lezer) over legacy stex; design's
-  pending-edit line wash not implemented (needs review-state line ranges).
-- Contract additions this lane: document:read (working-tree content — the
-  editor cannot load files otherwise) alongside the earlier prime:cancel.
-- New document (cleanup lane): the design mock faked the new-document path;
-  the real flow now collects a validated name + a parent folder in a
-  NewDocumentDialog before document:create (backend needs an absolute dir).
-  Adds dialog:pickDirectory — a bare folder picker, since document:open's
-  picker would open the chosen folder as a project. Name input gets the
-  native autoFocus (the ported Input doesn't forward refs — left untouched).
-- Defensive file-match: synctex-inverse and compile-error paths are resolved
-  to known project files by suffix, so an absolute/realpath regression still
-  jumps and still marks the gutter rather than silently missing.
-- No-op ops (real-claude finding): an op that returns no proposal (Claude
-  refused as out-of-span, or made no changes) used to remove the task
-  silently — the note reached only the hidden chat pane, so working span
-  discipline read as "app did nothing". New terminal task phase `noop`: the
-  card auto-expands showing "Claude made no changes" + the note + Dismiss;
-  its block is not locked. The ⌘J assistant toggle carries a clay badge dot
-  while notes are unread (cleared on open). Design addition beyond v0.1 —
-  the mock had no terminal-no-change card.
-- Stale PDF after compile (L5): the pane held the previous render because the
-  page-proxy cache was keyed only by page number, so a recompile's new
-  document reused stale proxies. The cache is now dropped when the pdf swaps,
-  and the cache-busting nonce bumps on every compile:status ok (not only the
-  ⌘R path). Acceptance: edit → debounce → pane updates with no reload.
-- Fast-scroll renderer white-out (L6): virtualized pages now hold a bounded
-  window — proxies/canvases outside visible ±1 are evicted (proxy.cleanup +
-  zeroed canvas backing store), dpr capped at 2, scroll coalesced to one
-  range update per frame. Main process catches render-process-gone and
-  reloads; the open document survives in main, so the renderer restores into
-  the workspace via document:current (contract addition).
+- _none yet_
 
 ## Unreleased / open design questions
 - Multi-file proposals: per-file diff tabs in review overlay?

@@ -7,9 +7,12 @@
   const I = window.Icons;
 
   const GLYPH = { section: '§', paragraph: '¶', equation: '∑', figure: '❏', table: '▦', citation: '†', title: '§' };
-  const RAIL = 316;   // margin-card column width
-  const GAP = 22;     // gap between rail and page
-  const PAGE = 564;   // page width
+  const PAGE_W = 576;        // A4 proportion (1 : √2)
+  const PAGE_H = 815;
+  const GAP = 16;            // gap between a bubble and the page edge
+  const FULL_W = 224;        // left-margin width that fits a full bubble
+  const CHIP_W = 116;        // ...that fits a compact chip (else: pin)
+  const MIN_ZOOM = 0.4, MAX_ZOOM = 1.6;
 
   function blockLabel(b) {
     if (b.kind === 'section') return b.text.replace(/^\d+\s+/, '');
@@ -26,64 +29,58 @@
     return `${file}:${Math.min(...nums)}–${Math.max(...nums)}`;
   }
 
+  // Per-state color: blue = draft · clay = editing · green = proposal ready.
+  function phaseTone(phase) {
+    if (phase === 'review') return { accent: 'var(--add-600)', tint: 'var(--add-bg)', wash: 'rgba(60,138,93,0.13)', edge: 'rgba(60,138,93,0.5)' };
+    if (phase === 'busy') return { accent: 'var(--clay-400)', tint: 'var(--clay-50)', wash: 'var(--select-fill)', edge: 'var(--select-edge)' };
+    return { accent: 'var(--blue-500)', tint: 'var(--blue-50)', wash: 'rgba(61,110,156,0.10)', edge: 'rgba(61,110,156,0.45)' };
+  }
+
   function Block({ b, mark, hovered, onEnter, onLeave, onClick, refCb }) {
-    // mark: { phase, active } when the block belongs to a task; null otherwise.
-    // Quiet by default — an edge bar in the page margin; full wash only for
-    // the ACTIVE task's block, so many parallel tasks stay readable.
-    const barColor = mark ? (mark.phase === 'review' ? 'var(--clay-500)' : mark.phase === 'busy' ? 'var(--clay-400)' : 'var(--clay-300)') : 'transparent';
     const locked = mark && (mark.phase === 'busy' || mark.phase === 'review');
     const base = {
       position: 'relative', cursor: mark && mark.phase === 'busy' ? 'progress' : 'pointer',
       borderRadius: 'var(--radius-sm)',
       transition: 'background var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out)',
-      boxShadow: mark && mark.active ? 'inset 0 0 0 1.5px var(--select-edge)'
-        : hovered ? 'inset 0 0 0 1px var(--hover-edge)' : 'inset 0 0 0 1px transparent',
-      background: mark && mark.active ? 'var(--select-fill)' : hovered ? 'var(--hover-fill)' : 'transparent'
+      boxShadow: 'none',
+      background: 'transparent'
     };
 
     let inner = null;
     const serif = 'var(--font-serif)';
     if (b.kind === 'title') {
-      inner = <div style={{ font: `var(--weight-semibold) 25px/1.18 ${serif}`, color: 'var(--ink-900)', textAlign: 'center', letterSpacing: '-0.01em' }}>{b.text}</div>;
+      inner = <div style={{ font: `var(--weight-semibold) 20px/1.18 ${serif}`, color: 'var(--ink-900)', textAlign: 'center', letterSpacing: '-0.01em' }}>{b.text}</div>;
     } else if (b.kind === 'section' && b.heading) {
-      inner = <div style={{ font: `var(--weight-semibold) 15px/1.3 ${serif}`, color: 'var(--ink-900)', textAlign: 'center' }}>{b.text}</div>;
+      inner = <div style={{ font: `var(--weight-semibold) 12.5px/1.3 ${serif}`, color: 'var(--ink-900)', textAlign: 'center' }}>{b.text}</div>;
     } else if (b.kind === 'section') {
-      inner = <div style={{ font: `var(--weight-semibold) 17px/1.3 ${serif}`, color: 'var(--ink-900)' }}>{b.text}</div>;
+      inner = <div style={{ font: `var(--weight-semibold) 14px/1.3 ${serif}`, color: 'var(--ink-900)' }}>{b.text}</div>;
     } else if (b.kind === 'equation') {
       inner = (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 14, padding: '4px 0' }}>
-          <span style={{ font: `italic var(--weight-regular) 16px/1.5 ${serif}`, color: 'var(--ink-900)' }}
+          <span style={{ font: `italic var(--weight-regular) 13.5px/1.5 ${serif}`, color: 'var(--ink-900)' }}
             dangerouslySetInnerHTML={{ __html: b.text.replace(/\\mathcal\{B\}/g, '\u212C').replace(/\\textsf\{(\w+)\}/g, '<span style="font-style:normal">$1</span>').replace(/\\longmapsto/g, '\u27FC').replace(/\\,|\\;/g, ' ').replace(/\\ell/g, '\u2113') }} />
-          <span style={{ font: `15px/1 ${serif}`, color: 'var(--ink-500)' }}>({b.num})</span>
+          <span style={{ font: `13px/1 ${serif}`, color: 'var(--ink-500)' }}>({b.num})</span>
         </div>
       );
     } else {
       const indent = (b.id === 's1-p1' || b.id === 's2-p1') ? '1.4em' : '0';
-      inner = <div style={{ font: `var(--weight-regular) 14.5px/1.62 ${serif}`, color: b.id === 'affil' ? 'var(--ink-500)' : 'var(--ink-900)', textAlign: b.id === 'authors' || b.id === 'affil' ? 'center' : 'justify', textIndent: indent, fontStyle: b.id === 'affil' ? 'italic' : 'normal' }}>{b.text}</div>;
+      inner = <div style={{ font: `var(--weight-regular) 12px/1.5 ${serif}`, color: b.id === 'affil' ? 'var(--ink-500)' : 'var(--ink-900)', textAlign: b.id === 'authors' || b.id === 'affil' ? 'center' : 'justify', textIndent: indent, fontStyle: b.id === 'affil' ? 'italic' : 'normal' }}>{b.text}</div>;
     }
 
     return (
       <div ref={refCb} onMouseEnter={onEnter} onMouseLeave={onLeave} onClick={onClick}
-        style={{ ...base, padding: '5px 8px', margin: '0 -8px' }}>
-        {/* margin edge bar — the quiet “this block has a task” marker */}
-        {mark && (
-          <span style={{ position: 'absolute', left: -26, top: 3, bottom: 3, width: 3, borderRadius: 2, background: barColor }} />
-        )}
-        {hovered && (
+        style={{ ...base, padding: '5px 10px', margin: '0 -10px' }}>
+        {hovered && !mark && (
           <span style={{
             position: 'absolute', top: -9, left: -1, zIndex: 2,
             display: 'inline-flex', alignItems: 'center', gap: 4, height: 17, padding: '0 6px',
-            background: locked ? 'var(--ink-500)' : 'var(--ink-700)',
+            background: 'var(--ink-700)',
             color: '#fff', borderRadius: 'var(--radius-pill)',
             font: 'var(--weight-semibold) 9.5px/1 var(--font-sans)', letterSpacing: '0.02em',
             boxShadow: 'var(--shadow-sm)', pointerEvents: 'none', whiteSpace: 'nowrap'
           }}>
-            {locked
-              ? <I.Lock size={10} />
-              : <span style={{ fontFamily: 'var(--font-serif)', fontSize: 11 }}>{GLYPH[b.kind] || '§'}</span>}
-            {locked
-              ? (mark.phase === 'busy' ? 'Claude editing — locked' : 'awaiting review')
-              : `${b.file.split('/').pop()}:${b.span}`}
+            <span style={{ fontFamily: 'var(--font-serif)', fontSize: 11 }}>{GLYPH[b.kind] || '§'}</span>
+            {`${b.file.split('/').pop()}:${b.span}`}
           </span>
         )}
         {inner}
@@ -93,10 +90,13 @@
 
   // One margin card = one Claude task. Only the ACTIVE task expands; the
   // rest collapse to one-line chips so a crowded rail stays scannable.
-  function TaskCard({ task, blocks, expanded, adding, onToggleAdding, onRemoveBlock, onActivate, onUpdate, onSubmit, onDismiss, onResolve, onOpenReview, refCb }) {
+  function TaskCard({ task, blocks, expanded, adding, side = 'left', onToggleAdding, onRemoveBlock, onActivate, onUpdate, onSubmit, onDismiss, onResolve, onOpenReview, refCb }) {
+    const conn = side === 'right' ? { left: -GAP } : { right: -GAP };
     const taRef = React.useRef(null);
     React.useEffect(() => { if (expanded && task.phase === 'compose' && taRef.current) taRef.current.focus(); }, [task.phase, expanded]);
     const phaseColor = task.phase === 'review' ? 'var(--clay-500)' : task.phase === 'busy' ? 'var(--clay-400)' : 'var(--line-ink)';
+    // distinct icon per state: ✎ draft · ✦ editing · ✓ proposal ready
+    const PhaseIcon = task.phase === 'review' ? I.Check : task.phase === 'busy' ? I.Sparkles : I.PenLine;
     const b0 = blocks[0];
     // a "section task" = exactly the full block set of one section
     const allPaper = window.STZ_PAPER.blocks;
@@ -108,23 +108,21 @@
     if (!expanded) {
       return (
         <div ref={refCb} onClick={onActivate} style={{ position: 'relative', cursor: 'pointer' }}>
-          <div style={{ position: 'absolute', top: 16, right: -GAP, width: GAP, height: 1.5, background: phaseColor, opacity: 0.4 }} />
           <div style={{
-            display: 'flex', alignItems: 'center', gap: 7, height: 32, padding: '0 10px',
+            display: 'flex', alignItems: 'center', gap: 7, height: 32, padding: '0 10px', overflow: 'hidden',
             background: task.phase === 'review' ? 'var(--clay-50)' : 'var(--surface-overlay)',
             border: `1px solid ${task.phase === 'review' ? 'var(--clay-200)' : 'var(--border-default)'}`,
             borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-xs)'
           }}>
             {task.phase === 'busy'
               ? <span style={{ width: 6, height: 6, flex: '0 0 auto', borderRadius: '50%', background: 'var(--clay-400)', animation: 'stz-pulse 1s var(--ease-in-out) infinite' }} />
-              : <I.Sparkles size={12} style={{ color: phaseColor, flex: '0 0 auto' }} />}
-            <span style={{ font: 'var(--weight-semibold) var(--text-2xs)/1 var(--font-sans)', color: task.phase === 'review' ? 'var(--clay-700)' : 'var(--ink-600)', whiteSpace: 'nowrap' }}>
+              : <PhaseIcon size={12} style={{ color: phaseColor, flex: '0 0 auto' }} />}
+            <span style={{ flex: '0 0 auto', font: 'var(--weight-semibold) var(--text-2xs)/1 var(--font-sans)', color: task.phase === 'review' ? 'var(--clay-700)' : 'var(--ink-600)', whiteSpace: 'nowrap' }}>
               {task.phase === 'review' ? 'Proposal ready' : task.phase === 'busy' ? 'Editing…' : 'Draft edit'}
             </span>
-            <span style={{ flex: 1, minWidth: 0, font: 'var(--text-2xs)/1.3 var(--font-sans)', color: 'var(--ink-400)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontStyle: 'italic' }}>
-              {task.instruction ? `“${task.instruction}”` : ''}
+            <span style={{ flex: 1, minWidth: 0, font: 'var(--text-2xs)/1.3 var(--font-mono)', color: 'var(--ink-400)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontStyle: task.instruction ? 'italic' : 'normal' }}>
+              {task.instruction ? `“${task.instruction}”` : spanRef}
             </span>
-            <span style={{ flex: '0 0 auto', font: 'var(--text-2xs)/1 var(--font-mono)', color: 'var(--ink-400)' }}>{spanRef}</span>
           </div>
         </div>
       );
@@ -132,8 +130,6 @@
 
     return (
       <div ref={refCb} style={{ position: 'relative' }}>
-        {/* connector to the page */}
-        <div style={{ position: 'absolute', top: 18, right: -GAP, width: GAP, height: 1.5, background: phaseColor, opacity: 0.55 }} />
         <div style={{
           background: 'var(--surface-overlay)', border: '1px solid var(--border-strong)',
           borderRadius: 'var(--radius-lg)', boxShadow: 'var(--shadow-md)',
@@ -141,7 +137,7 @@
         }}>
           {/* header */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-            <I.Sparkles size={13} style={{ color: phaseColor, flex: '0 0 auto' }} />
+            <PhaseIcon size={13} style={{ color: phaseColor, flex: '0 0 auto' }} />
             <span style={{ font: 'var(--weight-semibold) var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-800)', letterSpacing: 'var(--tracking-caps)', textTransform: 'uppercase' }}>
               {task.phase === 'review' ? 'Proposed change' : task.phase === 'busy' ? 'Editing' : 'Edit with Claude'}
             </span>
@@ -220,20 +216,35 @@
             </div>
           )}
 
-          {task.phase === 'review' && (
-            <div>
-              <div style={{ font: 'var(--text-sm)/1.5 var(--font-sans)', color: 'var(--ink-600)', margin: '0 1px 8px' }}>{task.proposal.note}</div>
-              <div style={{ maxHeight: 192, overflow: 'auto', borderRadius: 'var(--radius-md)' }}>
-                <DiffHunk file={task.proposal.files[0]} diff={task.proposal.diff} compact />
+          {task.phase === 'review' && (() => {
+            const ls = (task.proposal.diff || '').split('\n');
+            let a = 0, d = 0;
+            for (const l of ls) { if (l[0] === '+' && l[1] !== '+') a++; else if (l[0] === '-' && l[1] !== '-') d++; }
+            return (
+              <div>
+                <div style={{ font: 'var(--text-sm)/1.5 var(--font-sans)', color: 'var(--ink-600)', margin: '0 1px 9px' }}>{task.proposal.note}</div>
+                <button onClick={onOpenReview} style={{
+                  display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left', cursor: 'pointer',
+                  padding: '8px 10px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-default)',
+                  background: 'var(--surface-card)', marginBottom: 10
+                }}>
+                  <I.FileText size={13} style={{ color: 'var(--ink-400)', flex: '0 0 auto' }} />
+                  <span style={{ font: 'var(--text-2xs)/1 var(--font-mono)', color: 'var(--ink-600)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{task.proposal.files[0]}</span>
+                  <span style={{ display: 'inline-flex', gap: 7, marginLeft: 'auto', flex: '0 0 auto' }}>
+                    <span style={{ font: 'var(--weight-semibold) var(--text-2xs)/1 var(--font-mono)', color: 'var(--add-600)' }}>+{a}</span>
+                    <span style={{ font: 'var(--weight-semibold) var(--text-2xs)/1 var(--font-mono)', color: 'var(--del-600)' }}>−{d}</span>
+                  </span>
+                  <I.Maximize size={12} style={{ color: 'var(--ink-400)', flex: '0 0 auto' }} />
+                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <Button size="sm" variant="primary" iconLeft={<I.Check size={13} />} onClick={() => onResolve('accept')}>Accept</Button>
+                  <Button size="sm" variant="secondary" iconLeft={<I.X size={13} />} onClick={() => onResolve('reject')}>Reject</Button>
+                  <div style={{ flex: 1 }} />
+                  <IconButton size="sm" label="Open full review" onClick={onOpenReview}><I.Maximize size={14} /></IconButton>
+                </div>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 9 }}>
-                <Button size="sm" variant="primary" iconLeft={<I.Check size={13} />} onClick={() => onResolve('accept')}>Accept</Button>
-                <Button size="sm" variant="secondary" iconLeft={<I.X size={13} />} onClick={() => onResolve('reject')}>Reject</Button>
-                <div style={{ flex: 1 }} />
-                <Button size="sm" variant="subtle" iconLeft={<I.Maximize size={12} />} onClick={onOpenReview}>Review</Button>
-              </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
       </div>
     );
@@ -320,36 +331,115 @@
   function PdfPane({ paper, tasks, blocksOf, activeTask, onActivateTask, adding, onToggleAdding, onRemoveBlockFromTask, selected, onToggleBlock, view, onView, onUpdateTask, onSubmitTask, onDismissTask, onResolveTask }) {
     const [hover, setHover] = React.useState(null);
     const [reviewId, setReviewId] = React.useState(null);
+    const [openIds, setOpenIds] = React.useState([]);
+    const [zoom, setZoom] = React.useState(1);
+    const [containerW, setContainerW] = React.useState(900);
+    const [pageNatH, setPageNatH] = React.useState(0);
+    const [tops, setTops] = React.useState({});
+    const [anchors, setAnchors] = React.useState({});
+    const [selRects, setSelRects] = React.useState([]);
+    const [fontsReady, setFontsReady] = React.useState(0);
     const reviewTask = tasks.find((t) => t.id === reviewId && t.phase === 'review');
-    // block id → { phase, active } for the quiet margin markers
     const marks = {};
-    for (const t of tasks) for (const id of t.blockIds) marks[id] = { phase: t.phase, active: t.id === activeTask };
-    const wrapRef = React.useRef(null);
+    for (const t of tasks) for (const id of t.blockIds) marks[id] = { phase: t.phase, active: t.id === activeTask, taskId: t.id };
+
+    const scrollRef = React.useRef(null);
+    const pageRef = React.useRef(null);
     const blockEls = React.useRef({});
     const cardEls = React.useRef({});
-    const [tops, setTops] = React.useState({});
+    const didFit = React.useRef(false);
+    const autoOpened = React.useRef(new Set());
 
-    // Align cards with their blocks; stack on collision.
+    const RAIL = 326, GAPX = 30, PAD = 28;
+
     React.useLayoutEffect(() => {
-      const wrap = wrapRef.current;
-      if (!wrap) return;
-      const wTop = wrap.getBoundingClientRect().top;
-      const ideal = tasks
-        .map((t) => {
-          const el = blockEls.current[t.blockIds[0]];
-          return { id: t.id, top: el ? el.getBoundingClientRect().top - wTop - 4 : 0 };
-        })
-        .sort((a, b) => a.top - b.top || (a.id === undefined ? 0 : 0));
-      let cursor = 0;
-      const next = {};
+      const sc = scrollRef.current;
+      if (!sc || typeof ResizeObserver === 'undefined') return;
+      const measure = () => {
+        setContainerW(sc.clientWidth);
+        if (pageRef.current) setPageNatH(pageRef.current.offsetHeight);
+      };
+      if (!didFit.current) {
+        didFit.current = true;
+        const z = Math.max(MIN_ZOOM, Math.min(1, (sc.clientWidth - RAIL - GAPX - PAD * 2 - 40) / PAGE_W));
+        setZoom(z);
+      }
+      measure();
+      const ro = new ResizeObserver(measure);
+      ro.observe(sc);
+      if (pageRef.current) ro.observe(pageRef.current);
+      return () => ro.disconnect();
+    }, []);
+
+    // Stack cards in the rail, aligned to their blocks; keep each block's own
+    // y (anchor) for the connector line.
+    // Stack only the OPEN cards (collision); keep every block's y (anchor) for
+    // icon placement and connector starts.
+    React.useLayoutEffect(() => {
+      const anc = {};
+      for (const t of tasks) {
+        const el = blockEls.current[t.blockIds[0]];
+        anc[t.id] = el ? el.offsetTop * zoom : 0;
+      }
+      const ideal = tasks.filter((t) => openIds.includes(t.id))
+        .map((t) => ({ id: t.id, top: anc[t.id] }))
+        .sort((a, b) => a.top - b.top);
+      let cursor = 0; const next = {};
       for (const it of ideal) {
-        const h = (cardEls.current[it.id] && cardEls.current[it.id].offsetHeight) || 120;
+        const h = (cardEls.current[it.id] && cardEls.current[it.id].offsetHeight) || 90;
         const top = Math.max(it.top, cursor);
-        next[it.id] = top;
-        cursor = top + h + 14;
+        next[it.id] = top; cursor = top + h + 14;
       }
       setTops((prev) => JSON.stringify(prev) === JSON.stringify(next) ? prev : next);
+      setAnchors((prev) => JSON.stringify(prev) === JSON.stringify(anc) ? prev : anc);
+
+      // Selection overlay rects: one per contiguous run of same-task blocks,
+      // measured from the live block positions so the PDF itself never changes.
+      const rects = []; let gi = 0;
+      while (gi < paper.blocks.length) {
+        const m0 = marks[paper.blocks[gi].id];
+        if (m0) {
+          let gj = gi, top = null, bottom = null;
+          while (gj < paper.blocks.length && marks[paper.blocks[gj].id] && marks[paper.blocks[gj].id].taskId === m0.taskId) {
+            const el = blockEls.current[paper.blocks[gj].id];
+            if (el) { const t = el.offsetTop, bt = el.offsetTop + el.offsetHeight; if (top === null || t < top) top = t; if (bottom === null || bt > bottom) bottom = bt; }
+            gj++;
+          }
+          if (top !== null) rects.push({ key: m0.taskId + '@' + gi, taskId: m0.taskId, phase: m0.phase, active: m0.active, top, height: bottom - top });
+          gi = gj;
+        } else gi++;
+      }
+      setSelRects((prev) => JSON.stringify(prev) === JSON.stringify(rects) ? prev : rects);
+    }, [zoom, tasks, pageNatH, containerW, openIds, activeTask, fontsReady]);
+
+    // The page has a fixed height, so its ResizeObserver never fires when the
+    // webfont swaps in and the blocks reflow — re-measure once fonts are ready.
+    React.useLayoutEffect(() => {
+      if (typeof document !== 'undefined' && document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(() => setFontsReady((n) => n + 1));
+      }
+    }, []);
+
+    const zoomBy = (d) => setZoom((z) => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, +(z + d).toFixed(2))));
+
+    // A draft (compose) opens ONCE on creation so it's editable; after that the
+    // user can freely collapse it.
+    React.useLayoutEffect(() => {
+      const fresh = tasks.filter((t) => t.phase === 'compose' && !autoOpened.current.has(t.id));
+      if (fresh.length) {
+        fresh.forEach((c) => autoOpened.current.add(c.id));
+        setOpenIds((s) => [...s, ...fresh.map((c) => c.id).filter((id) => !s.includes(id))]);
+      }
     });
+
+    // Consistent at every zoom: each task is a clear icon badge pinned to the
+
+    const pageW = PAGE_W * zoom, pageH = (pageNatH || PAGE_H) * zoom;
+    const pageLeft = Math.max(PAD, (containerW - pageW) / 2);   // centered in the pane
+    const pageRightX = pageLeft + pageW;
+    const railLeft = pageRightX + GAPX;
+    const cW = Math.max(containerW, railLeft + RAIL + PAD);
+    const contentH = Math.max(pageH + PAD * 2, 240);
 
     return (
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: 'var(--surface-canvas)' }}>
@@ -366,53 +456,107 @@
           <SegmentedControl size="sm" value={view} onChange={onView}
             options={[{ value: 'read', label: 'Read' }, { value: 'select', label: 'Select blocks' }]} />
           <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginLeft: 4 }}>
-            <IconButton size="sm" label="Zoom out"><I.ZoomOut size={15} /></IconButton>
-            <span style={{ font: 'var(--text-2xs)/1 var(--font-mono)', color: 'var(--ink-400)', width: 32, textAlign: 'center' }}>110%</span>
-            <IconButton size="sm" label="Zoom in"><I.ZoomIn size={15} /></IconButton>
+            <IconButton size="sm" label="Zoom out" onClick={() => zoomBy(-0.1)}><I.ZoomOut size={15} /></IconButton>
+            <div style={{ font: 'var(--text-2xs)/1 var(--font-mono)', color: 'var(--ink-400)', width: 38, textAlign: 'center' }}>{Math.round(zoom * 100)}%</div>
+            <IconButton size="sm" label="Zoom in" onClick={() => zoomBy(0.1)}><I.ZoomIn size={15} /></IconButton>
           </div>
         </div>
 
-        {/* page scroll area: margin rail (cards) + page */}
-        <div style={{ flex: 1, overflow: 'auto', padding: '26px 24px 40px' }}>
-          <div ref={wrapRef} style={{ position: 'relative', width: RAIL + GAP + PAGE, margin: '0 auto', minHeight: '100%' }}>
-            {/* margin rail */}
-            {tasks.map((t) => (
-              <div key={t.id} style={{ position: 'absolute', left: 0, top: tops[t.id] ?? 0, width: RAIL, zIndex: t.id === activeTask ? 6 : 5, transition: 'top var(--dur-base, 200ms) var(--ease-out)' }}>
-                <TaskCard task={t} blocks={blocksOf(t)}
-                  expanded={t.id === activeTask}
+        {/* the compiled page is the hero; a right rail lists every task, each
+            linked to its block by a connector line. */}
+        <div ref={scrollRef} style={{ flex: 1, overflow: 'auto', background: 'var(--surface-canvas)' }}>
+          <div style={{ position: 'relative', width: cW, height: contentH, minHeight: '100%' }}>
+            {/* connector lines: one per open bubble */}
+            <svg width={cW} height={contentH} style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', overflow: 'visible' }}>
+              {tasks.filter((t) => openIds.includes(t.id)).map((t) => {
+                const tn = phaseTone(t.phase);
+                const by = PAD + (anchors[t.id] ?? 0) + 12;
+                const cy = PAD + (tops[t.id] ?? 0) + 22;
+                const mx = pageRightX + (railLeft - pageRightX) / 2;
+                return <path key={t.id} d={`M ${pageRightX} ${by} C ${mx} ${by}, ${mx} ${cy}, ${railLeft} ${cy}`} fill="none" stroke={tn.accent} strokeWidth={2} opacity={0.7} />;
+              })}
+            </svg>
+
+            {/* the page */}
+            <div style={{ position: 'absolute', left: pageLeft, top: PAD, width: pageW, height: pageH }}>
+              <div ref={pageRef} style={{
+                width: PAGE_W, height: PAGE_H, transform: `scale(${zoom})`, transformOrigin: 'top left',
+                background: '#fff', border: '1px solid var(--border-default)', borderRadius: 3,
+                boxShadow: 'var(--shadow-page)', padding: '46px 52px 40px', overflow: 'hidden',
+                display: 'flex', flexDirection: 'column', gap: 8, position: 'relative'
+              }}>
+                {/* selection overlay — sits behind the text; the page itself is
+                    never restyled, so selecting never reflows the document. */}
+                {selRects.map((r) => {
+                  const tn = phaseTone(r.phase);
+                  const showPill = hover && marks[hover] && marks[hover].taskId === r.taskId;
+                  const ptxt = r.phase === 'busy' ? 'Claude editing — locked' : r.phase === 'review' ? 'Awaiting review' : 'Editing block';
+                  return (
+                    <React.Fragment key={r.key}>
+                      <div style={{ position: 'absolute', left: 42, right: 42, top: r.top, height: r.height, borderRadius: 'var(--radius-sm)', background: r.active ? tn.wash : tn.tint, boxShadow: r.active ? `inset 3px 0 0 ${tn.accent}, inset 0 0 0 1px ${tn.edge}` : `inset 3px 0 0 ${tn.accent}`, pointerEvents: 'none', zIndex: 0 }} />
+                      {showPill && (
+                        <span style={{ position: 'absolute', left: 44, top: r.top - 9, zIndex: 2, display: 'inline-flex', alignItems: 'center', gap: 4, height: 17, padding: '0 6px', background: r.phase === 'busy' ? 'var(--ink-500)' : tn.accent, color: '#fff', borderRadius: 'var(--radius-pill)', font: 'var(--weight-semibold) 9.5px/1 var(--font-sans)', boxShadow: 'var(--shadow-sm)', pointerEvents: 'none', whiteSpace: 'nowrap' }}>
+                          {r.phase !== 'compose' && <I.Lock size={10} />}{ptxt}
+                        </span>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+                {view === 'select' && hover && !marks[hover] && blockEls.current[hover] && (
+                  <div style={{ position: 'absolute', left: 42, right: 42, top: blockEls.current[hover].offsetTop, height: blockEls.current[hover].offsetHeight, borderRadius: 'var(--radius-sm)', background: 'var(--hover-fill)', boxShadow: 'inset 0 0 0 1px var(--hover-edge)', pointerEvents: 'none', zIndex: 0 }} />
+                )}
+                {paper.blocks.map((b) => (
+                  <React.Fragment key={b.id}>
+                    <Block b={b} mark={marks[b.id] || null} hovered={view === 'select' && hover === b.id}
+                      refCb={(el) => { blockEls.current[b.id] = el; }}
+                      onEnter={() => setHover(b.id)} onLeave={() => setHover((h) => h === b.id ? null : h)}
+                      onClick={(e) => view === 'select' && onToggleBlock(b.id, e)} />
+                    {b.id === 'affil' && <div style={{ height: 1, background: 'var(--border-faint)', margin: '6px 0' }} />}
+                  </React.Fragment>
+                ))}
+                <div style={{ flex: 1, minHeight: 24 }} />
+                <div style={{ textAlign: 'center', font: '12px/1 var(--font-serif)', color: 'var(--ink-300)' }}>1</div>
+              </div>
+            </div>
+
+            {/* state icons at the page's right edge — always visible, click to
+                open that task's bubble (keeps the paper uncluttered). */}
+            <div style={{ position: 'absolute', top: 0, left: 0 }}>
+              {tasks.map((t) => {
+                const tn = phaseTone(t.phase);
+                const Icon = t.phase === 'review' ? I.Check : t.phase === 'busy' ? I.Sparkles : I.PenLine;
+                const label = t.phase === 'review' ? 'Proposal ready' : t.phase === 'busy' ? 'Editing…' : 'Draft edit';
+                const isOpen = openIds.includes(t.id);
+                return (
+                  <button key={t.id} onClick={() => setOpenIds((s) => isOpen ? s.filter((x) => x !== t.id) : [...s, t.id])} aria-label={label}
+                    title={`${label}${t.instruction ? ' — ' + t.instruction : ''}`}
+                    style={{ position: 'absolute', left: pageRightX - 13, top: PAD + (anchors[t.id] ?? 0), width: 28, height: 28, borderRadius: '50%',
+                      border: '2px solid var(--paper-2)', padding: 0, background: tn.accent, color: '#fff',
+                      boxShadow: isOpen ? `0 0 0 3px ${tn.edge}, var(--shadow-md)` : 'var(--shadow-md)', cursor: 'pointer',
+                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center', transform: isOpen ? 'scale(1.08)' : 'none',
+                      transition: 'top var(--dur-base, 200ms) var(--ease-out)', zIndex: 6,
+                      animation: t.phase === 'busy' ? 'stz-pulse 1.1s var(--ease-in-out) infinite' : 'none' }}>
+                    <Icon size={14} />
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* open bubbles, each aligned to its icon (stacked if they collide) */}
+            {tasks.filter((t) => openIds.includes(t.id)).map((t) => (
+              <div key={t.id} ref={(el) => { cardEls.current[t.id] = el; }}
+                style={{ position: 'absolute', left: railLeft, top: PAD + (tops[t.id] ?? 0), width: RAIL, zIndex: 7, transition: 'top var(--dur-base, 200ms) var(--ease-out)' }}>
+                <TaskCard task={t} blocks={blocksOf(t)} expanded
+                  onActivate={() => {}}
+                  onDismiss={() => { onDismissTask(t.id); setOpenIds((s) => s.filter((x) => x !== t.id)); }}
+                  onResolve={(v) => { onResolveTask(t.id, v); setOpenIds((s) => s.filter((x) => x !== t.id)); }}
                   adding={adding} onToggleAdding={onToggleAdding}
                   onRemoveBlock={(bid) => onRemoveBlockFromTask(t.id, bid)}
-                  onActivate={() => onActivateTask(t.id)}
-                  refCb={(el) => { cardEls.current[t.id] = el; }}
                   onUpdate={(patch) => onUpdateTask(t.id, patch)}
                   onSubmit={() => onSubmitTask(t.id)}
-                  onDismiss={() => onDismissTask(t.id)}
-                  onResolve={(v) => onResolveTask(t.id, v)}
                   onOpenReview={() => setReviewId(t.id)} />
               </div>
             ))}
-
-            {/* the page */}
-            <div style={{
-              marginLeft: RAIL + GAP, width: PAGE,
-              background: 'var(--paper-2)',
-              border: '1px solid var(--border-default)',
-              borderRadius: 4,
-              boxShadow: 'var(--shadow-lg)',
-              padding: '52px 56px 60px',
-              display: 'flex', flexDirection: 'column', gap: 11
-            }}>
-              {paper.blocks.map((b) => (
-                <React.Fragment key={b.id}>
-                  <Block b={b} mark={marks[b.id] || null} hovered={view === 'select' && hover === b.id}
-                    refCb={(el) => { blockEls.current[b.id] = el; }}
-                    onEnter={() => setHover(b.id)} onLeave={() => setHover((h) => h === b.id ? null : h)}
-                    onClick={(e) => view === 'select' && onToggleBlock(b.id, e)} />
-                  {b.id === 'affil' && <div style={{ height: 1, background: 'var(--border-faint)', margin: '6px 0' }} />}
-                </React.Fragment>
-              ))}
-              <div style={{ marginTop: 10, textAlign: 'center', font: '11px/1 var(--font-serif)', color: 'var(--ink-300)' }}>1</div>
-            </div>
           </div>
         </div>
 
@@ -426,4 +570,6 @@
   }
 
   window.PdfPane = PdfPane;
+  // Shared parts reused by the two-column pane.
+  window.StanzaPdfParts = { Block, TaskCard, ReviewOverlay, blockLabel, combineSpan, GLYPH };
 })();

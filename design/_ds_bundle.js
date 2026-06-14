@@ -1,4 +1,4 @@
-/* @ds-bundle: {"format":3,"namespace":"StanzaDesignSystem_d6c63d","components":[{"name":"Avatar","sourcePath":"components/data/Avatar.jsx"},{"name":"Card","sourcePath":"components/data/Card.jsx"},{"name":"Kbd","sourcePath":"components/data/Kbd.jsx"},{"name":"SegmentedControl","sourcePath":"components/data/SegmentedControl.jsx"},{"name":"Badge","sourcePath":"components/feedback/Badge.jsx"},{"name":"StatusDot","sourcePath":"components/feedback/StatusDot.jsx"},{"name":"Toast","sourcePath":"components/feedback/Toast.jsx"},{"name":"Tooltip","sourcePath":"components/feedback/Tooltip.jsx"},{"name":"Button","sourcePath":"components/forms/Button.jsx"},{"name":"Checkbox","sourcePath":"components/forms/Checkbox.jsx"},{"name":"IconButton","sourcePath":"components/forms/IconButton.jsx"},{"name":"Input","sourcePath":"components/forms/Input.jsx"},{"name":"Switch","sourcePath":"components/forms/Switch.jsx"},{"name":"BlockTag","sourcePath":"components/stanza/BlockTag.jsx"},{"name":"CompilePill","sourcePath":"components/stanza/CompilePill.jsx"},{"name":"DiffHunk","sourcePath":"components/stanza/DiffHunk.jsx"},{"name":"DiffLine","sourcePath":"components/stanza/DiffLine.jsx"}],"sourceHashes":{"components/data/Avatar.jsx":"532563507cb6","components/data/Card.jsx":"6ba85a696fde","components/data/Kbd.jsx":"90779b422016","components/data/SegmentedControl.jsx":"1049c6c22a88","components/feedback/Badge.jsx":"3939308e5155","components/feedback/StatusDot.jsx":"2d437aa1e237","components/feedback/Toast.jsx":"d42a715c28f9","components/feedback/Tooltip.jsx":"d58e1298bc1d","components/forms/Button.jsx":"c7b893bdecf6","components/forms/Checkbox.jsx":"33aaeac5374c","components/forms/IconButton.jsx":"4201bff5e45d","components/forms/Input.jsx":"6934a0b4c565","components/forms/Switch.jsx":"74da3c40712a","components/stanza/BlockTag.jsx":"9fbc4137de48","components/stanza/CompilePill.jsx":"c705c8f10620","components/stanza/DiffHunk.jsx":"fc71aeea63f3","components/stanza/DiffLine.jsx":"268b9ccfda8d","ui_kits/stanza/ChatPane.jsx":"0fd64781decd","ui_kits/stanza/OpenScreen.jsx":"72f5a1f2273c","ui_kits/stanza/PdfPane.jsx":"3478196a6c81","ui_kits/stanza/Sidebar.jsx":"034fcea2fa09","ui_kits/stanza/SourceEditor.jsx":"8a4cdb2e4da3","ui_kits/stanza/TitleBar.jsx":"5aa9156e8e94","ui_kits/stanza/Workspace.jsx":"fcaf253c405d","ui_kits/stanza/app.jsx":"5766b98224dc","ui_kits/stanza/icons.jsx":"13f6071f3803","ui_kits/stanza/paperData.js":"b614969872d5"},"inlinedExternals":[],"unexposedExports":[]} */
+/* @ds-bundle: {"format":3,"namespace":"StanzaDesignSystem_d6c63d","components":[{"name":"Avatar","sourcePath":"components/data/Avatar.jsx"},{"name":"Card","sourcePath":"components/data/Card.jsx"},{"name":"Kbd","sourcePath":"components/data/Kbd.jsx"},{"name":"SegmentedControl","sourcePath":"components/data/SegmentedControl.jsx"},{"name":"Badge","sourcePath":"components/feedback/Badge.jsx"},{"name":"StatusDot","sourcePath":"components/feedback/StatusDot.jsx"},{"name":"Toast","sourcePath":"components/feedback/Toast.jsx"},{"name":"Tooltip","sourcePath":"components/feedback/Tooltip.jsx"},{"name":"Button","sourcePath":"components/forms/Button.jsx"},{"name":"Checkbox","sourcePath":"components/forms/Checkbox.jsx"},{"name":"IconButton","sourcePath":"components/forms/IconButton.jsx"},{"name":"Input","sourcePath":"components/forms/Input.jsx"},{"name":"Switch","sourcePath":"components/forms/Switch.jsx"},{"name":"BlockTag","sourcePath":"components/stanza/BlockTag.jsx"},{"name":"CompilePill","sourcePath":"components/stanza/CompilePill.jsx"},{"name":"DiffHunk","sourcePath":"components/stanza/DiffHunk.jsx"},{"name":"DiffLine","sourcePath":"components/stanza/DiffLine.jsx"}],"sourceHashes":{"components/data/Avatar.jsx":"532563507cb6","components/data/Card.jsx":"6ba85a696fde","components/data/Kbd.jsx":"90779b422016","components/data/SegmentedControl.jsx":"1049c6c22a88","components/feedback/Badge.jsx":"3939308e5155","components/feedback/StatusDot.jsx":"2d437aa1e237","components/feedback/Toast.jsx":"d42a715c28f9","components/feedback/Tooltip.jsx":"d58e1298bc1d","components/forms/Button.jsx":"c7b893bdecf6","components/forms/Checkbox.jsx":"33aaeac5374c","components/forms/IconButton.jsx":"4201bff5e45d","components/forms/Input.jsx":"6934a0b4c565","components/forms/Switch.jsx":"74da3c40712a","components/stanza/BlockTag.jsx":"9fbc4137de48","components/stanza/CompilePill.jsx":"c705c8f10620","components/stanza/DiffHunk.jsx":"fc71aeea63f3","components/stanza/DiffLine.jsx":"268b9ccfda8d","ui_kits/stanza/ChatPane.jsx":"0fd64781decd","ui_kits/stanza/OpenScreen.jsx":"72f5a1f2273c","ui_kits/stanza/PdfPane.jsx":"3217522d322f","ui_kits/stanza/PdfPaneTwoCol.jsx":"b385cfe9cfac","ui_kits/stanza/Sidebar.jsx":"3efc6dcf6430","ui_kits/stanza/SourceEditor.jsx":"3bcd3cdf34ad","ui_kits/stanza/TitleBar.jsx":"5aa9156e8e94","ui_kits/stanza/Workspace.jsx":"d0a6cf55bfbd","ui_kits/stanza/app.jsx":"5766b98224dc","ui_kits/stanza/icons.jsx":"e257892786fc","ui_kits/stanza/paperData.js":"5b5953ec1668"},"inlinedExternals":[],"unexposedExports":[]} */
 
 (() => {
 
@@ -2356,10 +2356,13 @@ try { (() => {
     citation: '†',
     title: '§'
   };
-  const RAIL = 316; // margin-card column width
-  const GAP = 22; // gap between rail and page
-  const PAGE = 564; // page width
-
+  const PAGE_W = 576; // A4 proportion (1 : √2)
+  const PAGE_H = 815;
+  const GAP = 16; // gap between a bubble and the page edge
+  const FULL_W = 224; // left-margin width that fits a full bubble
+  const CHIP_W = 116; // ...that fits a compact chip (else: pin)
+  const MIN_ZOOM = 0.4,
+    MAX_ZOOM = 1.6;
   function blockLabel(b) {
     if (b.kind === 'section') return b.text.replace(/^\d+\s+/, '');
     if (b.kind === 'equation') return `eq (${b.num})`;
@@ -2379,6 +2382,28 @@ try { (() => {
     const nums = blocks.flatMap(b => String(b.span).split('–').map(s => parseInt(s, 10))).filter(n => !isNaN(n));
     return `${file}:${Math.min(...nums)}–${Math.max(...nums)}`;
   }
+
+  // Per-state color: blue = draft · clay = editing · green = proposal ready.
+  function phaseTone(phase) {
+    if (phase === 'review') return {
+      accent: 'var(--add-600)',
+      tint: 'var(--add-bg)',
+      wash: 'rgba(60,138,93,0.13)',
+      edge: 'rgba(60,138,93,0.5)'
+    };
+    if (phase === 'busy') return {
+      accent: 'var(--clay-400)',
+      tint: 'var(--clay-50)',
+      wash: 'var(--select-fill)',
+      edge: 'var(--select-edge)'
+    };
+    return {
+      accent: 'var(--blue-500)',
+      tint: 'var(--blue-50)',
+      wash: 'rgba(61,110,156,0.10)',
+      edge: 'rgba(61,110,156,0.45)'
+    };
+  }
   function Block({
     b,
     mark,
@@ -2388,25 +2413,21 @@ try { (() => {
     onClick,
     refCb
   }) {
-    // mark: { phase, active } when the block belongs to a task; null otherwise.
-    // Quiet by default — an edge bar in the page margin; full wash only for
-    // the ACTIVE task's block, so many parallel tasks stay readable.
-    const barColor = mark ? mark.phase === 'review' ? 'var(--clay-500)' : mark.phase === 'busy' ? 'var(--clay-400)' : 'var(--clay-300)' : 'transparent';
     const locked = mark && (mark.phase === 'busy' || mark.phase === 'review');
     const base = {
       position: 'relative',
       cursor: mark && mark.phase === 'busy' ? 'progress' : 'pointer',
       borderRadius: 'var(--radius-sm)',
       transition: 'background var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out)',
-      boxShadow: mark && mark.active ? 'inset 0 0 0 1.5px var(--select-edge)' : hovered ? 'inset 0 0 0 1px var(--hover-edge)' : 'inset 0 0 0 1px transparent',
-      background: mark && mark.active ? 'var(--select-fill)' : hovered ? 'var(--hover-fill)' : 'transparent'
+      boxShadow: 'none',
+      background: 'transparent'
     };
     let inner = null;
     const serif = 'var(--font-serif)';
     if (b.kind === 'title') {
       inner = /*#__PURE__*/React.createElement("div", {
         style: {
-          font: `var(--weight-semibold) 25px/1.18 ${serif}`,
+          font: `var(--weight-semibold) 20px/1.18 ${serif}`,
           color: 'var(--ink-900)',
           textAlign: 'center',
           letterSpacing: '-0.01em'
@@ -2415,7 +2436,7 @@ try { (() => {
     } else if (b.kind === 'section' && b.heading) {
       inner = /*#__PURE__*/React.createElement("div", {
         style: {
-          font: `var(--weight-semibold) 15px/1.3 ${serif}`,
+          font: `var(--weight-semibold) 12.5px/1.3 ${serif}`,
           color: 'var(--ink-900)',
           textAlign: 'center'
         }
@@ -2423,7 +2444,7 @@ try { (() => {
     } else if (b.kind === 'section') {
       inner = /*#__PURE__*/React.createElement("div", {
         style: {
-          font: `var(--weight-semibold) 17px/1.3 ${serif}`,
+          font: `var(--weight-semibold) 14px/1.3 ${serif}`,
           color: 'var(--ink-900)'
         }
       }, b.text);
@@ -2438,7 +2459,7 @@ try { (() => {
         }
       }, /*#__PURE__*/React.createElement("span", {
         style: {
-          font: `italic var(--weight-regular) 16px/1.5 ${serif}`,
+          font: `italic var(--weight-regular) 13.5px/1.5 ${serif}`,
           color: 'var(--ink-900)'
         },
         dangerouslySetInnerHTML: {
@@ -2446,7 +2467,7 @@ try { (() => {
         }
       }), /*#__PURE__*/React.createElement("span", {
         style: {
-          font: `15px/1 ${serif}`,
+          font: `13px/1 ${serif}`,
           color: 'var(--ink-500)'
         }
       }, "(", b.num, ")"));
@@ -2454,7 +2475,7 @@ try { (() => {
       const indent = b.id === 's1-p1' || b.id === 's2-p1' ? '1.4em' : '0';
       inner = /*#__PURE__*/React.createElement("div", {
         style: {
-          font: `var(--weight-regular) 14.5px/1.62 ${serif}`,
+          font: `var(--weight-regular) 12px/1.5 ${serif}`,
           color: b.id === 'affil' ? 'var(--ink-500)' : 'var(--ink-900)',
           textAlign: b.id === 'authors' || b.id === 'affil' ? 'center' : 'justify',
           textIndent: indent,
@@ -2469,20 +2490,10 @@ try { (() => {
       onClick: onClick,
       style: {
         ...base,
-        padding: '5px 8px',
-        margin: '0 -8px'
+        padding: '5px 10px',
+        margin: '0 -10px'
       }
-    }, mark && /*#__PURE__*/React.createElement("span", {
-      style: {
-        position: 'absolute',
-        left: -26,
-        top: 3,
-        bottom: 3,
-        width: 3,
-        borderRadius: 2,
-        background: barColor
-      }
-    }), hovered && /*#__PURE__*/React.createElement("span", {
+    }, hovered && !mark && /*#__PURE__*/React.createElement("span", {
       style: {
         position: 'absolute',
         top: -9,
@@ -2493,7 +2504,7 @@ try { (() => {
         gap: 4,
         height: 17,
         padding: '0 6px',
-        background: locked ? 'var(--ink-500)' : 'var(--ink-700)',
+        background: 'var(--ink-700)',
         color: '#fff',
         borderRadius: 'var(--radius-pill)',
         font: 'var(--weight-semibold) 9.5px/1 var(--font-sans)',
@@ -2502,14 +2513,12 @@ try { (() => {
         pointerEvents: 'none',
         whiteSpace: 'nowrap'
       }
-    }, locked ? /*#__PURE__*/React.createElement(I.Lock, {
-      size: 10
-    }) : /*#__PURE__*/React.createElement("span", {
+    }, /*#__PURE__*/React.createElement("span", {
       style: {
         fontFamily: 'var(--font-serif)',
         fontSize: 11
       }
-    }, GLYPH[b.kind] || '§'), locked ? mark.phase === 'busy' ? 'Claude editing — locked' : 'awaiting review' : `${b.file.split('/').pop()}:${b.span}`), inner);
+    }, GLYPH[b.kind] || '§'), `${b.file.split('/').pop()}:${b.span}`), inner);
   }
 
   // One margin card = one Claude task. Only the ACTIVE task expands; the
@@ -2519,6 +2528,7 @@ try { (() => {
     blocks,
     expanded,
     adding,
+    side = 'left',
     onToggleAdding,
     onRemoveBlock,
     onActivate,
@@ -2529,11 +2539,18 @@ try { (() => {
     onOpenReview,
     refCb
   }) {
+    const conn = side === 'right' ? {
+      left: -GAP
+    } : {
+      right: -GAP
+    };
     const taRef = React.useRef(null);
     React.useEffect(() => {
       if (expanded && task.phase === 'compose' && taRef.current) taRef.current.focus();
     }, [task.phase, expanded]);
     const phaseColor = task.phase === 'review' ? 'var(--clay-500)' : task.phase === 'busy' ? 'var(--clay-400)' : 'var(--line-ink)';
+    // distinct icon per state: ✎ draft · ✦ editing · ✓ proposal ready
+    const PhaseIcon = task.phase === 'review' ? I.Check : task.phase === 'busy' ? I.Sparkles : I.PenLine;
     const b0 = blocks[0];
     // a "section task" = exactly the full block set of one section
     const allPaper = window.STZ_PAPER.blocks;
@@ -2550,21 +2567,12 @@ try { (() => {
         }
       }, /*#__PURE__*/React.createElement("div", {
         style: {
-          position: 'absolute',
-          top: 16,
-          right: -GAP,
-          width: GAP,
-          height: 1.5,
-          background: phaseColor,
-          opacity: 0.4
-        }
-      }), /*#__PURE__*/React.createElement("div", {
-        style: {
           display: 'flex',
           alignItems: 'center',
           gap: 7,
           height: 32,
           padding: '0 10px',
+          overflow: 'hidden',
           background: task.phase === 'review' ? 'var(--clay-50)' : 'var(--surface-overlay)',
           border: `1px solid ${task.phase === 'review' ? 'var(--clay-200)' : 'var(--border-default)'}`,
           borderRadius: 'var(--radius-md)',
@@ -2579,7 +2587,7 @@ try { (() => {
           background: 'var(--clay-400)',
           animation: 'stz-pulse 1s var(--ease-in-out) infinite'
         }
-      }) : /*#__PURE__*/React.createElement(I.Sparkles, {
+      }) : /*#__PURE__*/React.createElement(PhaseIcon, {
         size: 12,
         style: {
           color: phaseColor,
@@ -2587,6 +2595,7 @@ try { (() => {
         }
       }), /*#__PURE__*/React.createElement("span", {
         style: {
+          flex: '0 0 auto',
           font: 'var(--weight-semibold) var(--text-2xs)/1 var(--font-sans)',
           color: task.phase === 'review' ? 'var(--clay-700)' : 'var(--ink-600)',
           whiteSpace: 'nowrap'
@@ -2595,20 +2604,14 @@ try { (() => {
         style: {
           flex: 1,
           minWidth: 0,
-          font: 'var(--text-2xs)/1.3 var(--font-sans)',
+          font: 'var(--text-2xs)/1.3 var(--font-mono)',
           color: 'var(--ink-400)',
           whiteSpace: 'nowrap',
           overflow: 'hidden',
           textOverflow: 'ellipsis',
-          fontStyle: 'italic'
+          fontStyle: task.instruction ? 'italic' : 'normal'
         }
-      }, task.instruction ? `“${task.instruction}”` : ''), /*#__PURE__*/React.createElement("span", {
-        style: {
-          flex: '0 0 auto',
-          font: 'var(--text-2xs)/1 var(--font-mono)',
-          color: 'var(--ink-400)'
-        }
-      }, spanRef)));
+      }, task.instruction ? `“${task.instruction}”` : spanRef)));
     }
     return /*#__PURE__*/React.createElement("div", {
       ref: refCb,
@@ -2616,16 +2619,6 @@ try { (() => {
         position: 'relative'
       }
     }, /*#__PURE__*/React.createElement("div", {
-      style: {
-        position: 'absolute',
-        top: 18,
-        right: -GAP,
-        width: GAP,
-        height: 1.5,
-        background: phaseColor,
-        opacity: 0.55
-      }
-    }), /*#__PURE__*/React.createElement("div", {
       style: {
         background: 'var(--surface-overlay)',
         border: '1px solid var(--border-strong)',
@@ -2641,7 +2634,7 @@ try { (() => {
         gap: 6,
         marginBottom: 8
       }
-    }, /*#__PURE__*/React.createElement(I.Sparkles, {
+    }, /*#__PURE__*/React.createElement(PhaseIcon, {
       size: 13,
       style: {
         color: phaseColor,
@@ -2806,55 +2799,103 @@ try { (() => {
         font: 'var(--text-2xs)/1 var(--font-mono)',
         color: 'var(--ink-400)'
       }
-    }, "claude -p \xB7 ", blocks[0] ? blocks[0].file : ''))), task.phase === 'review' && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-      style: {
-        font: 'var(--text-sm)/1.5 var(--font-sans)',
-        color: 'var(--ink-600)',
-        margin: '0 1px 8px'
+    }, "claude -p \xB7 ", blocks[0] ? blocks[0].file : ''))), task.phase === 'review' && (() => {
+      const ls = (task.proposal.diff || '').split('\n');
+      let a = 0,
+        d = 0;
+      for (const l of ls) {
+        if (l[0] === '+' && l[1] !== '+') a++;else if (l[0] === '-' && l[1] !== '-') d++;
       }
-    }, task.proposal.note), /*#__PURE__*/React.createElement("div", {
-      style: {
-        maxHeight: 192,
-        overflow: 'auto',
-        borderRadius: 'var(--radius-md)'
-      }
-    }, /*#__PURE__*/React.createElement(DiffHunk, {
-      file: task.proposal.files[0],
-      diff: task.proposal.diff,
-      compact: true
-    })), /*#__PURE__*/React.createElement("div", {
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 7,
-        marginTop: 9
-      }
-    }, /*#__PURE__*/React.createElement(Button, {
-      size: "sm",
-      variant: "primary",
-      iconLeft: /*#__PURE__*/React.createElement(I.Check, {
-        size: 13
-      }),
-      onClick: () => onResolve('accept')
-    }, "Accept"), /*#__PURE__*/React.createElement(Button, {
-      size: "sm",
-      variant: "secondary",
-      iconLeft: /*#__PURE__*/React.createElement(I.X, {
-        size: 13
-      }),
-      onClick: () => onResolve('reject')
-    }, "Reject"), /*#__PURE__*/React.createElement("div", {
-      style: {
-        flex: 1
-      }
-    }), /*#__PURE__*/React.createElement(Button, {
-      size: "sm",
-      variant: "subtle",
-      iconLeft: /*#__PURE__*/React.createElement(I.Maximize, {
-        size: 12
-      }),
-      onClick: onOpenReview
-    }, "Review")))));
+      return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+        style: {
+          font: 'var(--text-sm)/1.5 var(--font-sans)',
+          color: 'var(--ink-600)',
+          margin: '0 1px 9px'
+        }
+      }, task.proposal.note), /*#__PURE__*/React.createElement("button", {
+        onClick: onOpenReview,
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          width: '100%',
+          textAlign: 'left',
+          cursor: 'pointer',
+          padding: '8px 10px',
+          borderRadius: 'var(--radius-md)',
+          border: '1px solid var(--border-default)',
+          background: 'var(--surface-card)',
+          marginBottom: 10
+        }
+      }, /*#__PURE__*/React.createElement(I.FileText, {
+        size: 13,
+        style: {
+          color: 'var(--ink-400)',
+          flex: '0 0 auto'
+        }
+      }), /*#__PURE__*/React.createElement("span", {
+        style: {
+          font: 'var(--text-2xs)/1 var(--font-mono)',
+          color: 'var(--ink-600)',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis'
+        }
+      }, task.proposal.files[0]), /*#__PURE__*/React.createElement("span", {
+        style: {
+          display: 'inline-flex',
+          gap: 7,
+          marginLeft: 'auto',
+          flex: '0 0 auto'
+        }
+      }, /*#__PURE__*/React.createElement("span", {
+        style: {
+          font: 'var(--weight-semibold) var(--text-2xs)/1 var(--font-mono)',
+          color: 'var(--add-600)'
+        }
+      }, "+", a), /*#__PURE__*/React.createElement("span", {
+        style: {
+          font: 'var(--weight-semibold) var(--text-2xs)/1 var(--font-mono)',
+          color: 'var(--del-600)'
+        }
+      }, "\u2212", d)), /*#__PURE__*/React.createElement(I.Maximize, {
+        size: 12,
+        style: {
+          color: 'var(--ink-400)',
+          flex: '0 0 auto'
+        }
+      })), /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          gap: 7
+        }
+      }, /*#__PURE__*/React.createElement(Button, {
+        size: "sm",
+        variant: "primary",
+        iconLeft: /*#__PURE__*/React.createElement(I.Check, {
+          size: 13
+        }),
+        onClick: () => onResolve('accept')
+      }, "Accept"), /*#__PURE__*/React.createElement(Button, {
+        size: "sm",
+        variant: "secondary",
+        iconLeft: /*#__PURE__*/React.createElement(I.X, {
+          size: 13
+        }),
+        onClick: () => onResolve('reject')
+      }, "Reject"), /*#__PURE__*/React.createElement("div", {
+        style: {
+          flex: 1
+        }
+      }), /*#__PURE__*/React.createElement(IconButton, {
+        size: "sm",
+        label: "Open full review",
+        onClick: onOpenReview
+      }, /*#__PURE__*/React.createElement(I.Maximize, {
+        size: 14
+      }))));
+    })()));
   }
 
   // Full-screen review: the change ALREADY COMPILED — rendered current vs
@@ -3107,40 +3148,136 @@ try { (() => {
   }) {
     const [hover, setHover] = React.useState(null);
     const [reviewId, setReviewId] = React.useState(null);
+    const [openIds, setOpenIds] = React.useState([]);
+    const [zoom, setZoom] = React.useState(1);
+    const [containerW, setContainerW] = React.useState(900);
+    const [pageNatH, setPageNatH] = React.useState(0);
+    const [tops, setTops] = React.useState({});
+    const [anchors, setAnchors] = React.useState({});
+    const [selRects, setSelRects] = React.useState([]);
+    const [fontsReady, setFontsReady] = React.useState(0);
     const reviewTask = tasks.find(t => t.id === reviewId && t.phase === 'review');
-    // block id → { phase, active } for the quiet margin markers
     const marks = {};
     for (const t of tasks) for (const id of t.blockIds) marks[id] = {
       phase: t.phase,
-      active: t.id === activeTask
+      active: t.id === activeTask,
+      taskId: t.id
     };
-    const wrapRef = React.useRef(null);
+    const scrollRef = React.useRef(null);
+    const pageRef = React.useRef(null);
     const blockEls = React.useRef({});
     const cardEls = React.useRef({});
-    const [tops, setTops] = React.useState({});
-
-    // Align cards with their blocks; stack on collision.
+    const didFit = React.useRef(false);
+    const autoOpened = React.useRef(new Set());
+    const RAIL = 326,
+      GAPX = 30,
+      PAD = 28;
     React.useLayoutEffect(() => {
-      const wrap = wrapRef.current;
-      if (!wrap) return;
-      const wTop = wrap.getBoundingClientRect().top;
-      const ideal = tasks.map(t => {
+      const sc = scrollRef.current;
+      if (!sc || typeof ResizeObserver === 'undefined') return;
+      const measure = () => {
+        setContainerW(sc.clientWidth);
+        if (pageRef.current) setPageNatH(pageRef.current.offsetHeight);
+      };
+      if (!didFit.current) {
+        didFit.current = true;
+        const z = Math.max(MIN_ZOOM, Math.min(1, (sc.clientWidth - RAIL - GAPX - PAD * 2 - 40) / PAGE_W));
+        setZoom(z);
+      }
+      measure();
+      const ro = new ResizeObserver(measure);
+      ro.observe(sc);
+      if (pageRef.current) ro.observe(pageRef.current);
+      return () => ro.disconnect();
+    }, []);
+
+    // Stack cards in the rail, aligned to their blocks; keep each block's own
+    // y (anchor) for the connector line.
+    // Stack only the OPEN cards (collision); keep every block's y (anchor) for
+    // icon placement and connector starts.
+    React.useLayoutEffect(() => {
+      const anc = {};
+      for (const t of tasks) {
         const el = blockEls.current[t.blockIds[0]];
-        return {
-          id: t.id,
-          top: el ? el.getBoundingClientRect().top - wTop - 4 : 0
-        };
-      }).sort((a, b) => a.top - b.top || (a.id === undefined ? 0 : 0));
+        anc[t.id] = el ? el.offsetTop * zoom : 0;
+      }
+      const ideal = tasks.filter(t => openIds.includes(t.id)).map(t => ({
+        id: t.id,
+        top: anc[t.id]
+      })).sort((a, b) => a.top - b.top);
       let cursor = 0;
       const next = {};
       for (const it of ideal) {
-        const h = cardEls.current[it.id] && cardEls.current[it.id].offsetHeight || 120;
+        const h = cardEls.current[it.id] && cardEls.current[it.id].offsetHeight || 90;
         const top = Math.max(it.top, cursor);
         next[it.id] = top;
         cursor = top + h + 14;
       }
       setTops(prev => JSON.stringify(prev) === JSON.stringify(next) ? prev : next);
+      setAnchors(prev => JSON.stringify(prev) === JSON.stringify(anc) ? prev : anc);
+
+      // Selection overlay rects: one per contiguous run of same-task blocks,
+      // measured from the live block positions so the PDF itself never changes.
+      const rects = [];
+      let gi = 0;
+      while (gi < paper.blocks.length) {
+        const m0 = marks[paper.blocks[gi].id];
+        if (m0) {
+          let gj = gi,
+            top = null,
+            bottom = null;
+          while (gj < paper.blocks.length && marks[paper.blocks[gj].id] && marks[paper.blocks[gj].id].taskId === m0.taskId) {
+            const el = blockEls.current[paper.blocks[gj].id];
+            if (el) {
+              const t = el.offsetTop,
+                bt = el.offsetTop + el.offsetHeight;
+              if (top === null || t < top) top = t;
+              if (bottom === null || bt > bottom) bottom = bt;
+            }
+            gj++;
+          }
+          if (top !== null) rects.push({
+            key: m0.taskId + '@' + gi,
+            taskId: m0.taskId,
+            phase: m0.phase,
+            active: m0.active,
+            top,
+            height: bottom - top
+          });
+          gi = gj;
+        } else gi++;
+      }
+      setSelRects(prev => JSON.stringify(prev) === JSON.stringify(rects) ? prev : rects);
+    }, [zoom, tasks, pageNatH, containerW, openIds, activeTask, fontsReady]);
+
+    // The page has a fixed height, so its ResizeObserver never fires when the
+    // webfont swaps in and the blocks reflow — re-measure once fonts are ready.
+    React.useLayoutEffect(() => {
+      if (typeof document !== 'undefined' && document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(() => setFontsReady(n => n + 1));
+      }
+    }, []);
+    const zoomBy = d => setZoom(z => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, +(z + d).toFixed(2))));
+
+    // A draft (compose) opens ONCE on creation so it's editable; after that the
+    // user can freely collapse it.
+    React.useLayoutEffect(() => {
+      const fresh = tasks.filter(t => t.phase === 'compose' && !autoOpened.current.has(t.id));
+      if (fresh.length) {
+        fresh.forEach(c => autoOpened.current.add(c.id));
+        setOpenIds(s => [...s, ...fresh.map(c => c.id).filter(id => !s.includes(id))]);
+      }
     });
+
+    // Consistent at every zoom: each task is a clear icon badge pinned to the
+
+    const pageW = PAGE_W * zoom,
+      pageH = (pageNatH || PAGE_H) * zoom;
+    const pageLeft = Math.max(PAD, (containerW - pageW) / 2); // centered in the pane
+    const pageRightX = pageLeft + pageW;
+    const railLeft = pageRightX + GAPX;
+    const cW = Math.max(containerW, railLeft + RAIL + PAD);
+    const contentH = Math.max(pageH + PAD * 2, 240);
     return /*#__PURE__*/React.createElement("div", {
       style: {
         flex: 1,
@@ -3204,75 +3341,141 @@ try { (() => {
       }
     }, /*#__PURE__*/React.createElement(IconButton, {
       size: "sm",
-      label: "Zoom out"
+      label: "Zoom out",
+      onClick: () => zoomBy(-0.1)
     }, /*#__PURE__*/React.createElement(I.ZoomOut, {
       size: 15
-    })), /*#__PURE__*/React.createElement("span", {
+    })), /*#__PURE__*/React.createElement("div", {
       style: {
         font: 'var(--text-2xs)/1 var(--font-mono)',
         color: 'var(--ink-400)',
-        width: 32,
+        width: 38,
         textAlign: 'center'
       }
-    }, "110%"), /*#__PURE__*/React.createElement(IconButton, {
+    }, Math.round(zoom * 100), "%"), /*#__PURE__*/React.createElement(IconButton, {
       size: "sm",
-      label: "Zoom in"
+      label: "Zoom in",
+      onClick: () => zoomBy(0.1)
     }, /*#__PURE__*/React.createElement(I.ZoomIn, {
       size: 15
     })))), /*#__PURE__*/React.createElement("div", {
+      ref: scrollRef,
       style: {
         flex: 1,
         overflow: 'auto',
-        padding: '26px 24px 40px'
+        background: 'var(--surface-canvas)'
       }
     }, /*#__PURE__*/React.createElement("div", {
-      ref: wrapRef,
       style: {
         position: 'relative',
-        width: RAIL + GAP + PAGE,
-        margin: '0 auto',
+        width: cW,
+        height: contentH,
         minHeight: '100%'
       }
-    }, tasks.map(t => /*#__PURE__*/React.createElement("div", {
-      key: t.id,
+    }, /*#__PURE__*/React.createElement("svg", {
+      width: cW,
+      height: contentH,
       style: {
         position: 'absolute',
+        top: 0,
         left: 0,
-        top: tops[t.id] ?? 0,
-        width: RAIL,
-        zIndex: t.id === activeTask ? 6 : 5,
-        transition: 'top var(--dur-base, 200ms) var(--ease-out)'
+        pointerEvents: 'none',
+        overflow: 'visible'
       }
-    }, /*#__PURE__*/React.createElement(TaskCard, {
-      task: t,
-      blocks: blocksOf(t),
-      expanded: t.id === activeTask,
-      adding: adding,
-      onToggleAdding: onToggleAdding,
-      onRemoveBlock: bid => onRemoveBlockFromTask(t.id, bid),
-      onActivate: () => onActivateTask(t.id),
-      refCb: el => {
-        cardEls.current[t.id] = el;
-      },
-      onUpdate: patch => onUpdateTask(t.id, patch),
-      onSubmit: () => onSubmitTask(t.id),
-      onDismiss: () => onDismissTask(t.id),
-      onResolve: v => onResolveTask(t.id, v),
-      onOpenReview: () => setReviewId(t.id)
-    }))), /*#__PURE__*/React.createElement("div", {
+    }, tasks.filter(t => openIds.includes(t.id)).map(t => {
+      const tn = phaseTone(t.phase);
+      const by = PAD + (anchors[t.id] ?? 0) + 12;
+      const cy = PAD + (tops[t.id] ?? 0) + 22;
+      const mx = pageRightX + (railLeft - pageRightX) / 2;
+      return /*#__PURE__*/React.createElement("path", {
+        key: t.id,
+        d: `M ${pageRightX} ${by} C ${mx} ${by}, ${mx} ${cy}, ${railLeft} ${cy}`,
+        fill: "none",
+        stroke: tn.accent,
+        strokeWidth: 2,
+        opacity: 0.7
+      });
+    })), /*#__PURE__*/React.createElement("div", {
       style: {
-        marginLeft: RAIL + GAP,
-        width: PAGE,
-        background: 'var(--paper-2)',
+        position: 'absolute',
+        left: pageLeft,
+        top: PAD,
+        width: pageW,
+        height: pageH
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      ref: pageRef,
+      style: {
+        width: PAGE_W,
+        height: PAGE_H,
+        transform: `scale(${zoom})`,
+        transformOrigin: 'top left',
+        background: '#fff',
         border: '1px solid var(--border-default)',
-        borderRadius: 4,
-        boxShadow: 'var(--shadow-lg)',
-        padding: '52px 56px 60px',
+        borderRadius: 3,
+        boxShadow: 'var(--shadow-page)',
+        padding: '46px 52px 40px',
+        overflow: 'hidden',
         display: 'flex',
         flexDirection: 'column',
-        gap: 11
+        gap: 8,
+        position: 'relative'
       }
-    }, paper.blocks.map(b => /*#__PURE__*/React.createElement(React.Fragment, {
+    }, selRects.map(r => {
+      const tn = phaseTone(r.phase);
+      const showPill = hover && marks[hover] && marks[hover].taskId === r.taskId;
+      const ptxt = r.phase === 'busy' ? 'Claude editing — locked' : r.phase === 'review' ? 'Awaiting review' : 'Editing block';
+      return /*#__PURE__*/React.createElement(React.Fragment, {
+        key: r.key
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          position: 'absolute',
+          left: 42,
+          right: 42,
+          top: r.top,
+          height: r.height,
+          borderRadius: 'var(--radius-sm)',
+          background: r.active ? tn.wash : tn.tint,
+          boxShadow: r.active ? `inset 3px 0 0 ${tn.accent}, inset 0 0 0 1px ${tn.edge}` : `inset 3px 0 0 ${tn.accent}`,
+          pointerEvents: 'none',
+          zIndex: 0
+        }
+      }), showPill && /*#__PURE__*/React.createElement("span", {
+        style: {
+          position: 'absolute',
+          left: 44,
+          top: r.top - 9,
+          zIndex: 2,
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+          height: 17,
+          padding: '0 6px',
+          background: r.phase === 'busy' ? 'var(--ink-500)' : tn.accent,
+          color: '#fff',
+          borderRadius: 'var(--radius-pill)',
+          font: 'var(--weight-semibold) 9.5px/1 var(--font-sans)',
+          boxShadow: 'var(--shadow-sm)',
+          pointerEvents: 'none',
+          whiteSpace: 'nowrap'
+        }
+      }, r.phase !== 'compose' && /*#__PURE__*/React.createElement(I.Lock, {
+        size: 10
+      }), ptxt));
+    }), view === 'select' && hover && !marks[hover] && blockEls.current[hover] && /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: 'absolute',
+        left: 42,
+        right: 42,
+        top: blockEls.current[hover].offsetTop,
+        height: blockEls.current[hover].offsetHeight,
+        borderRadius: 'var(--radius-sm)',
+        background: 'var(--hover-fill)',
+        boxShadow: 'inset 0 0 0 1px var(--hover-edge)',
+        pointerEvents: 'none',
+        zIndex: 0
+      }
+    }), paper.blocks.map(b => /*#__PURE__*/React.createElement(React.Fragment, {
       key: b.id
     }, /*#__PURE__*/React.createElement(Block, {
       b: b,
@@ -3292,12 +3495,88 @@ try { (() => {
       }
     }))), /*#__PURE__*/React.createElement("div", {
       style: {
-        marginTop: 10,
+        flex: 1,
+        minHeight: 24
+      }
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
         textAlign: 'center',
-        font: '11px/1 var(--font-serif)',
+        font: '12px/1 var(--font-serif)',
         color: 'var(--ink-300)'
       }
-    }, "1")))), reviewTask && /*#__PURE__*/React.createElement(ReviewOverlay, {
+    }, "1"))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: 'absolute',
+        top: 0,
+        left: 0
+      }
+    }, tasks.map(t => {
+      const tn = phaseTone(t.phase);
+      const Icon = t.phase === 'review' ? I.Check : t.phase === 'busy' ? I.Sparkles : I.PenLine;
+      const label = t.phase === 'review' ? 'Proposal ready' : t.phase === 'busy' ? 'Editing…' : 'Draft edit';
+      const isOpen = openIds.includes(t.id);
+      return /*#__PURE__*/React.createElement("button", {
+        key: t.id,
+        onClick: () => setOpenIds(s => isOpen ? s.filter(x => x !== t.id) : [...s, t.id]),
+        "aria-label": label,
+        title: `${label}${t.instruction ? ' — ' + t.instruction : ''}`,
+        style: {
+          position: 'absolute',
+          left: pageRightX - 13,
+          top: PAD + (anchors[t.id] ?? 0),
+          width: 28,
+          height: 28,
+          borderRadius: '50%',
+          border: '2px solid var(--paper-2)',
+          padding: 0,
+          background: tn.accent,
+          color: '#fff',
+          boxShadow: isOpen ? `0 0 0 3px ${tn.edge}, var(--shadow-md)` : 'var(--shadow-md)',
+          cursor: 'pointer',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          transform: isOpen ? 'scale(1.08)' : 'none',
+          transition: 'top var(--dur-base, 200ms) var(--ease-out)',
+          zIndex: 6,
+          animation: t.phase === 'busy' ? 'stz-pulse 1.1s var(--ease-in-out) infinite' : 'none'
+        }
+      }, /*#__PURE__*/React.createElement(Icon, {
+        size: 14
+      }));
+    })), tasks.filter(t => openIds.includes(t.id)).map(t => /*#__PURE__*/React.createElement("div", {
+      key: t.id,
+      ref: el => {
+        cardEls.current[t.id] = el;
+      },
+      style: {
+        position: 'absolute',
+        left: railLeft,
+        top: PAD + (tops[t.id] ?? 0),
+        width: RAIL,
+        zIndex: 7,
+        transition: 'top var(--dur-base, 200ms) var(--ease-out)'
+      }
+    }, /*#__PURE__*/React.createElement(TaskCard, {
+      task: t,
+      blocks: blocksOf(t),
+      expanded: true,
+      onActivate: () => {},
+      onDismiss: () => {
+        onDismissTask(t.id);
+        setOpenIds(s => s.filter(x => x !== t.id));
+      },
+      onResolve: v => {
+        onResolveTask(t.id, v);
+        setOpenIds(s => s.filter(x => x !== t.id));
+      },
+      adding: adding,
+      onToggleAdding: onToggleAdding,
+      onRemoveBlock: bid => onRemoveBlockFromTask(t.id, bid),
+      onUpdate: patch => onUpdateTask(t.id, patch),
+      onSubmit: () => onSubmitTask(t.id),
+      onOpenReview: () => setReviewId(t.id)
+    }))))), reviewTask && /*#__PURE__*/React.createElement(ReviewOverlay, {
       task: reviewTask,
       blocks: blocksOf(reviewTask),
       onClose: () => setReviewId(null),
@@ -3308,8 +3587,742 @@ try { (() => {
     }));
   }
   window.PdfPane = PdfPane;
+  // Shared parts reused by the two-column pane.
+  window.StanzaPdfParts = {
+    Block,
+    TaskCard,
+    ReviewOverlay,
+    blockLabel,
+    combineSpan,
+    GLYPH
+  };
 })();
 })(); } catch (e) { __ds_ns.__errors.push({ path: "ui_kits/stanza/PdfPane.jsx", error: String((e && e.message) || e) }); }
+
+// ui_kits/stanza/PdfPaneTwoCol.jsx
+try { (() => {
+function _extends() { return _extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, _extends.apply(null, arguments); }
+/* Stanza UI kit — PdfPaneTwoCol: two-column (NeurIPS/IEEE) paper preview.
+   Same model as the single-column pane: the compiled A4 page is the hero,
+   never restyled by selection. Each task is a state icon at the page edge
+   (left-column → left edge, right-column → right edge); clicking opens its
+   bubble in that side's rail with a connector. Selection is a pure overlay
+   rectangle (contiguous same-task blocks merge into one). */
+(function () {
+  const {
+    IconButton,
+    SegmentedControl
+  } = window.StanzaDesignSystem_d6c63d;
+  const {
+    TaskCard,
+    ReviewOverlay,
+    GLYPH
+  } = window.StanzaPdfParts;
+  const I = window.Icons;
+  const PAGE_W = 648,
+    PAGE_H = 916; // two-column A4 (1 : √2)
+  const PAD = 50,
+    COLGAP = 26;
+  const RAIL = 300,
+    GAPX = 26;
+  const MIN_ZOOM = 0.4,
+    MAX_ZOOM = 1.6;
+  function phaseTone(phase) {
+    if (phase === 'review') return {
+      accent: 'var(--add-600)',
+      tint: 'var(--add-bg)',
+      wash: 'rgba(60,138,93,0.13)',
+      edge: 'rgba(60,138,93,0.5)'
+    };
+    if (phase === 'busy') return {
+      accent: 'var(--clay-400)',
+      tint: 'var(--clay-50)',
+      wash: 'var(--select-fill)',
+      edge: 'var(--select-edge)'
+    };
+    return {
+      accent: 'var(--blue-500)',
+      tint: 'var(--blue-50)',
+      wash: 'rgba(61,110,156,0.10)',
+      edge: 'rgba(61,110,156,0.45)'
+    };
+  }
+  function TwoColBlock({
+    b,
+    mark,
+    hovered,
+    onEnter,
+    onLeave,
+    onClick,
+    refCb
+  }) {
+    const base = {
+      position: 'relative',
+      cursor: mark && mark.phase === 'busy' ? 'progress' : 'pointer',
+      borderRadius: 'var(--radius-sm)',
+      transition: 'background var(--dur-fast) var(--ease-out)',
+      boxShadow: 'none',
+      background: 'transparent'
+    };
+    const serif = 'var(--font-serif)';
+    let inner = null;
+    if (b.kind === 'title') {
+      inner = /*#__PURE__*/React.createElement("div", {
+        style: {
+          font: `var(--weight-semibold) 23px/1.2 ${serif}`,
+          color: 'var(--ink-900)',
+          textAlign: 'center',
+          letterSpacing: '-0.01em'
+        }
+      }, b.text);
+    } else if (b.kind === 'authors') {
+      inner = /*#__PURE__*/React.createElement("div", {
+        style: {
+          font: `var(--weight-medium) 13px/1.4 ${serif}`,
+          color: 'var(--ink-800)',
+          textAlign: 'center'
+        }
+      }, b.text);
+    } else if (b.kind === 'affil') {
+      inner = /*#__PURE__*/React.createElement("div", {
+        style: {
+          font: `italic var(--weight-regular) 11.5px/1.4 ${serif}`,
+          color: 'var(--ink-500)',
+          textAlign: 'center'
+        }
+      }, b.text);
+    } else if (b.kind === 'abshead') {
+      inner = /*#__PURE__*/React.createElement("div", {
+        style: {
+          font: `var(--weight-semibold) 12px/1.3 ${serif}`,
+          color: 'var(--ink-900)',
+          textAlign: 'center'
+        }
+      }, b.text);
+    } else if (b.kind === 'abstract') {
+      inner = /*#__PURE__*/React.createElement("div", {
+        style: {
+          font: `var(--weight-regular) 11.5px/1.55 ${serif}`,
+          color: 'var(--ink-900)',
+          textAlign: 'justify',
+          padding: '0 30px'
+        }
+      }, b.text);
+    } else if (b.kind === 'section') {
+      inner = /*#__PURE__*/React.createElement("div", {
+        style: {
+          font: `var(--weight-semibold) 12.5px/1.3 ${serif}`,
+          color: 'var(--ink-900)'
+        }
+      }, b.text);
+    } else if (b.kind === 'equation') {
+      inner = /*#__PURE__*/React.createElement("div", {
+        style: {
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 12,
+          padding: '3px 0'
+        }
+      }, /*#__PURE__*/React.createElement("span", {
+        style: {
+          font: `italic var(--weight-regular) 12.5px/1.5 ${serif}`,
+          color: 'var(--ink-900)'
+        }
+      }, b.text), /*#__PURE__*/React.createElement("span", {
+        style: {
+          font: `11px/1 ${serif}`,
+          color: 'var(--ink-500)'
+        }
+      }, "(", b.num, ")"));
+    } else if (b.kind === 'figure') {
+      inner = /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+        style: {
+          height: 78,
+          borderRadius: 4,
+          background: 'var(--surface-well)',
+          border: '1px solid var(--border-default)',
+          display: 'flex',
+          alignItems: 'flex-end',
+          gap: 3,
+          padding: 8,
+          marginBottom: 6
+        }
+      }, [34, 48, 30, 60, 26, 70].map((h, i) => /*#__PURE__*/React.createElement("div", {
+        key: i,
+        style: {
+          flex: 1,
+          height: h + '%',
+          borderRadius: 1,
+          background: i % 2 ? 'var(--clay-400)' : 'var(--ink-300)'
+        }
+      }))), /*#__PURE__*/React.createElement("div", {
+        style: {
+          font: `var(--weight-regular) 9.5px/1.45 ${serif}`,
+          color: 'var(--ink-600)',
+          textAlign: 'justify'
+        }
+      }, b.text));
+    } else {
+      inner = /*#__PURE__*/React.createElement("div", {
+        style: {
+          font: `var(--weight-regular) 10.5px/1.5 ${serif}`,
+          color: 'var(--ink-900)',
+          textAlign: 'justify'
+        }
+      }, b.text);
+    }
+    return /*#__PURE__*/React.createElement("div", {
+      ref: refCb,
+      onMouseEnter: onEnter,
+      onMouseLeave: onLeave,
+      onClick: onClick,
+      style: {
+        ...base,
+        padding: '4px 9px',
+        margin: '0 -9px'
+      }
+    }, hovered && !mark && /*#__PURE__*/React.createElement("span", {
+      style: {
+        position: 'absolute',
+        top: -9,
+        left: -1,
+        zIndex: 2,
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        height: 16,
+        padding: '0 6px',
+        background: 'var(--ink-700)',
+        color: '#fff',
+        borderRadius: 'var(--radius-pill)',
+        font: 'var(--weight-semibold) 9px/1 var(--font-sans)',
+        boxShadow: 'var(--shadow-sm)',
+        pointerEvents: 'none',
+        whiteSpace: 'nowrap'
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontFamily: 'var(--font-serif)',
+        fontSize: 10
+      }
+    }, GLYPH[b.kind] || '§'), `${b.file.split('/').pop()}:${b.span}`), inner);
+  }
+  function PdfPaneTwoCol({
+    paper,
+    tasks,
+    blocksOf,
+    activeTask,
+    onActivateTask,
+    adding,
+    onToggleAdding,
+    onRemoveBlockFromTask,
+    selected,
+    onToggleBlock,
+    view,
+    onView,
+    onUpdateTask,
+    onSubmitTask,
+    onDismissTask,
+    onResolveTask
+  }) {
+    const [hover, setHover] = React.useState(null);
+    const [reviewId, setReviewId] = React.useState(null);
+    const [openIds, setOpenIds] = React.useState([]);
+    const [zoom, setZoom] = React.useState(1);
+    const [containerW, setContainerW] = React.useState(1100);
+    const [pageNatH, setPageNatH] = React.useState(0);
+    const [tops, setTops] = React.useState({});
+    const [anchors, setAnchors] = React.useState({});
+    const [selRects, setSelRects] = React.useState([]);
+    const [fontsReady, setFontsReady] = React.useState(0);
+    const reviewTask = tasks.find(t => t.id === reviewId && t.phase === 'review');
+    const scrollRef = React.useRef(null);
+    const pageRef = React.useRef(null);
+    const blockEls = React.useRef({});
+    const cardEls = React.useRef({});
+    const didFit = React.useRef(false);
+    const autoOpened = React.useRef(new Set());
+    const colOf = id => (paper.blocks.find(b => b.id === id) || {}).col;
+    const sides = {};
+    let lc = 0,
+      rc = 0;
+    for (const t of tasks) {
+      const c = colOf(t.blockIds[0]);
+      if (c === 'l') {
+        sides[t.id] = 'left';
+        lc++;
+      } else if (c === 'r') {
+        sides[t.id] = 'right';
+        rc++;
+      }
+    }
+    for (const t of tasks) {
+      if (sides[t.id]) continue;
+      if (lc <= rc) {
+        sides[t.id] = 'left';
+        lc++;
+      } else {
+        sides[t.id] = 'right';
+        rc++;
+      }
+    }
+    const marks = {};
+    for (const t of tasks) for (const id of t.blockIds) marks[id] = {
+      phase: t.phase,
+      active: t.id === activeTask,
+      side: sides[t.id],
+      taskId: t.id
+    };
+    React.useLayoutEffect(() => {
+      const sc = scrollRef.current;
+      if (!sc || typeof ResizeObserver === 'undefined') return;
+      const measure = () => {
+        setContainerW(sc.clientWidth);
+        if (pageRef.current) setPageNatH(pageRef.current.offsetHeight);
+      };
+      if (!didFit.current) {
+        didFit.current = true;
+        setZoom(Math.max(MIN_ZOOM, Math.min(1, (sc.clientWidth - 2 * (RAIL + GAPX) - 40) / PAGE_W)));
+      }
+      measure();
+      const ro = new ResizeObserver(measure);
+      ro.observe(sc);
+      if (pageRef.current) ro.observe(pageRef.current);
+      return () => ro.disconnect();
+    }, []);
+    React.useLayoutEffect(() => {
+      if (typeof document !== 'undefined' && document.fonts && document.fonts.ready) document.fonts.ready.then(() => setFontsReady(n => n + 1));
+    }, []);
+    React.useLayoutEffect(() => {
+      const fresh = tasks.filter(t => t.phase === 'compose' && !autoOpened.current.has(t.id));
+      if (fresh.length) {
+        fresh.forEach(c => autoOpened.current.add(c.id));
+        setOpenIds(s => [...s, ...fresh.map(c => c.id).filter(id => !s.includes(id))]);
+      }
+    });
+
+    // Stack open cards per side; record each block's y (anchor); build the
+    // selection overlay rects (one per contiguous same-task run, column-aware).
+    React.useLayoutEffect(() => {
+      const anc = {};
+      for (const t of tasks) {
+        const el = blockEls.current[t.blockIds[0]];
+        anc[t.id] = el ? el.offsetTop * zoom : 0;
+      }
+      const next = {};
+      for (const sideKey of ['left', 'right']) {
+        const ideal = tasks.filter(t => openIds.includes(t.id) && sides[t.id] === sideKey).map(t => ({
+          id: t.id,
+          top: anc[t.id]
+        })).sort((a, b) => a.top - b.top);
+        let cursor = 0;
+        for (const it of ideal) {
+          const h = cardEls.current[it.id] && cardEls.current[it.id].offsetHeight || 90;
+          const top = Math.max(it.top, cursor);
+          next[it.id] = top;
+          cursor = top + h + 14;
+        }
+      }
+      const rects = [];
+      let gi = 0;
+      while (gi < paper.blocks.length) {
+        const m0 = marks[paper.blocks[gi].id];
+        if (m0) {
+          let gj = gi,
+            top = null,
+            bottom = null,
+            left = null,
+            right = null;
+          while (gj < paper.blocks.length && marks[paper.blocks[gj].id] && marks[paper.blocks[gj].id].taskId === m0.taskId) {
+            const el = blockEls.current[paper.blocks[gj].id];
+            if (el) {
+              const t = el.offsetTop,
+                bt = el.offsetTop + el.offsetHeight,
+                l = el.offsetLeft,
+                r = el.offsetLeft + el.offsetWidth;
+              if (top === null || t < top) top = t;
+              if (bottom === null || bt > bottom) bottom = bt;
+              if (left === null || l < left) left = l;
+              if (right === null || r > right) right = r;
+            }
+            gj++;
+          }
+          if (top !== null) rects.push({
+            key: m0.taskId + '@' + gi,
+            taskId: m0.taskId,
+            phase: m0.phase,
+            active: m0.active,
+            top,
+            height: bottom - top,
+            left,
+            width: right - left
+          });
+          gi = gj;
+        } else gi++;
+      }
+      setTops(p => JSON.stringify(p) === JSON.stringify(next) ? p : next);
+      setAnchors(p => JSON.stringify(p) === JSON.stringify(anc) ? p : anc);
+      setSelRects(p => JSON.stringify(p) === JSON.stringify(rects) ? p : rects);
+    }, [zoom, tasks, pageNatH, containerW, openIds, activeTask, fontsReady]);
+    const zoomBy = d => setZoom(z => Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, +(z + d).toFixed(2))));
+    const pageW = PAGE_W * zoom,
+      pageH = (pageNatH || PAGE_H) * zoom;
+    const pageLeft = Math.max(RAIL + GAPX + 12, (containerW - pageW) / 2);
+    const pageRightX = pageLeft + pageW;
+    const leftRailRight = pageLeft - GAPX,
+      leftRailLeft = leftRailRight - RAIL;
+    const rightRailLeft = pageRightX + GAPX;
+    const cW = Math.max(containerW, rightRailLeft + RAIL + 12);
+    const contentH = Math.max(pageH + PAD * 2, 240);
+    const hoveredTaskId = hover && marks[hover] ? marks[hover].taskId : null;
+    const fullBlocks = paper.blocks.filter(b => b.col === 'full');
+    const leftBlocks = paper.blocks.filter(b => b.col === 'l');
+    const rightBlocks = paper.blocks.filter(b => b.col === 'r');
+    const renderBlock = b => /*#__PURE__*/React.createElement(TwoColBlock, {
+      key: b.id,
+      b: b,
+      mark: marks[b.id] || null,
+      hovered: view === 'select' && hover === b.id,
+      refCb: el => {
+        blockEls.current[b.id] = el;
+      },
+      onEnter: () => setHover(b.id),
+      onLeave: () => setHover(h => h === b.id ? null : h),
+      onClick: e => view === 'select' && onToggleBlock(b.id, e)
+    });
+    const cardHandlers = t => ({
+      adding,
+      onToggleAdding,
+      onActivate: () => {},
+      onDismiss: () => {
+        onDismissTask(t.id);
+        setOpenIds(s => s.filter(x => x !== t.id));
+      },
+      onResolve: v => {
+        onResolveTask(t.id, v);
+        setOpenIds(s => s.filter(x => x !== t.id));
+      },
+      onRemoveBlock: bid => onRemoveBlockFromTask(t.id, bid),
+      onUpdate: patch => onUpdateTask(t.id, patch),
+      onSubmit: () => onSubmitTask(t.id),
+      onOpenReview: () => setReviewId(t.id)
+    });
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        background: 'var(--surface-canvas)'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        height: 'var(--rail-toolbar)',
+        flex: '0 0 auto',
+        padding: '0 14px',
+        borderBottom: '1px solid var(--border-default)',
+        background: 'var(--surface-app)'
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        font: 'var(--weight-semibold) var(--text-xs)/1 var(--font-sans)',
+        color: 'var(--ink-500)',
+        letterSpacing: 'var(--tracking-caps)',
+        textTransform: 'uppercase'
+      }
+    }, "Preview"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        font: 'var(--text-xs)/1 var(--font-mono)',
+        color: 'var(--ink-400)'
+      }
+    }, "main.pdf \xB7 2-column"), tasks.length > 0 && /*#__PURE__*/React.createElement("span", {
+      style: {
+        font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-sans)',
+        color: 'var(--clay-600)',
+        background: 'var(--clay-50)',
+        padding: '3px 8px',
+        borderRadius: 'var(--radius-pill)'
+      }
+    }, tasks.length, " task", tasks.length > 1 ? 's' : ''), /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: 1
+      }
+    }), /*#__PURE__*/React.createElement(SegmentedControl, {
+      size: "sm",
+      value: view,
+      onChange: onView,
+      options: [{
+        value: 'read',
+        label: 'Read'
+      }, {
+        value: 'select',
+        label: 'Select blocks'
+      }]
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 2,
+        marginLeft: 4
+      }
+    }, /*#__PURE__*/React.createElement(IconButton, {
+      size: "sm",
+      label: "Zoom out",
+      onClick: () => zoomBy(-0.1)
+    }, /*#__PURE__*/React.createElement(I.ZoomOut, {
+      size: 15
+    })), /*#__PURE__*/React.createElement("div", {
+      style: {
+        font: 'var(--text-2xs)/1 var(--font-mono)',
+        color: 'var(--ink-400)',
+        width: 38,
+        textAlign: 'center'
+      }
+    }, Math.round(zoom * 100), "%"), /*#__PURE__*/React.createElement(IconButton, {
+      size: "sm",
+      label: "Zoom in",
+      onClick: () => zoomBy(0.1)
+    }, /*#__PURE__*/React.createElement(I.ZoomIn, {
+      size: 15
+    })))), /*#__PURE__*/React.createElement("div", {
+      ref: scrollRef,
+      style: {
+        flex: 1,
+        overflow: 'auto',
+        background: 'var(--surface-canvas)'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: 'relative',
+        width: cW,
+        height: contentH,
+        minHeight: '100%'
+      }
+    }, /*#__PURE__*/React.createElement("svg", {
+      width: cW,
+      height: contentH,
+      style: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        pointerEvents: 'none',
+        overflow: 'visible'
+      }
+    }, tasks.filter(t => openIds.includes(t.id)).map(t => {
+      const tn = phaseTone(t.phase);
+      const onRight = sides[t.id] === 'right';
+      const by = PAD + (anchors[t.id] ?? 0) + 12;
+      const cy = PAD + (tops[t.id] ?? 0) + 22;
+      const x1 = onRight ? pageRightX : pageLeft;
+      const x2 = onRight ? rightRailLeft : leftRailRight;
+      const mx = (x1 + x2) / 2;
+      return /*#__PURE__*/React.createElement("path", {
+        key: t.id,
+        d: `M ${x1} ${by} C ${mx} ${by}, ${mx} ${cy}, ${x2} ${cy}`,
+        fill: "none",
+        stroke: tn.accent,
+        strokeWidth: 2,
+        opacity: 0.7
+      });
+    })), /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: 'absolute',
+        left: pageLeft,
+        top: PAD,
+        width: pageW,
+        height: pageH
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      ref: pageRef,
+      style: {
+        width: PAGE_W,
+        height: PAGE_H,
+        transform: `scale(${zoom})`,
+        transformOrigin: 'top left',
+        background: '#fff',
+        border: '1px solid var(--border-default)',
+        borderRadius: 3,
+        boxShadow: 'var(--shadow-page)',
+        padding: `46px ${PAD}px 40px`,
+        overflow: 'hidden',
+        position: 'relative'
+      }
+    }, selRects.map(r => {
+      const tn = phaseTone(r.phase);
+      const showPill = hoveredTaskId === r.taskId;
+      const ptxt = r.phase === 'busy' ? 'Claude editing — locked' : r.phase === 'review' ? 'Awaiting review' : 'Editing block';
+      return /*#__PURE__*/React.createElement(React.Fragment, {
+        key: r.key
+      }, /*#__PURE__*/React.createElement("div", {
+        style: {
+          position: 'absolute',
+          left: r.left,
+          top: r.top,
+          width: r.width,
+          height: r.height,
+          borderRadius: 'var(--radius-sm)',
+          background: r.active ? tn.wash : tn.tint,
+          boxShadow: r.active ? `inset 3px 0 0 ${tn.accent}, inset 0 0 0 1px ${tn.edge}` : `inset 3px 0 0 ${tn.accent}`,
+          pointerEvents: 'none',
+          zIndex: 0
+        }
+      }), showPill && /*#__PURE__*/React.createElement("span", {
+        style: {
+          position: 'absolute',
+          left: r.left + 2,
+          top: r.top - 9,
+          zIndex: 2,
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+          height: 16,
+          padding: '0 6px',
+          background: r.phase === 'busy' ? 'var(--ink-500)' : tn.accent,
+          color: '#fff',
+          borderRadius: 'var(--radius-pill)',
+          font: 'var(--weight-semibold) 9px/1 var(--font-sans)',
+          boxShadow: 'var(--shadow-sm)',
+          pointerEvents: 'none',
+          whiteSpace: 'nowrap'
+        }
+      }, r.phase !== 'compose' && /*#__PURE__*/React.createElement(I.Lock, {
+        size: 9
+      }), ptxt));
+    }), view === 'select' && hover && !marks[hover] && blockEls.current[hover] && /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: 'absolute',
+        left: blockEls.current[hover].offsetLeft,
+        top: blockEls.current[hover].offsetTop,
+        width: blockEls.current[hover].offsetWidth,
+        height: blockEls.current[hover].offsetHeight,
+        borderRadius: 'var(--radius-sm)',
+        background: 'var(--hover-fill)',
+        boxShadow: 'inset 0 0 0 1px var(--hover-edge)',
+        pointerEvents: 'none',
+        zIndex: 0
+      }
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        marginBottom: 14
+      }
+    }, fullBlocks.map(renderBlock)), /*#__PURE__*/React.createElement("div", {
+      style: {
+        height: 1,
+        background: 'var(--border-faint)',
+        margin: '0 0 14px'
+      }
+    }), /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: COLGAP,
+        alignItems: 'flex-start'
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 9
+      }
+    }, leftBlocks.map(renderBlock)), /*#__PURE__*/React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 9
+      }
+    }, rightBlocks.map(renderBlock))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: 16,
+        textAlign: 'center',
+        font: '12px/1 var(--font-serif)',
+        color: 'var(--ink-300)'
+      }
+    }, "1"))), /*#__PURE__*/React.createElement("div", {
+      style: {
+        position: 'absolute',
+        top: 0,
+        left: 0
+      }
+    }, tasks.map(t => {
+      const tn = phaseTone(t.phase);
+      const onRight = sides[t.id] === 'right';
+      const Icon = t.phase === 'review' ? I.Check : t.phase === 'busy' ? I.Sparkles : I.PenLine;
+      const label = t.phase === 'review' ? 'Proposal ready' : t.phase === 'busy' ? 'Editing…' : 'Draft edit';
+      const isOpen = openIds.includes(t.id);
+      const x = (onRight ? pageRightX : pageLeft) - 13;
+      return /*#__PURE__*/React.createElement("button", {
+        key: t.id,
+        onClick: () => setOpenIds(s => isOpen ? s.filter(y => y !== t.id) : [...s, t.id]),
+        "aria-label": label,
+        title: `${label}${t.instruction ? ' — ' + t.instruction : ''}`,
+        style: {
+          position: 'absolute',
+          left: x,
+          top: PAD + (anchors[t.id] ?? 0),
+          width: 28,
+          height: 28,
+          borderRadius: '50%',
+          border: '2px solid var(--paper-2)',
+          padding: 0,
+          background: tn.accent,
+          color: '#fff',
+          boxShadow: isOpen ? `0 0 0 3px ${tn.edge}, var(--shadow-md)` : 'var(--shadow-md)',
+          cursor: 'pointer',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          transform: isOpen ? 'scale(1.08)' : 'none',
+          transition: 'top var(--dur-base, 200ms) var(--ease-out)',
+          zIndex: 6,
+          animation: t.phase === 'busy' ? 'stz-pulse 1.1s var(--ease-in-out) infinite' : 'none'
+        }
+      }, /*#__PURE__*/React.createElement(Icon, {
+        size: 14
+      }));
+    })), tasks.filter(t => openIds.includes(t.id)).map(t => {
+      const onRight = sides[t.id] === 'right';
+      return /*#__PURE__*/React.createElement("div", {
+        key: t.id,
+        ref: el => {
+          cardEls.current[t.id] = el;
+        },
+        style: {
+          position: 'absolute',
+          left: onRight ? rightRailLeft : leftRailLeft,
+          top: PAD + (tops[t.id] ?? 0),
+          width: RAIL,
+          zIndex: 7,
+          transition: 'top var(--dur-base, 200ms) var(--ease-out)'
+        }
+      }, /*#__PURE__*/React.createElement(TaskCard, _extends({
+        task: t,
+        blocks: blocksOf(t),
+        side: sides[t.id],
+        expanded: true
+      }, cardHandlers(t))));
+    }))), reviewTask && /*#__PURE__*/React.createElement(ReviewOverlay, {
+      task: reviewTask,
+      blocks: blocksOf(reviewTask),
+      onClose: () => setReviewId(null),
+      onResolve: v => {
+        setReviewId(null);
+        onResolveTask(reviewTask.id, v);
+      }
+    }));
+  }
+  window.PdfPaneTwoCol = PdfPaneTwoCol;
+})();
+})(); } catch (e) { __ds_ns.__errors.push({ path: "ui_kits/stanza/PdfPaneTwoCol.jsx", error: String((e && e.message) || e) }); }
 
 // ui_kits/stanza/Sidebar.jsx
 try { (() => {
@@ -3336,6 +4349,121 @@ try { (() => {
       }
     }, children));
   }
+
+  /* Right-click menu — floats at the cursor, closes on outside click / Esc / scroll. */
+  function ContextMenu({
+    x,
+    y,
+    items,
+    onClose
+  }) {
+    const ref = React.useRef(null);
+    const [pos, setPos] = React.useState({
+      left: x,
+      top: y
+    });
+    React.useLayoutEffect(() => {
+      const el = ref.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const pad = 8;
+      setPos({
+        left: Math.min(x, window.innerWidth - r.width - pad),
+        top: Math.min(y, window.innerHeight - r.height - pad)
+      });
+    }, [x, y]);
+    React.useEffect(() => {
+      const close = () => onClose();
+      const key = e => {
+        if (e.key === 'Escape') onClose();
+      };
+      window.addEventListener('mousedown', close);
+      window.addEventListener('resize', close);
+      window.addEventListener('blur', close);
+      document.addEventListener('keydown', key);
+      window.addEventListener('scroll', close, true);
+      return () => {
+        window.removeEventListener('mousedown', close);
+        window.removeEventListener('resize', close);
+        window.removeEventListener('blur', close);
+        document.removeEventListener('keydown', key);
+        window.removeEventListener('scroll', close, true);
+      };
+    }, []);
+    return /*#__PURE__*/React.createElement("div", {
+      ref: ref,
+      onMouseDown: e => e.stopPropagation(),
+      style: {
+        position: 'fixed',
+        left: pos.left,
+        top: pos.top,
+        zIndex: 200,
+        minWidth: 184,
+        padding: 5,
+        background: 'var(--surface-card)',
+        border: '1px solid var(--border-strong)',
+        borderRadius: 'var(--radius-lg)',
+        boxShadow: 'var(--shadow-xl)',
+        animation: 'stz-fade-up 110ms var(--ease-out)'
+      }
+    }, items.map((it, i) => it.sep ? /*#__PURE__*/React.createElement("div", {
+      key: 's' + i,
+      style: {
+        height: 1,
+        background: 'var(--border-faint)',
+        margin: '5px 6px'
+      }
+    }) : /*#__PURE__*/React.createElement(MenuItem, {
+      key: it.label,
+      item: it,
+      onClose: onClose
+    })));
+  }
+  function MenuItem({
+    item,
+    onClose
+  }) {
+    const [hover, setHover] = React.useState(false);
+    const danger = item.danger;
+    const fg = danger ? 'var(--del-600)' : 'var(--ink-700)';
+    return /*#__PURE__*/React.createElement("button", {
+      onMouseEnter: () => setHover(true),
+      onMouseLeave: () => setHover(false),
+      onClick: () => {
+        item.onClick();
+        onClose();
+      },
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        width: '100%',
+        textAlign: 'left',
+        padding: '7px 9px',
+        border: 'none',
+        borderRadius: 'var(--radius-sm)',
+        cursor: 'pointer',
+        background: hover ? danger ? 'var(--del-bg)' : 'var(--hover-fill)' : 'transparent',
+        color: fg,
+        font: 'var(--weight-medium) var(--text-sm)/1 var(--font-sans)'
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        flex: '0 0 auto',
+        display: 'inline-flex',
+        color: danger ? 'var(--del-600)' : 'var(--ink-400)'
+      }
+    }, item.icon), /*#__PURE__*/React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }, item.label), item.kbd && /*#__PURE__*/React.createElement("span", {
+      style: {
+        font: 'var(--text-2xs)/1 var(--font-mono)',
+        color: 'var(--ink-300)'
+      }
+    }, item.kbd));
+  }
   function Row({
     icon,
     label,
@@ -3343,11 +4471,25 @@ try { (() => {
     active,
     indent = 0,
     accent,
-    onClick
+    onClick,
+    onContextMenu,
+    menuOpen,
+    renaming,
+    onRenameCommit,
+    onRenameCancel
   }) {
     const [hover, setHover] = React.useState(false);
+    const inputRef = React.useRef(null);
+    React.useEffect(() => {
+      if (renaming && inputRef.current) {
+        inputRef.current.focus();
+        inputRef.current.select();
+      }
+    }, [renaming]);
+    const highlight = active || menuOpen;
     return /*#__PURE__*/React.createElement("div", {
-      onClick: onClick,
+      onClick: renaming ? undefined : onClick,
+      onContextMenu: onContextMenu,
       onMouseEnter: () => setHover(true),
       onMouseLeave: () => setHover(false),
       style: {
@@ -3357,18 +4499,41 @@ try { (() => {
         height: 28,
         padding: `0 8px 0 ${8 + indent * 14}px`,
         borderRadius: 'var(--radius-sm)',
-        background: active ? 'var(--clay-50)' : hover ? 'var(--hover-fill)' : 'transparent',
-        color: active ? 'var(--clay-700)' : 'var(--ink-600)',
+        background: highlight ? 'var(--clay-50)' : hover ? 'var(--hover-fill)' : 'transparent',
+        color: highlight ? 'var(--clay-700)' : 'var(--ink-600)',
+        boxShadow: menuOpen ? 'inset 0 0 0 1px var(--clay-200)' : 'none',
         cursor: 'pointer',
         userSelect: 'none'
       }
     }, icon && /*#__PURE__*/React.createElement("span", {
       style: {
         flex: '0 0 auto',
-        color: active ? 'var(--clay-500)' : accent || 'var(--ink-400)',
+        color: highlight ? 'var(--clay-500)' : accent || 'var(--ink-400)',
         display: 'inline-flex'
       }
-    }, icon), /*#__PURE__*/React.createElement("span", {
+    }, icon), renaming ? /*#__PURE__*/React.createElement("input", {
+      ref: inputRef,
+      defaultValue: label,
+      onClick: e => e.stopPropagation(),
+      onKeyDown: e => {
+        if (e.key === 'Enter') onRenameCommit(e.currentTarget.value);else if (e.key === 'Escape') onRenameCancel();
+      },
+      onBlur: e => onRenameCommit(e.currentTarget.value),
+      style: {
+        flex: 1,
+        minWidth: 0,
+        height: 20,
+        padding: '0 5px',
+        margin: 0,
+        border: '1px solid var(--clay-400)',
+        borderRadius: 'var(--radius-sm)',
+        outline: 'none',
+        background: 'var(--surface-card)',
+        color: 'var(--ink-900)',
+        font: 'var(--weight-medium) var(--text-sm)/1 var(--font-sans)',
+        boxShadow: '0 0 0 3px var(--clay-100)'
+      }
+    }) : /*#__PURE__*/React.createElement("span", {
       style: {
         flex: 1,
         font: `var(--weight-${active ? 'semibold' : 'medium'}) var(--text-sm)/1 var(--font-sans)`,
@@ -3376,7 +4541,7 @@ try { (() => {
         overflow: 'hidden',
         textOverflow: 'ellipsis'
       }
-    }, label), meta && /*#__PURE__*/React.createElement("span", {
+    }, label), meta && !renaming && /*#__PURE__*/React.createElement("span", {
       style: {
         font: 'var(--text-2xs)/1 var(--font-mono)',
         color: 'var(--ink-300)'
@@ -3410,7 +4575,8 @@ try { (() => {
   }
   function DirNode({
     node,
-    indent
+    indent,
+    ctx
   }) {
     const [open, setOpen] = React.useState(node.open ?? false);
     const I = window.Icons;
@@ -3431,20 +4597,28 @@ try { (() => {
       })),
       label: node.dir,
       meta: open ? undefined : String(node.children.length),
+      menuOpen: ctx.menuNode === node,
+      renaming: ctx.renaming === node,
+      onRenameCommit: v => ctx.commitRename(node, v),
+      onRenameCancel: ctx.cancelRename,
+      onContextMenu: e => ctx.openMenu(e, node, 'dir'),
       onClick: () => setOpen(o => !o)
     }), open && node.children.map(c => /*#__PURE__*/React.createElement(FileNode, {
       key: c.path || c.dir,
       node: c,
-      indent: indent + 1
+      indent: indent + 1,
+      ctx: ctx
     })));
   }
   function FileNode({
     node,
-    indent = 0
+    indent = 0,
+    ctx
   }) {
     if (node.dir) return /*#__PURE__*/React.createElement(DirNode, {
       node: node,
-      indent: indent
+      indent: indent,
+      ctx: ctx
     });
     const name = node.path.split('/').pop();
     const {
@@ -3455,16 +4629,170 @@ try { (() => {
       indent: indent,
       icon: icon,
       label: name,
-      active: node.active,
-      accent: accent
+      active: ctx.activeFile === node.path,
+      accent: accent,
+      menuOpen: ctx.menuNode === node,
+      renaming: ctx.renaming === node,
+      onRenameCommit: v => ctx.commitRename(node, v),
+      onRenameCancel: ctx.cancelRename,
+      onContextMenu: e => ctx.openMenu(e, node, 'file'),
+      onClick: () => ctx.onOpenFile && ctx.onOpenFile(node.path)
     });
   }
   function Sidebar({
     paper,
+    files,
+    activeFile,
+    onOpenFile,
+    onNewFile,
+    onNewFolder,
+    onCollapse,
     activeBlock,
-    onPickBlock
+    onPickBlock,
+    onRenameNode,
+    onDuplicateNode,
+    onDeleteNode
   }) {
     const outline = paper.blocks.filter(b => b.kind === 'section' && !b.heading);
+    const tree = files || paper.files;
+    const [menu, setMenu] = React.useState(null); // { x, y, node, kind }
+    const [renaming, setRenaming] = React.useState(null); // node being renamed
+
+    const openMenu = (e, node, kind) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setRenaming(null);
+      setMenu({
+        x: e.clientX,
+        y: e.clientY,
+        node,
+        kind
+      });
+    };
+    const closeMenu = () => setMenu(null);
+    const commitRename = (node, value) => {
+      const v = (value || '').trim();
+      const current = node.dir || node.path.split('/').pop();
+      if (v && v !== current && onRenameNode) onRenameNode(node, v);
+      setRenaming(null);
+    };
+    const cancelRename = () => setRenaming(null);
+    const copyPath = node => {
+      const p = node.dir || node.path;
+      try {
+        navigator.clipboard && navigator.clipboard.writeText(p);
+      } catch (e) {}
+    };
+    const menuItems = (node, kind) => {
+      if (kind === 'file') {
+        return [{
+          label: 'Open',
+          icon: /*#__PURE__*/React.createElement(I.CornerUpRight, {
+            size: 15
+          }),
+          onClick: () => onOpenFile && onOpenFile(node.path)
+        }, {
+          sep: true
+        }, {
+          label: 'Rename',
+          icon: /*#__PURE__*/React.createElement(I.PenLine, {
+            size: 15
+          }),
+          kbd: '⏎',
+          onClick: () => {
+            closeMenu();
+            setRenaming(node);
+          }
+        }, {
+          label: 'Duplicate',
+          icon: /*#__PURE__*/React.createElement(I.Copy, {
+            size: 15
+          }),
+          onClick: () => onDuplicateNode && onDuplicateNode(node)
+        }, {
+          label: 'Copy path',
+          icon: /*#__PURE__*/React.createElement(I.Link, {
+            size: 15
+          }),
+          onClick: () => copyPath(node)
+        }, {
+          sep: true
+        }, {
+          label: 'Delete',
+          icon: /*#__PURE__*/React.createElement(I.Trash, {
+            size: 15
+          }),
+          danger: true,
+          onClick: () => onDeleteNode && onDeleteNode(node)
+        }];
+      }
+      return [{
+        label: 'New file',
+        icon: /*#__PURE__*/React.createElement(I.Plus, {
+          size: 15
+        }),
+        onClick: () => onNewFile && onNewFile(node)
+      }, {
+        label: 'New folder',
+        icon: /*#__PURE__*/React.createElement(I.Folder, {
+          size: 15
+        }),
+        onClick: () => onNewFolder && onNewFolder(node)
+      }, {
+        sep: true
+      }, {
+        label: 'Rename',
+        icon: /*#__PURE__*/React.createElement(I.PenLine, {
+          size: 15
+        }),
+        kbd: '⏎',
+        onClick: () => {
+          closeMenu();
+          setRenaming(node);
+        }
+      }, {
+        label: 'Copy path',
+        icon: /*#__PURE__*/React.createElement(I.Link, {
+          size: 15
+        }),
+        onClick: () => copyPath(node)
+      }, {
+        sep: true
+      }, {
+        label: 'Delete',
+        icon: /*#__PURE__*/React.createElement(I.Trash, {
+          size: 15
+        }),
+        danger: true,
+        onClick: () => onDeleteNode && onDeleteNode(node)
+      }];
+    };
+    const ctx = {
+      activeFile,
+      onOpenFile,
+      openMenu,
+      menuNode: menu && menu.node,
+      renaming,
+      commitRename,
+      cancelRename
+    };
+    const addBtn = (label, icon, onClick) => /*#__PURE__*/React.createElement("button", {
+      onClick: onClick,
+      title: label,
+      "aria-label": label,
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 20,
+        height: 20,
+        borderRadius: 'var(--radius-sm)',
+        border: 'none',
+        background: 'transparent',
+        color: 'var(--ink-400)',
+        cursor: 'pointer'
+      }
+    }, icon);
     return /*#__PURE__*/React.createElement("div", {
       style: {
         width: 'var(--rail-sidebar)',
@@ -3497,35 +4825,85 @@ try { (() => {
       size: 15
     })), /*#__PURE__*/React.createElement("div", {
       style: {
-        minWidth: 0
+        minWidth: 0,
+        flex: 1
       }
     }, /*#__PURE__*/React.createElement("div", {
       style: {
         font: 'var(--weight-semibold) var(--text-sm)/1.2 var(--font-sans)',
         color: 'var(--ink-900)'
       }
-    }, "block-editing"), /*#__PURE__*/React.createElement("div", {
+    }, paper.project), /*#__PURE__*/React.createElement("div", {
       style: {
         font: 'var(--text-2xs)/1.2 var(--font-mono)',
         color: 'var(--ink-400)'
       }
-    }, "~/papers/block-editing"))), /*#__PURE__*/React.createElement("div", {
+    }, "~/papers/", paper.project)), onCollapse && /*#__PURE__*/React.createElement("button", {
+      onClick: onCollapse,
+      title: "Collapse sidebar",
+      "aria-label": "Collapse sidebar",
+      style: {
+        flex: '0 0 auto',
+        width: 24,
+        height: 24,
+        borderRadius: 'var(--radius-sm)',
+        border: 'none',
+        background: 'transparent',
+        color: 'var(--ink-400)',
+        cursor: 'pointer',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center'
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        transform: 'rotate(180deg)'
+      }
+    }, /*#__PURE__*/React.createElement(I.ChevronRight, {
+      size: 16
+    })))), /*#__PURE__*/React.createElement("div", {
       style: {
         flex: 1,
         overflow: 'auto',
         padding: '14px 8px'
       }
-    }, /*#__PURE__*/React.createElement(SectionLabel, {
-      icon: /*#__PURE__*/React.createElement(I.FileText, {
-        size: 12
-      })
-    }, "Files"), /*#__PURE__*/React.createElement("div", {
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '0 4px 6px'
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        color: 'var(--ink-400)',
+        font: 'var(--weight-bold) var(--text-2xs)/1 var(--font-sans)',
+        letterSpacing: 'var(--tracking-caps)',
+        textTransform: 'uppercase'
+      }
+    }, /*#__PURE__*/React.createElement(I.FileText, {
+      size: 12
+    }), "Files"), /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: 'flex',
+        gap: 2
+      }
+    }, addBtn('New file', /*#__PURE__*/React.createElement(I.Plus, {
+      size: 13
+    }), () => onNewFile && onNewFile()), addBtn('New folder', /*#__PURE__*/React.createElement(I.Folder, {
+      size: 13
+    }), () => onNewFolder && onNewFolder()))), /*#__PURE__*/React.createElement("div", {
       style: {
         marginBottom: 18
       }
-    }, paper.files.map(f => /*#__PURE__*/React.createElement(FileNode, {
+    }, tree.map(f => /*#__PURE__*/React.createElement(FileNode, {
       key: f.path || f.dir,
-      node: f
+      node: f,
+      ctx: ctx
     }))), /*#__PURE__*/React.createElement(SectionLabel, {
       icon: /*#__PURE__*/React.createElement(I.List, {
         size: 12
@@ -3568,7 +4946,12 @@ try { (() => {
       }),
       label: "wip: manual edits",
       meta: "1h"
-    }))));
+    }))), menu && /*#__PURE__*/React.createElement(ContextMenu, {
+      x: menu.x,
+      y: menu.y,
+      items: menuItems(menu.node, menu.kind),
+      onClose: closeMenu
+    }));
   }
   window.Sidebar = Sidebar;
 })();
@@ -3596,18 +4979,33 @@ try { (() => {
     txt: 'var(--ink-800)',
     math: 'var(--clay-700)'
   };
+
+  // Raw LaTeX per file (lightly tokenized). New/unknown files get a stub.
+  const SOURCES = {
+    'sections/intro.tex': LINES,
+    'main.tex': [[['cmd', '\\documentclass'], ['br', '[11pt]{article}']], [['cmd', '\\usepackage'], ['br', '{amsmath, amssymb, graphicx}']], [['cmd', '\\input'], ['br', '{macros}']], [], [['cmd', '\\title'], ['br', '{Block-Addressable Editing of Structured Documents}']], [['cmd', '\\author'], ['br', '{M. Fernandes, A. Reis, J. Costa}']], [], [['cmd', '\\begin'], ['br', '{document}']], [['cmd', '\\maketitle'], ['cm', '   % title block']], [['cmd', '\\input'], ['br', '{sections/intro}']], [['cmd', '\\input'], ['br', '{sections/method}']], [['cmd', '\\input'], ['br', '{sections/results}']], [['cmd', '\\bibliography'], ['br', '{refs}']], [['cmd', '\\end'], ['br', '{document}']]],
+    'macros.tex': [[['cm', '% macros.tex — shared definitions']], [['cmd', '\\newcommand'], ['br', '{\\block}'], ['br', '{\\mathcal{B}}']], [['cmd', '\\newcommand'], ['br', '{\\file}'], ['br', '{\\textsf{file}}']]],
+    'refs.bib': [[['cmd', '@inproceedings'], ['br', '{fernandes2026blocks,']], [['txt', '  title = {Block-Addressable Editing},']], [['txt', '  author = {Fernandes, M. and Reis, A.},']], [['txt', '  year = {2026}}']]]
+  };
+  const stub = file => [[['cm', '% ' + file]], [], [['cm', '% new file — start typing…']]];
   function Tab({
     label,
     active,
-    dirty
+    dirty,
+    onClick,
+    onClose
   }) {
+    const [h, setH] = React.useState(false);
     return /*#__PURE__*/React.createElement("div", {
+      onClick: onClick,
+      onMouseEnter: () => setH(true),
+      onMouseLeave: () => setH(false),
       style: {
         display: 'inline-flex',
         alignItems: 'center',
-        gap: 7,
+        gap: 6,
         height: 30,
-        padding: '0 12px',
+        padding: '0 7px 0 12px',
         borderRadius: 'var(--radius-sm) var(--radius-sm) 0 0',
         background: active ? 'var(--paper-2)' : 'transparent',
         border: active ? '1px solid var(--border-default)' : '1px solid transparent',
@@ -3624,15 +5022,41 @@ try { (() => {
         borderRadius: '50%',
         background: 'var(--clay-500)'
       }
-    }));
+    }), onClose && /*#__PURE__*/React.createElement("span", {
+      onClick: e => {
+        e.stopPropagation();
+        onClose();
+      },
+      title: "Close tab",
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 15,
+        height: 15,
+        borderRadius: 3,
+        color: 'var(--ink-400)',
+        background: h ? 'var(--hover-fill)' : 'transparent'
+      }
+    }, /*#__PURE__*/React.createElement(I.X, {
+      size: 11
+    })));
   }
 
   // highlight: wash the proposal-touched lines (4–7) while a diff is pending
   function SourceEditor({
+    openFiles = [],
+    active,
     highlight,
+    onSelect,
+    onCloseTab,
     onClose
   }) {
-    const touched = n => highlight && n >= 4 && n <= 7;
+    const file = active || openFiles[0] || 'main.tex';
+    const lines = SOURCES[file] || stub(file);
+    const isIntro = /intro\.tex$/.test(file);
+    const name = file.split('/').pop();
+    const touched = n => highlight && isIntro && n >= 4 && n <= 7;
     return /*#__PURE__*/React.createElement("div", {
       style: {
         flex: '1 1 0',
@@ -3646,12 +5070,13 @@ try { (() => {
       style: {
         display: 'flex',
         alignItems: 'flex-end',
-        gap: 4,
+        gap: 3,
         height: 'var(--rail-toolbar)',
         flex: '0 0 auto',
         padding: '0 10px',
         borderBottom: '1px solid var(--border-default)',
-        background: 'var(--surface-app)'
+        background: 'var(--surface-app)',
+        overflow: 'hidden'
       }
     }, /*#__PURE__*/React.createElement("span", {
       style: {
@@ -3660,26 +5085,34 @@ try { (() => {
         letterSpacing: 'var(--tracking-caps)',
         textTransform: 'uppercase',
         alignSelf: 'center',
-        marginRight: 8
+        marginRight: 8,
+        flex: '0 0 auto'
       }
-    }, "Source"), /*#__PURE__*/React.createElement(Tab, {
-      label: "main.tex"
-    }), /*#__PURE__*/React.createElement(Tab, {
-      label: "intro.tex",
-      active: true,
-      dirty: highlight
-    }), /*#__PURE__*/React.createElement("div", {
+    }, "Source"), /*#__PURE__*/React.createElement("div", {
       style: {
-        flex: 1
+        display: 'flex',
+        alignItems: 'flex-end',
+        gap: 3,
+        flex: 1,
+        minWidth: 0,
+        overflowX: 'auto'
       }
-    }), /*#__PURE__*/React.createElement("div", {
+    }, (openFiles.length ? openFiles : [file]).map(f => /*#__PURE__*/React.createElement(Tab, {
+      key: f,
+      label: f.split('/').pop(),
+      active: f === file,
+      dirty: highlight && /intro\.tex$/.test(f),
+      onClick: () => onSelect && onSelect(f),
+      onClose: onCloseTab ? () => onCloseTab(f) : undefined
+    }))), /*#__PURE__*/React.createElement("div", {
       style: {
         alignSelf: 'center',
         display: 'flex',
         alignItems: 'center',
-        gap: 8
+        gap: 8,
+        flex: '0 0 auto'
       }
-    }, highlight && /*#__PURE__*/React.createElement(Badge, {
+    }, highlight && isIntro && /*#__PURE__*/React.createElement(Badge, {
       tone: "accent",
       size: "sm"
     }, "pending edit"), /*#__PURE__*/React.createElement(IconButton, {
@@ -3704,7 +5137,7 @@ try { (() => {
         padding: '12px 0',
         minHeight: '100%'
       }
-    }, LINES.map((toks, i) => {
+    }, lines.map((toks, i) => {
       const n = i + 1;
       return /*#__PURE__*/React.createElement("div", {
         key: n,
@@ -3763,7 +5196,7 @@ try { (() => {
         font: 'var(--text-2xs)/1 var(--font-mono)',
         color: 'var(--ink-400)'
       }
-    }, "Ln 7, Col 12 \xB7 18 lines")));
+    }, name, " \xB7 ", lines.length, " lines")));
   }
   window.SourceEditor = SourceEditor;
 })();
@@ -3940,23 +5373,26 @@ try { (() => {
   const {
     TitleBar,
     Sidebar,
-    PdfPane,
     ChatPane,
     SourceEditor
   } = window;
-  const paper = window.STZ_PAPER;
-  const proposalFor = block => {
-    const p = paper.proposals[block.id] || paper.proposals.default;
-    return {
-      ...p,
-      files: p.files.length ? [block.file] : p.files,
-      note: p.note
-    };
-  };
+  const I = window.Icons;
   function Workspace({
     onCloseDoc,
-    preset = {}
+    preset = {},
+    paper: paperProp,
+    Pane
   }) {
+    const paper = paperProp || window.STZ_PAPER;
+    const PdfPaneC = Pane || window.PdfPane;
+    const proposalFor = block => {
+      const p = paper.proposals[block.id] || paper.proposals.default;
+      return {
+        ...p,
+        files: p.files.length ? [block.file] : p.files,
+        note: p.note
+      };
+    };
     const idRef = React.useRef(100);
     const [tasks, setTasks] = React.useState(preset.tasks || [{
       id: 1,
@@ -3979,6 +5415,145 @@ try { (() => {
       text: 'Document primed — 11 blocks across 4 files. Click a block in the page to start an edit; several can run at once.'
     }]);
     const [activeTask, setActiveTask] = React.useState(preset.activeTask ?? (preset.tasks ? preset.tasks[0].id : 1));
+    const [files, setFiles] = React.useState(() => JSON.parse(JSON.stringify(paper.files)));
+    const [openFiles, setOpenFiles] = React.useState([paper.mainFile || 'main.tex']);
+    const [activeFile, setActiveFile] = React.useState(paper.mainFile || 'main.tex');
+    const [sidebarOpen, setSidebarOpen] = React.useState(true);
+    const [sourceW, setSourceW] = React.useState(520);
+    const splitRef = React.useRef(null);
+    const startDrag = e => {
+      e.preventDefault();
+      const move = ev => {
+        const r = splitRef.current && splitRef.current.getBoundingClientRect();
+        if (r) setSourceW(Math.max(300, Math.min(r.width - 360, ev.clientX - r.left)));
+      };
+      const up = () => {
+        window.removeEventListener('mousemove', move);
+        window.removeEventListener('mouseup', up);
+        document.body.style.cursor = '';
+      };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+      document.body.style.cursor = 'col-resize';
+    };
+    const newRef = React.useRef(0);
+    const openFile = path => {
+      setOpenFiles(o => o.includes(path) ? o : [...o, path]);
+      setActiveFile(path);
+      setSourceOpen(true);
+    };
+    const closeTab = path => setOpenFiles(o => {
+      const n = o.filter(x => x !== path);
+      setActiveFile(a => a === path ? n[n.length - 1] || null : a);
+      if (!n.length) setSourceOpen(false);
+      return n;
+    });
+    const newFile = dir => {
+      const base = `untitled-${++newRef.current}.tex`;
+      if (dir && dir.dir) {
+        const p = dir.dir + '/' + base;
+        setFiles(fs => mapNode(fs, dir, n => [{
+          ...n,
+          open: true,
+          children: [...n.children, {
+            path: p
+          }]
+        }]));
+        openFile(p);
+        return;
+      }
+      setFiles(fs => [...fs, {
+        path: base
+      }]);
+      openFile(base);
+    };
+    const newFolder = dir => {
+      const name = `new-folder-${++newRef.current}`;
+      if (dir && dir.dir) {
+        setFiles(fs => mapNode(fs, dir, n => [{
+          ...n,
+          open: true,
+          children: [...n.children, {
+            dir: dir.dir + '/' + name,
+            open: true,
+            children: []
+          }]
+        }]));
+        return;
+      }
+      setFiles(fs => [...fs, {
+        dir: name,
+        open: true,
+        children: []
+      }]);
+    };
+
+    // ── file-tree edits (right-click menu) ──────────────────────────────
+    const renameInPath = (full, name) => {
+      const i = full.lastIndexOf('/');
+      return i >= 0 ? full.slice(0, i + 1) + name : name;
+    };
+    const dupPath = full => {
+      const slash = full.lastIndexOf('/');
+      const dir = slash >= 0 ? full.slice(0, slash + 1) : '';
+      const base = slash >= 0 ? full.slice(slash + 1) : full;
+      const dot = base.lastIndexOf('.');
+      return dot > 0 ? `${dir}${base.slice(0, dot)} copy${base.slice(dot)}` : `${dir}${base} copy`;
+    };
+    // recursively rebuild the tree, applying `op` to the matched node
+    const mapNode = (nodes, target, op) => nodes.flatMap(n => {
+      if (n === target) return op(n);
+      if (n.children) return [{
+        ...n,
+        children: mapNode(n.children, target, op)
+      }];
+      return [n];
+    });
+    const renameNode = (node, name) => {
+      if (node.dir) {
+        const slash = node.dir.lastIndexOf('/');
+        const newDir = (slash >= 0 ? node.dir.slice(0, slash + 1) : '') + name;
+        const oldPrefix = node.dir + '/';
+        const fixPath = p => p.startsWith(oldPrefix) ? newDir + '/' + p.slice(oldPrefix.length) : p;
+        const rewrite = nodes => nodes.map(c => c.dir ? {
+          ...c,
+          dir: fixPath(c.dir + '/').slice(0, -1),
+          children: rewrite(c.children)
+        } : {
+          ...c,
+          path: fixPath(c.path)
+        });
+        setFiles(fs => mapNode(fs, node, n => [{
+          ...n,
+          dir: newDir,
+          children: rewrite(n.children)
+        }]));
+        setOpenFiles(o => o.map(fixPath));
+        setActiveFile(a => a ? fixPath(a) : a);
+        return;
+      }
+      const next = renameInPath(node.path, name);
+      setFiles(fs => mapNode(fs, node, n => [{
+        ...n,
+        path: next
+      }]));
+      setOpenFiles(o => o.map(p => p === node.path ? next : p));
+      setActiveFile(a => a === node.path ? next : a);
+    };
+    const duplicateNode = node => {
+      if (node.dir) return;
+      const next = dupPath(node.path);
+      setFiles(fs => mapNode(fs, node, n => [n, {
+        ...n,
+        path: next,
+        active: false
+      }]));
+    };
+    const deleteNode = node => {
+      setFiles(fs => mapNode(fs, node, () => []));
+      const gather = n => n.dir ? n.children.flatMap(gather) : [n.path];
+      gather(node).forEach(p => closeTab(p));
+    };
     const selected = tasks.flatMap(t => t.blockIds);
     const busy = tasks.some(t => t.phase === 'busy');
     const blocksOf = t => t.blockIds.map(id => paper.blocks.find(b => b.id === id)).filter(Boolean);
@@ -4135,7 +5710,7 @@ try { (() => {
         background: 'var(--surface-app)'
       }
     }, /*#__PURE__*/React.createElement(TitleBar, {
-      title: "block-editing",
+      title: paper.project,
       compile: compile,
       onCompile: recompile,
       onToggleSource: () => setSourceOpen(o => !o),
@@ -4149,23 +5724,92 @@ try { (() => {
         display: 'flex',
         minHeight: 0
       }
-    }, /*#__PURE__*/React.createElement(Sidebar, {
+    }, sidebarOpen ? /*#__PURE__*/React.createElement(Sidebar, {
       paper: paper,
+      files: files,
+      activeFile: activeFile,
+      onOpenFile: openFile,
+      onNewFile: newFile,
+      onNewFolder: newFolder,
+      onRenameNode: renameNode,
+      onDuplicateNode: duplicateNode,
+      onDeleteNode: deleteNode,
+      onCollapse: () => setSidebarOpen(false),
       activeBlock: selected[0],
       onPickBlock: id => {
         setView('select');
         toggleBlock(id);
       }
-    }), /*#__PURE__*/React.createElement("div", {
+    }) : /*#__PURE__*/React.createElement("div", {
+      style: {
+        width: 36,
+        flex: '0 0 auto',
+        borderRight: '1px solid var(--border-default)',
+        background: 'var(--surface-app)',
+        display: 'flex',
+        justifyContent: 'center',
+        paddingTop: 10
+      }
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: () => setSidebarOpen(true),
+      title: "Show files",
+      "aria-label": "Show files",
+      style: {
+        width: 26,
+        height: 26,
+        borderRadius: 'var(--radius-sm)',
+        border: 'none',
+        background: 'transparent',
+        color: 'var(--ink-500)',
+        cursor: 'pointer',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center'
+      }
+    }, /*#__PURE__*/React.createElement(I.ChevronRight, {
+      size: 16
+    }))), /*#__PURE__*/React.createElement("div", {
+      ref: splitRef,
       style: {
         flex: 1,
         display: 'flex',
         minWidth: 0
       }
-    }, sourceOpen && /*#__PURE__*/React.createElement(SourceEditor, {
+    }, sourceOpen && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      style: {
+        width: sourceW,
+        flex: '0 0 auto',
+        display: 'flex',
+        minWidth: 0
+      }
+    }, /*#__PURE__*/React.createElement(SourceEditor, {
+      openFiles: openFiles,
+      active: activeFile,
+      onSelect: setActiveFile,
+      onCloseTab: closeTab,
       highlight: tasks.some(t => t.phase === 'review'),
       onClose: () => setSourceOpen(false)
-    }), /*#__PURE__*/React.createElement(PdfPane, {
+    })), /*#__PURE__*/React.createElement("div", {
+      onMouseDown: startDrag,
+      title: "Drag to resize",
+      style: {
+        width: 7,
+        flex: '0 0 auto',
+        cursor: 'col-resize',
+        background: 'var(--border-default)',
+        position: 'relative',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center'
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        width: 2,
+        height: 28,
+        borderRadius: 2,
+        background: 'var(--line-ink)'
+      }
+    }))), /*#__PURE__*/React.createElement(PdfPaneC, {
       paper: paper,
       tasks: tasks,
       blocksOf: blocksOf,
@@ -4303,7 +5947,11 @@ try { (() => {
     Lock: S(['M5 11a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2z', 'M7 9V7a5 5 0 0 1 10 0v2']),
     Maximize: S(['M15 3h6v6', 'm21 3-7 7', 'm3 21 7-7', 'M9 21H3v-6']),
     ArrowUp: S(['m5 12 7-7 7 7', 'M12 19V5']),
-    Sigma: S(['M18 7V5a1 1 0 0 0-1-1H6.5a.5.5 0 0 0-.4.8l4.5 6a.5.5 0 0 1 0 .6l-4.5 6a.5.5 0 0 0 .4.8H17a1 1 0 0 0 1-1v-2'])
+    Sigma: S(['M18 7V5a1 1 0 0 0-1-1H6.5a.5.5 0 0 0-.4.8l4.5 6a.5.5 0 0 1 0 .6l-4.5 6a.5.5 0 0 0 .4.8H17a1 1 0 0 0 1-1v-2']),
+    Copy: S(['M9 9a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2z', 'M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1']),
+    Trash: S(['M3 6h18', 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6', 'M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2', 'M10 11v6', 'M14 11v6']),
+    Link: S(['M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71', 'M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71']),
+    CornerUpRight: S(['m15 14 5-5-5-5', 'M4 20v-7a4 4 0 0 1 4-4h12'])
   };
 })();
 })(); } catch (e) { __ds_ns.__errors.push({ path: "ui_kits/stanza/icons.jsx", error: String((e && e.message) || e) }); }
@@ -4469,6 +6117,180 @@ try { (() => {
       targetBlock: 's1-p1',
       files: ['sections/intro.tex'],
       diff: '@@ -3,7 +3,6 @@\n Authors of technical documents think in terms of what they\n-see \u2014 a paragraph, an equation, a figure \u2014 not in terms of line\n-numbers in a source file. Yet every editing tool asks them to\n-translate between the two. The model is good and works well in\n-many cases, but the translation step is a persistent source of\n-friction.\n+see \u2014 a paragraph, an equation, a figure \u2014 not line numbers in a\n+source file. Yet editors force them to translate between the two,\n+a persistent source of friction we remove in \\S2.'
+    }
+  };
+
+  /* ---- A TWO-COLUMN paper (NeurIPS/IEEE-style). Blocks carry a column
+     hint (full | l | r) so the edit loop can hang each Claude bubble in
+     the margin nearest its column. ---- */
+  window.STZ_PAPER2 = {
+    project: 'sparse-routing',
+    mainFile: 'main.tex',
+    twoColumn: true,
+    files: [{
+      path: 'main.tex',
+      active: true
+    }, {
+      path: 'macros.tex'
+    }, {
+      path: 'refs.bib'
+    }, {
+      dir: 'sections',
+      open: true,
+      children: [{
+        path: 'sections/intro.tex'
+      }, {
+        path: 'sections/method.tex'
+      }, {
+        path: 'sections/experiments.tex'
+      }]
+    }, {
+      dir: 'figures',
+      children: [{
+        path: 'figures/routing.pdf'
+      }, {
+        path: 'figures/scaling.png'
+      }]
+    }],
+    blocks: [{
+      id: 'title',
+      kind: 'title',
+      col: 'full',
+      file: 'main.tex',
+      span: '14–16',
+      text: 'Sparse Routing for Long-Context Attention'
+    }, {
+      id: 'authors',
+      kind: 'authors',
+      col: 'full',
+      file: 'main.tex',
+      span: '18–21',
+      text: 'A. Reis¹    M. Fernandes¹    J. Costa²'
+    }, {
+      id: 'affil',
+      kind: 'affil',
+      col: 'full',
+      file: 'main.tex',
+      span: '22',
+      text: '¹Instituto Superior Técnico    ²INESC-ID'
+    }, {
+      id: 'abs-h',
+      kind: 'abshead',
+      col: 'full',
+      file: 'main.tex',
+      span: '26',
+      text: 'Abstract',
+      sec: 'abs'
+    }, {
+      id: 'abstract',
+      kind: 'abstract',
+      col: 'full',
+      file: 'main.tex',
+      span: '27–34',
+      sec: 'abs',
+      text: 'Attention over long contexts is dominated by the quadratic cost of all-pairs interaction. We introduce a learned router that sends each query to a sparse set of key blocks, reducing cost to near-linear while retaining the accuracy of dense attention. The router is trained end-to-end and adds no inference-time hyperparameters.'
+    }, {
+      id: 's1-h',
+      kind: 'section',
+      col: 'l',
+      file: 'sections/intro.tex',
+      span: '1',
+      text: '1   Introduction',
+      sec: 's1'
+    }, {
+      id: 'l-p1',
+      kind: 'paragraph',
+      col: 'l',
+      file: 'sections/intro.tex',
+      span: '3–11',
+      sec: 's1',
+      text: 'Transformer attention compares every query with every key, so the cost grows with the square of the sequence length. For documents, codebases, and long dialogues this quickly dominates both compute and memory, and a range of sparse and low-rank schemes have been proposed to contain it.'
+    }, {
+      id: 'l-p2',
+      kind: 'paragraph',
+      col: 'l',
+      file: 'sections/intro.tex',
+      span: '13–19',
+      sec: 's1',
+      text: 'Most such schemes fix the sparsity pattern in advance. We instead learn which key blocks each query should attend to, letting the model spend its budget where it matters and adapt the pattern per input.'
+    }, {
+      id: 's2-h',
+      kind: 'section',
+      col: 'l',
+      file: 'sections/method.tex',
+      span: '1',
+      text: '2   Method',
+      sec: 's2'
+    }, {
+      id: 'l-p3',
+      kind: 'paragraph',
+      col: 'l',
+      file: 'sections/method.tex',
+      span: '3–12',
+      sec: 's2',
+      text: 'Keys are partitioned into contiguous blocks. For each query a lightweight router scores every block and selects the top-k; attention is then computed only against the selected blocks. The score is a dot product against a learned block summary, so routing adds negligible overhead.'
+    }, {
+      id: 'r-eq',
+      kind: 'equation',
+      col: 'r',
+      file: 'sections/method.tex',
+      span: '14–16',
+      text: 'router(q) = top-k( qᵀS )',
+      num: '2'
+    }, {
+      id: 'r-p1',
+      kind: 'paragraph',
+      col: 'r',
+      file: 'sections/method.tex',
+      span: '18–25',
+      sec: 's2',
+      text: 'Here S holds one summary vector per key block. Because the top-k operation is not differentiable, we train the router with a straight-through estimator and a small load-balancing penalty that discourages collapse onto a few blocks.'
+    }, {
+      id: 's3-h',
+      kind: 'section',
+      col: 'r',
+      file: 'sections/experiments.tex',
+      span: '1',
+      text: '3   Experiments',
+      sec: 's3'
+    }, {
+      id: 'r-p2',
+      kind: 'paragraph',
+      col: 'r',
+      file: 'sections/experiments.tex',
+      span: '3–10',
+      sec: 's3',
+      text: 'On long-context language modeling the router matches dense attention within 0.2 perplexity while attending to a quarter of the keys. End-to-end throughput improves 2.3× at 32k tokens, and the gap widens with sequence length.'
+    }, {
+      id: 'r-fig',
+      kind: 'figure',
+      col: 'r',
+      file: 'sections/experiments.tex',
+      span: '12–15',
+      text: 'Figure 1: Perplexity vs. attended-key fraction. The router (clay) tracks dense attention down to ~25% of keys.'
+    }],
+    proposals: {
+      'l-p2': {
+        note: 'Made the contrast with prior work explicit and named the contribution (learned, per-input routing) up front.',
+        files: ['sections/intro.tex'],
+        before: [['d', 'Most such schemes fix the sparsity pattern in advance.'], ['k', ' We instead learn which key blocks each query should attend to, letting the model spend its budget where it matters '], ['d', 'and adapt the pattern per input.']],
+        after: [['a', 'Prior schemes fix the sparsity pattern in advance and cannot adapt to the input.'], ['k', ' We instead learn which key blocks each query should attend to, letting the model spend its budget where it matters '], ['a', '— a pattern chosen per query, end-to-end.']],
+        diff: '@@ -13,7 +13,7 @@\n-Most such schemes fix the sparsity pattern in advance. We\n-instead learn which key blocks each query should attend to,\n-letting the model spend its budget where it matters and adapt\n-the pattern per input.\n+Prior schemes fix the sparsity pattern in advance and cannot\n+adapt to the input. We instead learn which key blocks each query\n+should attend to, letting the model spend its budget where it\n+matters; a pattern chosen per query, end-to-end.'
+      },
+      'r-p2': {
+        note: 'Led with the headline result and tightened the throughput claim.',
+        files: ['sections/experiments.tex'],
+        before: [['k', 'On long-context language modeling the router matches dense attention within 0.2 perplexity while attending to a quarter of the keys. '], ['d', 'End-to-end throughput improves 2.3× at 32k tokens, and the gap widens with sequence length.']],
+        after: [['k', 'On long-context language modeling the router matches dense attention within 0.2 perplexity while attending to a quarter of the keys. '], ['a', 'Throughput improves 2.3× at 32k tokens and 3.1× at 64k, so the advantage grows with context length.']],
+        diff: '@@ -3,8 +3,8 @@\n On long-context language modeling the router matches dense\n attention within 0.2 perplexity while attending to a quarter of\n-the keys. End-to-end throughput improves 2.3x at 32k tokens, and\n-the gap widens with sequence length.\n+the keys. Throughput improves 2.3x at 32k tokens and 3.1x at\n+64k, so the advantage grows with context length.'
+      },
+      default: {
+        note: 'Applied the requested edit; cross-references and equation labels preserved.',
+        files: ['main.tex'],
+        before: [['k', 'We introduce a learned router that sends each query to a sparse set of key blocks, '], ['d', 'reducing cost to near-linear while retaining the accuracy of dense attention.']],
+        after: [['k', 'We introduce a learned router that sends each query to a sparse set of key blocks, '], ['a', 'cutting attention cost to near-linear at no measurable loss in accuracy.']],
+        diff: '@@ -27,3 +27,3 @@\n a learned router that sends each query to a sparse set of key\n-blocks, reducing cost to near-linear while retaining the\n-accuracy of dense attention.\n+blocks, cutting attention cost to near-linear at no measurable\n+loss in accuracy.'
+      }
     }
   };
 })();

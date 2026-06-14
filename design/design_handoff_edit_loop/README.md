@@ -66,6 +66,32 @@ Layout, left→right:
   .tex, List(blue) .bib, Image for .png/.jpg/figure .pdf, PenLine .md/.txt);
   OUTLINE (§ rows per section); HISTORY (git commits: "claude: …" with green
   commit icon, "wip: manual edits" neutral; relative time meta).
+  **Files support a right-click context menu + inline rename** — see
+  "File management" under Interactions.
+  The FILES header "+" buttons (New file / New folder) add at project root;
+  the folder context menu adds nested.
+
+#### File context menu (`ui_kits/stanza/Sidebar.jsx` → `ContextMenu`)
+- Triggered by `onContextMenu` (right-click) on any file or folder row.
+- Floating panel: `--surface-card`, 1px `--border-strong`, radius 10px,
+  shadow-xl, 184px min-width, 5px pad, `stz-fade-up` 110ms. Spawns at the
+  cursor (`clientX/clientY`) and **clamps to the viewport** (measured via
+  `useLayoutEffect` + `getBoundingClientRect`, 8px edge gutter).
+- Items: 7px/9px pad rows, radius 5, 15px Lucide icon (`--ink-400`) +
+  Hanken 14px medium label + optional mono kbd hint right-aligned; hover
+  fills `--hover-fill`. **Destructive items** (Delete) use `--del-600` text,
+  `--del-500`→`--del-600` icon, `--del-bg` hover wash. Thin `--border-faint`
+  separators group sections.
+  - **File**: Open · — · Rename (⏎) · Duplicate · Copy path · — · Delete
+  - **Folder**: New file · New folder · — · Rename (⏎) · Copy path · — · Delete
+- Dismisses on outside `mousedown`, Esc, scroll (capture), resize, or blur.
+- The row that owns the open menu shows a persistent highlight (`--clay-50`
+  bg + 1px `--clay-200` inset ring) so the target stays obvious.
+- **Inline rename**: choosing Rename swaps the row label for an `<input>`
+  (auto-focus + select-all, 1px `--clay-400` border, 3px `--clay-100` focus
+  ring). Enter commits, Esc/blur cancels; empty or unchanged is a no-op.
+- **Copy path** writes the node's project-relative path to the clipboard
+  (`navigator.clipboard.writeText`).
 - **SourceEditor** (optional split, left of preview when open): file tabs
   (main.tex / intro.tex active w/ clay dirty dot), eyebrow SOURCE; line-number
   gutter (46px, right-aligned 12px `--ink-300`); tokenized LaTeX (commands
@@ -85,6 +111,29 @@ Layout, left→right:
   + proposal components as the rail.
 
 ## Interactions & Behavior — the edit loop
+
+### File management (sidebar tree)
+The FILES tree is editable via a **right-click context menu** (chrome spec
+under Sidebar → File context menu). Operations mutate the workspace's `files`
+state (a clone of `paper.files`) through a single recursive `mapNode(nodes,
+target, op)` helper that rebuilds the tree, matching the target node by
+reference identity and replacing it with `op(node)`'s return array (`[]`
+deletes, `[a, b]` inserts a sibling, `[patched]` edits in place):
+- **Rename** — files change the basename in their `path`; folders rewrite
+  `dir` **and** every descendant path/dir prefix. Open tabs and `activeFile`
+  are remapped so an open-and-renamed file keeps its tab.
+- **Duplicate** (files only) — inserts a sibling with a ` copy` suffix
+  inserted before the extension (`intro.tex` → `intro copy.tex`).
+- **Delete** — prunes the node; any open tabs it covered (recursively, for a
+  folder) are closed via `closeTab`.
+- **New file / New folder** — root-level from the FILES header "+" buttons;
+  nested (into the clicked folder, which auto-expands) from its context menu.
+- **Copy path** — node path → clipboard.
+
+Real app: these map to filesystem ops (`fs.rename`, copy, `fs.rm`, `mkdir`)
+plus a re-parse of affected files into blocks; renames/deletes of tracked
+files should be staged as git moves/removals. Guard against editing a file
+while a busy/review task owns one of its blocks (mirror block locking).
 
 ### Task model (core concept)
 Every edit is a **task**: `{ id, blockIds[], instruction, phase, proposal }`.
@@ -145,6 +194,10 @@ Scrim rgba(33,30,25,0.42); panel min(880px, 92vw), max-height 86vh,
 - `tasks[]` (the loop), `activeTask` (expanded card), `adding` (append mode),
   `view` (read | select), `sourceOpen`, `chatOpen`, `compile` state,
   `messages[]` (session history feeding the optional ChatPane).
+- `files[]` (editable clone of `paper.files`), `openFiles[]` + `activeFile`
+  (source-editor tabs). File-tree edits go through `mapNode` and keep tab
+  state in sync. The context menu + inline-rename UI state (`menu`,
+  `renaming`) is local to `Sidebar`.
 - Real app: task phases map to `claude -p` lifecycle; locking must be enforced
   server-side per block-span; accept = `git commit`, reject = `git restore`.
 
@@ -177,3 +230,7 @@ Key values — full scales in the files:
   CompilePill, StatusDot, SegmentedControl, Kbd, … (props in each `.d.ts`)
 - `tokens/*.css`, `styles.css` — design tokens; link or port verbatim
 - `DESIGN_CHANGELOG.md` — version ledger; implement against a tagged version
+- `design_handoff_edit_loop/FILE_MANAGEMENT.md` — **implementation handoff**
+  for the v0.2 sidebar file management (right-click menu, rename, duplicate,
+  delete, new), mapped onto the real `stanza` repo: IPC channels, `FileService`,
+  `GitClient` additions, Sidebar/Workspace wiring, guards, and tests.
