@@ -37,6 +37,13 @@ function readLogFromDisk(absPath: string): string | null {
  *  never surface a superseded compile as a failure). */
 export class CompileService {
   private controller: AbortController | null = null
+  /** Number of compiles currently in flight. The external-edit watcher reads
+   *  it to suppress itself while the app's own write is already recompiling
+   *  (in-app save, accept/reject), so it doesn't double-fire (BUG-24). */
+  private inFlight = 0
+  get isCompiling(): boolean {
+    return this.inFlight > 0
+  }
   /** Base name of the last compiled target — synctex queries follow it
    *  so clicks keep working in a chapter-scoped PDF. */
   private lastBase: string
@@ -63,6 +70,15 @@ export class CompileService {
   }
 
   async compile(req: CompileRequest): Promise<CompileResult> {
+    this.inFlight++
+    try {
+      return await this.runCompile(req)
+    } finally {
+      this.inFlight--
+    }
+  }
+
+  private async runCompile(req: CompileRequest): Promise<CompileResult> {
     this.controller?.abort()
     const controller = new AbortController()
     this.controller = controller
