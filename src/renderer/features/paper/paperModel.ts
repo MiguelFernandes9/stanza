@@ -365,21 +365,26 @@ export async function blockGeometryRects(
  *  task's rail card — derived from the block's topmost synctex box, not the
  *  DOM, so a card stays beside its block even when the block's page is
  *  virtualized out of the render window. An unscoped whole-doc task (no
- *  blockIds) anchors at the current viewport scrollTop; same fallback when the
- *  block has no resolved box yet or no page geometry exists. Caller applies
- *  collision-stacking on top of these ideals (BUG-17). */
+ *  blockIds) anchors at the current viewport scrollTop. A *scoped* task whose
+ *  box isn't resolved yet (no rect, or no page geometry — e.g. on open before
+ *  the PDF/synctex lands) returns `top: null` so the caller can hide it rather
+ *  than park it at the screen top (BUG-32); scrollTop is reserved for unscoped
+ *  tasks only. Caller applies collision-stacking on top of these ideals
+ *  (BUG-17). */
 export function cardAnchorTops(
   tasks: { id: number; blockIds: string[] }[],
   rects: Map<string, PdfRect[]>,
   geo: { height: number; gap: number } | null,
   zoom: number,
   scrollTop: number
-): { id: number; top: number }[] {
+): { id: number; top: number | null }[] {
   return tasks.map((t) => {
-    const rect = t.blockIds[0] ? rects.get(t.blockIds[0])?.[0] : undefined
-    const top =
-      rect && geo ? (rect.page - 1) * (geo.height + geo.gap) + rect.y * zoom : scrollTop
-    return { id: t.id, top }
+    // Unscoped whole-doc task: anchor at the current viewport.
+    if (t.blockIds.length === 0) return { id: t.id, top: scrollTop }
+    // Scoped task: needs both a resolved box and page geometry to be placed.
+    const rect = rects.get(t.blockIds[0])?.[0]
+    if (!rect || !geo) return { id: t.id, top: null }
+    return { id: t.id, top: (rect.page - 1) * (geo.height + geo.gap) + rect.y * zoom }
   })
 }
 

@@ -75,7 +75,9 @@ export function PaperPane(props: Props): JSX.Element {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const cardEls = useRef<Record<number, HTMLDivElement | null>>({})
   // Anchor (block top) per task and the collision-stacked top per open bubble.
-  const [anchorTops, setAnchorTops] = useState<Record<number, number>>({})
+  // A scoped task whose geometry isn't resolved yet anchors to null (BUG-32) —
+  // its badge/connector/bubble are skipped until a real box lands.
+  const [anchorTops, setAnchorTops] = useState<Record<number, number | null>>({})
   const [tops, setTops] = useState<Record<number, number>>({})
   // Bubbles open on demand; a fresh compose task auto-opens exactly once.
   const [openIds, setOpenIds] = useState<number[]>([])
@@ -219,14 +221,16 @@ export function PaperPane(props: Props): JSX.Element {
   // tasks with no block fall back to the current scrollTop.
   useLayoutEffect(() => {
     const anchors = cardAnchorTops(state.tasks, blockRects, geo, zoom, scrollRef.current?.scrollTop ?? 0)
-    const anchorById: Record<number, number> = {}
+    const anchorById: Record<number, number | null> = {}
     for (const a of anchors) anchorById[a.id] = a.top
     setAnchorTops((prev) => (JSON.stringify(prev) === JSON.stringify(anchorById) ? prev : anchorById))
 
+    // Only stack open bubbles with a resolved anchor; null-anchor tasks (BUG-32)
+    // aren't placed yet, so they're left out until their geometry lands.
     const stacked = stackTops(
       state.tasks
-        .filter((t) => openIds.includes(t.id))
-        .map((t) => ({ id: t.id, top: anchorById[t.id] ?? 0, height: cardEls.current[t.id]?.offsetHeight ?? 120 }))
+        .filter((t) => openIds.includes(t.id) && anchorById[t.id] != null)
+        .map((t) => ({ id: t.id, top: anchorById[t.id]!, height: cardEls.current[t.id]?.offsetHeight ?? 120 }))
     )
     setTops((prev) => (JSON.stringify(prev) === JSON.stringify(stacked) ? prev : stacked))
   })
@@ -367,7 +371,9 @@ export function PaperPane(props: Props): JSX.Element {
               style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', overflow: 'visible' }}
             >
               {openTasks.map((t) => {
-                const by = PAD + (anchorTops[t.id] ?? 0) + 12
+                const anchor = anchorTops[t.id]
+                if (anchor == null) return null // geometry not ready (BUG-32)
+                const by = PAD + anchor + 12
                 const cy = PAD + (tops[t.id] ?? 0) + 22
                 return (
                   <path
@@ -401,6 +407,8 @@ export function PaperPane(props: Props): JSX.Element {
 
             {/* state badges at the page's right edge — click to open the bubble */}
             {state.tasks.map((t) => {
+              const anchor = anchorTops[t.id]
+              if (anchor == null) return null // hide until geometry resolves (BUG-32)
               const tone = phaseTone(t.phase)
               const Icon = t.phase === 'review' ? Check : t.phase === 'busy' ? Sparkles : t.phase === 'noop' ? CircleSlash : PenLine
               const isOpen = openIds.includes(t.id)
@@ -414,7 +422,7 @@ export function PaperPane(props: Props): JSX.Element {
                   style={{
                     position: 'absolute',
                     left: pageRightX - 13,
-                    top: PAD + (anchorTops[t.id] ?? 0),
+                    top: PAD + anchor,
                     width: BADGE,
                     height: BADGE,
                     borderRadius: '50%',
@@ -439,7 +447,11 @@ export function PaperPane(props: Props): JSX.Element {
             })}
 
             {/* open bubbles, each a TaskCard in the right rail (collision-stacked) */}
-            {openTasks.map((t) => (
+            {openTasks.map((t) => {
+              // No bubble until its block geometry resolves (BUG-32); a
+              // null-anchor task isn't stacked, so it has no real top yet.
+              if (anchorTops[t.id] == null) return null
+              return (
               <div
                 key={t.id}
                 style={{
@@ -473,7 +485,8 @@ export function PaperPane(props: Props): JSX.Element {
                   onOpenReview={() => setReviewId(t.id)}
                 />
               </div>
-            ))}
+              )
+            })}
           </div>
         ) : (
           <div style={{ display: 'flex', justifyContent: 'center', padding: '28px 24px 40px' }}>
