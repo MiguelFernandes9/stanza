@@ -115,52 +115,66 @@ function walkBody(file: string, nodes: Ast.Node[]): BlockNode[] {
     paragraph = null
   }
 
-  for (const node of nodes) {
-    if (!node.position) continue
-    const { start, end } = node.position
+  const joinParagraph = (startLine: number, endLine: number) => {
+    if (!paragraph) paragraph = { startLine, endLine }
+    else paragraph.endLine = Math.max(paragraph.endLine, endLine)
+  }
 
-    if (node.type === 'whitespace' || node.type === 'comment') continue
-    if (node.type === 'parbreak') {
-      flushParagraph()
-      continue
-    }
-    if (node.type === 'macro' && STANDALONE_MACROS.has(node.content)) {
-      flushParagraph()
-      continue
-    }
-    if (node.type === 'macro' && TRANSPARENT_MACROS.has(node.content)) {
-      // Skip without flushing or starting a paragraph; absorb into an open one.
-      if (paragraph) paragraph.endLine = Math.max(paragraph.endLine, end.line)
-      continue
-    }
+  const walkNodes = (ns: Ast.Node[]): void => {
+    for (const node of ns) {
+      if (!node.position) continue
+      const { start, end } = node.position
 
-    const level = node.type === 'macro' ? SECTION_LEVELS[node.content] : undefined
-    if (node.type === 'macro' && level !== undefined) {
-      flushParagraph()
-      while ((sectionStack[sectionStack.length - 1]?.level ?? 0) >= level) {
-        sectionStack.pop()
+      if (node.type === 'whitespace' || node.type === 'comment') continue
+      if (node.type === 'parbreak') {
+        flushParagraph()
+        continue
       }
-      const section = block('section', file, start.line, end.line, sectionTitle(node))
-      attach(section)
-      sectionStack.push({ block: section, level })
-      continue
-    }
+      if (node.type === 'macro' && STANDALONE_MACROS.has(node.content)) {
+        flushParagraph()
+        continue
+      }
+      if (node.type === 'macro' && TRANSPARENT_MACROS.has(node.content)) {
+        // Skip without flushing or starting a paragraph; absorb into an open one.
+        if (paragraph) paragraph.endLine = Math.max(paragraph.endLine, end.line)
+        continue
+      }
 
-    if (ENVIRONMENT_TYPES.has(node.type)) {
-      flushParagraph()
-      const name = node.type === 'displaymath' ? 'displaymath' : envName(node as Ast.Environment)
-      attach(block('environment', file, start.line, end.line, name))
-      continue
-    }
+      const level = node.type === 'macro' ? SECTION_LEVELS[node.content] : undefined
+      if (node.type === 'macro' && level !== undefined) {
+        flushParagraph()
+        while ((sectionStack[sectionStack.length - 1]?.level ?? 0) >= level) {
+          sectionStack.pop()
+        }
+        const section = block('section', file, start.line, end.line, sectionTitle(node))
+        attach(section)
+        sectionStack.push({ block: section, level })
+        continue
+      }
 
-    // anything else (string, inline macro, math, group) joins a paragraph
-    if (!paragraph) {
-      paragraph = { startLine: start.line, endLine: end.line }
-    } else {
-      paragraph.endLine = Math.max(paragraph.endLine, end.line)
+      if (ENVIRONMENT_TYPES.has(node.type)) {
+        flushParagraph()
+        const name = node.type === 'displaymath' ? 'displaymath' : envName(node as Ast.Environment)
+        attach(block('environment', file, start.line, end.line, name))
+        continue
+      }
+
+      // A brace group ({\large …}, {\small …}) is transparent for block
+      // structure: recurse into its content with the same paragraph/section
+      // state so an internal parbreak splits paragraphs and a nested
+      // \section/env still attaches. An inline group with no parbreak just
+      // joins the open paragraph, since its strings fall through below (BUG-22).
+      if (node.type === 'group') {
+        walkNodes(node.content)
+        continue
+      }
+
+      // anything else (string, inline macro, math) joins a paragraph
+      joinParagraph(start.line, end.line)
     }
   }
 
+  walkNodes(nodes)
   flushParagraph()
   return roots
 }

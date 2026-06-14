@@ -154,6 +154,28 @@ describe('transparent marker macros (\\label etc.)', () => {
   })
 })
 
+describe('body-level brace groups (BUG-22)', () => {
+  test('a brace group with an internal blank line splits into two paragraphs', () => {
+    // The abstract shape: {\large …para1… \n\n …para2…} must not fuse into one
+    // unselectable block — the internal parbreak has to split it.
+    const roots = parseBlocks('main.tex', '{\\large a\n\nb}')
+    expect(roots.map((b) => b.kind)).toEqual(['paragraph', 'paragraph'])
+    expect(roots[0]!.span.startLine).toBe(1)
+    expect(roots[1]!.span.startLine).toBe(3)
+  })
+
+  test('an inline brace group with no parbreak stays one paragraph', () => {
+    const roots = parseBlocks('x.tex', 'x {\\bf y} z')
+    expect(roots.map((b) => b.kind)).toEqual(['paragraph'])
+    expect(roots[0]!.span).toMatchObject({ startLine: 1, endLine: 1 })
+  })
+
+  test('a \\section inside a brace group still produces the section', () => {
+    const roots = parseBlocks('x.tex', '{\\section{Z}\nbody}')
+    expect(roots.some((b) => b.kind === 'section' && b.name === 'Z')).toBe(true)
+  })
+})
+
 describe('parseProjectBlocks', () => {
   const FILES: Record<string, string> = {
     'main.tex': [
