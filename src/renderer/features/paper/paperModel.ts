@@ -78,13 +78,25 @@ export function expandIds(roots: BlockNode[], blockId: string): string[] {
   return node && node.kind === 'section' ? subtree(node) : [blockId]
 }
 
+/** Do two boxes overlap as rectangles? (Page-agnostic — callers gate on page.) */
+function boxesOverlap(a: PdfRect, b: PdfRect): boolean {
+  return (
+    a.x < b.x + b.width &&
+    b.x < a.x + a.width &&
+    a.y < b.y + b.height &&
+    b.y < a.y + a.height
+  )
+}
+
 /** Smallest vertical gap from `box`'s top to a block box directly above it on
- *  the same page (Infinity when nothing sits above). Boxes that overlap `box`
- *  vertically (side-by-side) or sit below it are ignored. */
+ *  the same page (Infinity when nothing sits above). A neighbour that overlaps
+ *  `box` as a rectangle counts as gap 0 — there is no free space to pad into
+ *  (BUG-19); a purely side-by-side or below neighbour is ignored. */
 function gapAbove(box: PdfRect, neighbors: PdfRect[]): number {
   let gap = Infinity
   for (const n of neighbors) {
     if (n.page !== box.page) continue
+    if (boxesOverlap(box, n)) return 0
     const nBottom = n.y + n.height
     if (nBottom <= box.y) gap = Math.min(gap, box.y - nBottom)
   }
@@ -92,12 +104,14 @@ function gapAbove(box: PdfRect, neighbors: PdfRect[]): number {
 }
 
 /** Smallest vertical gap from `box`'s bottom to a block box directly below it
- *  on the same page (Infinity when nothing sits below). */
+ *  on the same page (Infinity when nothing sits below). An overlapping
+ *  neighbour counts as gap 0 (BUG-19). */
 function gapBelow(box: PdfRect, neighbors: PdfRect[]): number {
   let gap = Infinity
   const bottom = box.y + box.height
   for (const n of neighbors) {
     if (n.page !== box.page) continue
+    if (boxesOverlap(box, n)) return 0
     if (n.y >= bottom) gap = Math.min(gap, n.y - bottom)
   }
   return gap
@@ -129,6 +143,45 @@ export function padBoxClamped(box: PdfRect, pad: number, neighbors: PdfRect[]): 
  *  render inside the box (BUG-19). */
 export function isTightAbove(box: PdfRect, neighbors: PdfRect[], threshold: number): boolean {
   return gapAbove(box, neighbors) < threshold
+}
+
+/** Trim vertically-overlapping block boxes so no two cover the same band.
+ *  Raw synctex can place a float's box (its `\end`/caption strut) over the
+ *  next paragraph's box; without this the lower block's wash/selection bleeds
+ *  into the float and vice-versa, and padding alone can't fix an overlap in
+ *  the box EXTENT (BUG-19 reopened). Per page, boxes are sorted top-to-bottom
+ *  and each overlapping adjacent pair has its shared edge set to the overlap
+ *  midpoint (`m = (aBottom + bTop) / 2`). Returns a new map; input boxes are
+ *  not mutated. */
+export function resolveBoxOverlaps(rects: Map<string, PdfRect[]>): Map<string, PdfRect[]> {
+  const out = new Map<string, PdfRect[]>()
+  const byPage = new Map<number, PdfRect[]>()
+  for (const [id, boxes] of rects) {
+    const clones = boxes.map((b) => ({ ...b }))
+    out.set(id, clones)
+    for (const c of clones) {
+      const arr = byPage.get(c.page)
+      if (arr) arr.push(c)
+      else byPage.set(c.page, [c])
+    }
+  }
+  for (const boxes of byPage.values()) {
+    boxes.sort((a, b) => a.y - b.y)
+    for (let i = 0; i < boxes.length - 1; i++) {
+      const a = boxes[i]!
+      const b = boxes[i + 1]!
+      const aBottom = a.y + a.height
+      if (aBottom > b.y) {
+        // overlap: meet at the midpoint of the overlapping band
+        const bBottom = b.y + b.height
+        const m = (aBottom + b.y) / 2
+        a.height = m - a.y
+        b.y = m
+        b.height = Math.max(0, bBottom - m)
+      }
+    }
+  }
+  return out
 }
 
 /** Union a set of rects into one box per page, dropping degenerate rects

@@ -13,7 +13,7 @@ import type { PaneView, TaskState } from '../tasks/taskStore'
 import { BlockOverlay } from './BlockOverlay'
 import { FillerPage } from './FillerPage'
 import { PaperToolbar } from './PaperToolbar'
-import { blockBoxesByPage, cardAnchorTops, combinedSpanLabel, expandIds, isTightAbove, padBoxClamped, selectionBounds, spanLabel } from './paperModel'
+import { blockBoxesByPage, cardAnchorTops, combinedSpanLabel, expandIds, isTightAbove, padBoxClamped, resolveBoxOverlaps, selectionBounds, spanLabel } from './paperModel'
 import type { BlockMark, PageBlock } from './paperModel'
 
 const FALLBACK_PAGE_WIDTH = 564
@@ -82,9 +82,10 @@ export function PaperPane(props: Props): JSX.Element {
   // One bounds box per page = the union envelope of a set of blocks' boxes,
   // padded so it frames the text instead of cutting glyphs (BUG-10/13).
   const SELECT_PAD = 5
-  // A block top within this many pt of the block above is "tight" — its hover
-  // pill renders inside the box so the label doesn't sit on the line above.
-  const TIGHT_GAP = 12
+  // A block top within ~a pill height of the block above is "tight" — its
+  // hover pill renders inside the box so the label doesn't sit on the line
+  // above. 18 > the pill's upward extent, so a 12pt gap (flush float) tucks in.
+  const TIGHT_GAP = 18
   // Every block's boxes: neighbours for the pad clamp and the tight-pill test,
   // so a padded box (or pill) on a float placed flush against prose can't
   // cross into the block above/below (BUG-19). A selection's own rects overlap
@@ -128,7 +129,13 @@ export function PaperPane(props: Props): JSX.Element {
         return boxes.length ? ([b.id, boxes] as const) : null
       })
     ).then((entries) => {
-      if (alive) setBlockRects(new Map(entries.filter((e): e is NonNullable<typeof e> => e != null)))
+      if (!alive) return
+      // Trim raw-synctex box overlaps (a float's box extends over the next
+      // paragraph's box) before storing, so overlays, allBoxes, selection and
+      // hover all consume non-overlapping extents — padding can't fix an
+      // overlap in the box itself (BUG-19 reopened).
+      const built = new Map(entries.filter((e): e is NonNullable<typeof e> => e != null))
+      setBlockRects(resolveBoxOverlaps(built))
     })
     return () => {
       alive = false

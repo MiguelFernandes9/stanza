@@ -9,6 +9,7 @@ import {
   flattenBlocks,
   isTightAbove,
   padBoxClamped,
+  resolveBoxOverlaps,
   selectionBounds,
   spanLabel,
   taskSpans
@@ -275,6 +276,15 @@ describe('padBoxClamped — breathing room without crossing neighbors (BUG-13/19
     // vertically-overlapping (side-by-side) neighbor does not clamp
     expect(padBoxClamped(box, 5, [{ page: 1, x: 300, y: 200, width: 100, height: 40 }]).y).toBe(195)
   })
+
+  it('treats a rectangle-overlapping neighbor as gap 0 — never pads into the overlap (BUG-19)', () => {
+    const box = { page: 1, x: 72, y: 100, width: 100, height: 80 } // 100–180
+    const overlap = { page: 1, x: 72, y: 150, width: 100, height: 60 } // 150–210, overlaps box
+    const out = padBoxClamped(box, 5, [overlap])
+    expect(out.y).toBe(100) // top pad 0 — an overlap is not free space
+    expect(out.y + out.height).toBe(180) // bottom pad 0 — never grows into the overlap
+    expect(out.width).toBe(110) // horizontal pad still full
+  })
 })
 
 describe('isTightAbove — pill placement for flush floats (BUG-19)', () => {
@@ -289,6 +299,53 @@ describe('isTightAbove — pill placement for flush floats (BUG-19)', () => {
   it('ignores side-by-side and below neighbors', () => {
     expect(isTightAbove(fig, [{ page: 1, x: 300, y: 100, width: 100, height: 40 }], 12)).toBe(false)
     expect(isTightAbove(fig, [{ page: 1, x: 72, y: 200, width: 100, height: 40 }], 12)).toBe(false)
+  })
+})
+
+describe('resolveBoxOverlaps — split overlapping block boxes (BUG-19 reopened)', () => {
+  it('splits a figure box overlapping the paragraph below at the overlap midpoint', () => {
+    // real ch2.tex page-6 boxes: figure 364.7–595.4 sits over para-18 585.6–622.5
+    const rects = new Map<string, PdfRect[]>([
+      ['fig', [{ page: 6, x: 72, y: 364.7, width: 200, height: 230.7 }]],
+      ['para', [{ page: 6, x: 72, y: 585.6, width: 200, height: 36.9 }]]
+    ])
+    const out = resolveBoxOverlaps(rects)
+    const fig = out.get('fig')![0]!
+    const para = out.get('para')![0]!
+    // shared edge at the overlap midpoint 590.5 — they meet, no overlap
+    expect(fig.y + fig.height).toBeCloseTo(590.5, 6)
+    expect(para.y).toBeCloseTo(590.5, 6)
+    expect(fig.y + fig.height).toBeLessThanOrEqual(para.y + 1e-9)
+    // outer edges preserved
+    expect(fig.y).toBe(364.7)
+    expect(para.y + para.height).toBeCloseTo(622.5, 6)
+  })
+
+  it('leaves non-overlapping boxes untouched', () => {
+    const rects = new Map<string, PdfRect[]>([
+      ['a', [{ page: 1, x: 72, y: 100, width: 100, height: 40 }]], // 100–140
+      ['b', [{ page: 1, x: 72, y: 160, width: 100, height: 40 }]] // 160–200, 20pt gap
+    ])
+    const out = resolveBoxOverlaps(rects)
+    expect(out.get('a')![0]).toEqual({ page: 1, x: 72, y: 100, width: 100, height: 40 })
+    expect(out.get('b')![0]).toEqual({ page: 1, x: 72, y: 160, width: 100, height: 40 })
+  })
+
+  it('returns a new map without mutating the input boxes', () => {
+    const a = { page: 1, x: 72, y: 100, width: 100, height: 80 } // 100–180
+    const b = { page: 1, x: 72, y: 150, width: 100, height: 40 } // 150–190, overlaps a
+    resolveBoxOverlaps(new Map([['a', [a]], ['b', [b]]]))
+    expect(a.height).toBe(80) // original untouched
+    expect(b.y).toBe(150)
+  })
+
+  it('only resolves boxes on the same page', () => {
+    const rects = new Map<string, PdfRect[]>([
+      ['a', [{ page: 1, x: 72, y: 100, width: 100, height: 80 }]], // p1 100–180
+      ['b', [{ page: 2, x: 72, y: 150, width: 100, height: 40 }]] // p2 — would overlap if same page
+    ])
+    const out = resolveBoxOverlaps(rects)
+    expect(out.get('a')![0]!.height).toBe(80)
   })
 })
 
