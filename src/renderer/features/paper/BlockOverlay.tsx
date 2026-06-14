@@ -2,6 +2,7 @@ import type { JSX } from 'react'
 import { Lock } from 'lucide-react'
 import { spanLabel } from './paperModel'
 import type { BlockMark, PageBlock } from './paperModel'
+import { phaseTone } from './paperPaneLayout'
 
 export interface OverlayRect {
   page: number
@@ -28,9 +29,22 @@ interface Props {
 
 const GLYPH: Record<PageBlock['kind'], string> = { heading: '§', paragraph: '¶', environment: '∑' }
 
+/** Phase-toned label for a block owned by a task (v0.3). busy/review read as
+ *  "locked"; compose is the live draft selection. */
+function phaseLabel(phase: BlockMark['phase']): string {
+  return phase === 'busy'
+    ? 'Claude editing — locked'
+    : phase === 'review'
+      ? 'Awaiting review'
+      : phase === 'noop'
+        ? 'No changes'
+        : 'Editing block'
+}
+
 /** Selection hit-area over a block's synctex rect on the real PDF page (F5):
- *  a transparent overlay carrying the selection wash, edge bar and hover/lock
- *  pills — the canvas underneath stays untouched. */
+ *  a transparent overlay carrying the hover/lock pill — the per-task wash
+ *  (drawn by PaperPane) provides the fill + edge bar, and the canvas
+ *  underneath stays untouched. */
 export function BlockOverlay({
   block,
   rect,
@@ -43,13 +57,9 @@ export function BlockOverlay({
   onClick
 }: Props): JSX.Element {
   const locked = mark != null && (mark.phase === 'busy' || mark.phase === 'review')
-  const barColor = mark
-    ? mark.phase === 'review'
-      ? 'var(--clay-500)'
-      : mark.phase === 'busy'
-        ? 'var(--clay-400)'
-        : 'var(--clay-300)'
-    : 'transparent'
+  // Owned → the task's phase color (busy reads as a neutral lock, matching the
+  // mock); unselected → the neutral ink pill with the block's span.
+  const pillBg = mark ? (mark.phase === 'busy' ? 'var(--ink-500)' : phaseTone(mark.phase).accent) : 'var(--ink-700)'
 
   return (
     <div
@@ -68,19 +78,12 @@ export function BlockOverlay({
         borderRadius: 'var(--radius-sm)',
         cursor: locked && mark?.phase === 'busy' ? 'progress' : selectMode ? 'pointer' : 'default',
         pointerEvents: selectMode ? 'auto' : 'none',
-        transition: 'background var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out)',
-        // Per-block outlines removed — PaperPane draws the single union box for
-        // the selection and a faint preview box on hover (BUG-10/12). Keep the
-        // fill tint so members/hover targets stay individually visible.
-        boxShadow: 'inset 0 0 0 1px transparent',
-        background: mark?.active === true ? 'var(--select-fill)' : hovered ? 'var(--hover-fill)' : 'transparent'
+        transition: 'background var(--dur-fast) var(--ease-out)',
+        // Fill + edge bar come from PaperPane's per-task wash now; the hit-area
+        // itself stays transparent (BUG-10/12 — no per-block outlines).
+        background: 'transparent'
       }}
     >
-      {mark && (
-        <span
-          style={{ position: 'absolute', left: -26, top: 3, bottom: 3, width: 3, borderRadius: 2, background: barColor }}
-        />
-      )}
       {hovered && (
         <span
           style={{
@@ -95,7 +98,7 @@ export function BlockOverlay({
             gap: 4,
             height: 17,
             padding: '0 6px',
-            background: locked ? 'var(--ink-500)' : 'var(--ink-700)',
+            background: pillBg,
             color: '#fff',
             borderRadius: 'var(--radius-pill)',
             font: 'var(--weight-semibold) 9.5px/1 var(--font-sans)',
@@ -105,16 +108,17 @@ export function BlockOverlay({
             whiteSpace: 'nowrap'
           }}
         >
-          {locked ? (
-            <Lock size={10} />
+          {mark ? (
+            <>
+              {locked && <Lock size={10} />}
+              {phaseLabel(mark.phase)}
+            </>
           ) : (
-            <span style={{ fontFamily: 'var(--font-serif)', fontSize: 11 }}>{GLYPH[block.kind]}</span>
+            <>
+              <span style={{ fontFamily: 'var(--font-serif)', fontSize: 11 }}>{GLYPH[block.kind]}</span>
+              {spanLabel(block.span)}
+            </>
           )}
-          {locked
-            ? mark.phase === 'busy'
-              ? 'Claude editing — locked'
-              : 'awaiting review'
-            : spanLabel(block.span)}
         </span>
       )}
     </div>
