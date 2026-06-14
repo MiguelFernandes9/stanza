@@ -6,10 +6,15 @@ import {
   startExternalEditWatcher,
   stopExternalEditWatcher,
 } from '../externalEditWatcher'
+import type { ProcessRunner } from '../infra/ProcessRunner'
+import type { Store } from '../infra/Store'
+import type { DocumentInfo } from '../../shared/ipc/document'
+import { ClaudeService, OP_SETTLE_GRACE_MS } from '../services/ClaudeService'
 
 afterEach(() => {
   stopExternalEditWatcher()
   setExternalEditWatchingEnabled(false)
+  vi.useRealTimers()
 })
 
 describe('isSourceFile / shouldRecompile', () => {
@@ -69,6 +74,28 @@ describe('startExternalEditWatcher (enabled)', () => {
     fire(['main.tex'])
 
     expect(recompile).not.toHaveBeenCalled()
+  })
+
+  test("an op's own writes + switchBack revert never recompile (M2-2 tail race)", () => {
+    vi.useFakeTimers()
+    const info: DocumentInfo = { root: '/doc', mainFile: 'main.tex', texFiles: ['main.tex'] }
+    // isRunning/beginOp/endOp don't touch runner/store, so bare casts suffice.
+    const claude = new ClaudeService({} as ProcessRunner, {} as Store, info)
+    const { watch, fire } = capture()
+    const recompile = vi.fn()
+    startExternalEditWatcher({ root: '/doc', recompile, isBusy: () => claude.isRunning, watch })
+
+    claude.beginOp()
+    fire(['main.tex']) // Claude's edit settles while the op is in flight
+    expect(recompile).not.toHaveBeenCalled()
+
+    claude.endOp() // op returned; capture()'s switchBack revert just landed on disk
+    fire(['main.tex']) // …and settles AFTER endOp — the tail the linger must cover
+    expect(recompile).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(OP_SETTLE_GRACE_MS + 1) // linger expires, op truly over
+    fire(['main.tex']) // a genuine external edit now
+    expect(recompile).toHaveBeenCalledTimes(1)
   })
 
   test('starting a new watcher disposes the previous one (one per open doc)', () => {

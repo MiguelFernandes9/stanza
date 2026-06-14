@@ -46,7 +46,10 @@ export class DocumentSession {
     // (keeps the unit-test suite free of stray watchers/compiles).
     startExternalEditWatcher({
       root: info.root,
-      isBusy: () => this.compiler.isCompiling,
+      // A Claude op writes the .tex twice (the edit, then capture()'s switchBack
+      // revert); without claude.isRunning the watcher fired an unsolicited
+      // recompile mid-op that briefly stranded the task bubble (M2-2).
+      isBusy: () => this.compiler.isCompiling || this.claude.isRunning,
       recompile: () => void this.recompileFromDisk(),
     })
   }
