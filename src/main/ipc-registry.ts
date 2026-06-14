@@ -201,6 +201,24 @@ export function registerIpcHandlers(): void {
     await doc.files.createFolder(a.dir, a.name)
     return fileMutationResult(doc)
   })
+
+  // Upload (v0.4): main shows the OS picker and copies the bytes — nothing
+  // ships over IPC. Cancel is a no-op (returns the current listing).
+  ipcMain.handle(IpcChannels.documentUpload, async (_e, a: { dir: string }) => {
+    const doc = requireSession()
+    const result = await dialog.showOpenDialog({
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'pdf', 'svg'] },
+        { name: 'All', extensions: ['*'] },
+      ],
+    })
+    if (result.canceled || result.filePaths.length === 0) {
+      return { files: listFiles(doc.info.root) } satisfies FileMutationResult
+    }
+    const rels = await doc.files.importFiles(a.dir, result.filePaths)
+    return fileMutationResult(doc, rels[0])
+  })
 }
 
 /** Diff-gated op pipeline (FR7): lock check → clean tree → arm watcher →

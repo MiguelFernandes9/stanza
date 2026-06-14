@@ -60,6 +60,10 @@ export const api = {
     invoke<FileMutationResult>(IpcChannels.documentCreateFile, req),
   documentCreateFolder: (req: { dir: string; name: string }) =>
     invoke<FileMutationResult>(IpcChannels.documentCreateFolder, req),
+  /** Upload files into `dir` ('' = root). Main shows the OS picker and copies
+   *  the bytes — nothing ships over IPC. Cancel → no-op (current listing). */
+  documentUpload: (req: { dir: string }) =>
+    invoke<FileMutationResult>(IpcChannels.documentUpload, req),
   /** Every project file's blocks merged into one tree (multi-file overlays).
    *  Each span carries its own file. Contract addition, flagged at gate. */
   documentProjectBlocks: () => invoke<BlockNode[]>(IpcChannels.documentProjectBlocks),

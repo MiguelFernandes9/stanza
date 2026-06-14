@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   sent: [] as { channel: string; payload: unknown }[],
   userData: '',
+  openDialog: { canceled: true, filePaths: [] as string[] },
 }))
 
 vi.mock('electron', () => ({
@@ -36,7 +37,7 @@ vi.mock('electron', () => ({
       },
     ],
   },
-  dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) },
+  dialog: { showOpenDialog: async () => h.openDialog },
 }))
 
 import { registerIpcHandlers } from '../ipc-registry'
@@ -79,6 +80,7 @@ beforeEach(() => {
   h.userData = makeDir('stanza-reg-data-')
   h.handlers.clear()
   h.sent = []
+  h.openDialog = { canceled: true, filePaths: [] }
   registerIpcHandlers()
 })
 
@@ -280,5 +282,36 @@ describe('file management channels (v0.2)', () => {
     await git.switchBack()
 
     await expect(invoke('document:delete', { relPath: 'main.tex' })).rejects.toThrow('FILE_LOCKED')
+  })
+})
+
+describe('document:upload (v0.4)', () => {
+  const openProject = async (): Promise<string> => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', makeClaudeStub(`echo '{"result":"primed"}'`))
+    const root = makeProject()
+    await invoke('document:open', root)
+    return root
+  }
+
+  test('is bound and returns a FileMutationResult when the picker is cancelled', async () => {
+    await openProject()
+    h.openDialog = { canceled: true, filePaths: [] }
+    expect(h.handlers.has('document:upload')).toBe(true)
+    const res = (await invoke('document:upload', { dir: '' })) as FileMutationResult
+    expect(Array.isArray(res.files)).toBe(true)
+  })
+
+  test('imports the picked files and returns newRelPath', async () => {
+    const root = await openProject()
+    const srcDir = makeDir('stanza-upl-src-')
+    const pic = join(srcDir, 'pic.png')
+    writeFileSync(pic, 'PNG')
+    h.openDialog = { canceled: false, filePaths: [pic] }
+
+    const res = (await invoke('document:upload', { dir: '' })) as FileMutationResult
+
+    expect(res.newRelPath).toBe('pic.png')
+    expect(res.files.map((f) => f.relPath)).toContain('pic.png')
+    expect(existsSync(join(root, 'pic.png'))).toBe(true)
   })
 })
