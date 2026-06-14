@@ -11,7 +11,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { ClaudeResult } from '../../shared/ipc/claude'
-import type { PrimeStep } from '../../shared/ipc/document'
+import type { FileMutationResult, PrimeStep } from '../../shared/ipc/document'
+import { DefaultProcessRunner } from '../infra/ProcessRunner'
+import { GitClient } from '../infra/GitClient'
 
 const h = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
@@ -39,6 +41,7 @@ vi.mock('electron', () => ({
 
 import { registerIpcHandlers } from '../ipc-registry'
 
+const runner = new DefaultProcessRunner()
 const ARTICLE = '\\documentclass{article}\n\\begin{document}\nhi\n\\end{document}\n'
 
 let dirs: string[] = []
@@ -187,4 +190,95 @@ esac`)
       }),
     ).rejects.toThrow('SPANS_LOCKED')
   }, 20_000)
+})
+
+describe('file management channels (v0.2)', () => {
+  const openProject = async (): Promise<string> => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', makeClaudeStub(`echo '{"result":"primed"}'`))
+    const root = makeProject()
+    await invoke('document:open', root) // primes + opens the session
+    return root
+  }
+
+  // Sidebar-relevant files: drop the incidental .gitignore prime writes
+  // (listFiles lists dotfiles; only dot-dirs are filtered).
+  const named = (res: FileMutationResult) =>
+    res.files
+      .map((f) => f.relPath)
+      .filter((f) => !f.startsWith('.'))
+      .sort()
+
+  test('all five file-mgmt channels are bound', () => {
+    for (const ch of [
+      'document:rename',
+      'document:duplicate',
+      'document:delete',
+      'document:createFile',
+      'document:createFolder',
+    ]) {
+      expect(h.handlers.has(ch)).toBe(true)
+    }
+  })
+
+  test('rename returns a FileMutationResult with the fresh listing', async () => {
+    const root = await openProject()
+    writeFileSync(join(root, 'notes.md'), 'hi\n')
+    const res = (await invoke('document:rename', {
+      from: 'notes.md',
+      to: 'thoughts.md',
+    })) as FileMutationResult
+    expect(named(res)).toEqual(['main.tex', 'thoughts.md'])
+    expect(res.doc).toBeUndefined() // no .tex change → DocumentInfo unchanged
+  })
+
+  test('renaming the main .tex propagates a new DocumentInfo in result.doc', async () => {
+    await openProject()
+    const res = (await invoke('document:rename', {
+      from: 'main.tex',
+      to: 'paper.tex',
+    })) as FileMutationResult
+    expect(res.doc).toBeDefined()
+    expect(res.doc!.mainFile).toBe('paper.tex')
+    expect(named(res)).toEqual(['paper.tex'])
+  })
+
+  test('duplicate returns newRelPath for the renderer to focus', async () => {
+    await openProject()
+    const res = (await invoke('document:duplicate', {
+      relPath: 'main.tex',
+    })) as FileMutationResult
+    expect(res.newRelPath).toBe('main copy.tex')
+    expect(named(res)).toEqual(['main copy.tex', 'main.tex'])
+  })
+
+  test('createFile returns the new path and lists it', async () => {
+    await openProject()
+    const res = (await invoke('document:createFile', {
+      dir: '',
+      name: 'intro.tex',
+    })) as FileMutationResult
+    expect(res.newRelPath).toBe('intro.tex')
+    expect(res.files.map((f) => f.relPath)).toContain('intro.tex')
+  })
+
+  test('delete drops the file from the listing', async () => {
+    const root = await openProject()
+    writeFileSync(join(root, 'extra.tex'), 'x\n')
+    const res = (await invoke('document:delete', { relPath: 'extra.tex' })) as FileMutationResult
+    expect(res.files.map((f) => f.relPath)).not.toContain('extra.tex')
+    expect(res.files.map((f) => f.relPath)).toContain('main.tex')
+  })
+
+  test('refuses to delete a file that has a pending review proposal (no stranded op)', async () => {
+    const root = await openProject()
+    // Forge a pending proposal branch touching main.tex — review.list() rebuilds
+    // proposals from stanza/op-* branches, so this is what the guard reads.
+    const git = new GitClient(runner, root)
+    writeFileSync(join(root, 'main.tex'), `${ARTICLE}% claude edit\n`)
+    await git.switchCreate('stanza/op-pending')
+    await git.commitAll('claude: edit main')
+    await git.switchBack()
+
+    await expect(invoke('document:delete', { relPath: 'main.tex' })).rejects.toThrow('FILE_LOCKED')
+  })
 })

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
@@ -186,5 +186,42 @@ describe('GitClient branch operations (proposal-branch review)', () => {
     expect(log.map((c) => c.kind)).toEqual(['claude', 'wip', 'other'])
     expect(log[0]!.subject).toBe('claude: tighten abstract')
     expect(log[0]!.iso).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+  })
+})
+
+describe('GitClient file-management plumbing (v0.2)', () => {
+  test('mv moves a tracked file in the tree and index', async () => {
+    await initWithCommit()
+    await git.mv('main.tex', 'paper.tex')
+    expect(existsSync(join(root, 'paper.tex'))).toBe(true)
+    expect(existsSync(join(root, 'main.tex'))).toBe(false)
+    expect(await git.isTracked('paper.tex')).toBe(true)
+  })
+
+  test('mv on a directory moves all its tracked descendants', async () => {
+    await git.init()
+    writeFileSync(join(root, 'main.tex'), 'hi\n')
+    mkdirSync(join(root, 'chapters'))
+    write('chapters/ch1.tex', 'one\n')
+    await git.commitAll('initial')
+    await git.mv('chapters', 'parts')
+    expect(existsSync(join(root, 'parts/ch1.tex'))).toBe(true)
+    expect(existsSync(join(root, 'chapters'))).toBe(false)
+    expect(await git.isTracked('parts/ch1.tex')).toBe(true)
+  })
+
+  test('rm removes a tracked file from the tree and index', async () => {
+    await initWithCommit()
+    await git.rm('main.tex')
+    expect(existsSync(join(root, 'main.tex'))).toBe(false)
+    expect(await git.isTracked('main.tex')).toBe(false)
+  })
+
+  test('isTracked is false for an untracked file, true after commit', async () => {
+    await initWithCommit()
+    write('loose.tex', 'x\n')
+    expect(await git.isTracked('loose.tex')).toBe(false)
+    await git.commitAll('wip: add loose')
+    expect(await git.isTracked('loose.tex')).toBe(true)
   })
 })
