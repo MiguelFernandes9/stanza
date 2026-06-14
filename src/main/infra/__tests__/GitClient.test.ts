@@ -128,6 +128,18 @@ describe('GitClient branch operations (proposal-branch review)', () => {
     expect(await git.listBranches('stanza/op-*')).toEqual([])
   })
 
+  test('branchExists is true for a live branch, false for a missing one (BUG-18)', async () => {
+    await initWithCommit()
+    expect(await git.branchExists('stanza/op-none')).toBe(false)
+    write('main.tex', 'x\n')
+    await git.switchCreate('stanza/op-live')
+    await git.commitAll('claude: x')
+    await git.switchBack()
+    expect(await git.branchExists('stanza/op-live')).toBe(true)
+    await git.deleteBranch('stanza/op-live')
+    expect(await git.branchExists('stanza/op-live')).toBe(false)
+  })
+
   test('diffRange shows the branch diff; show reads a file at a ref', async () => {
     await initWithCommit()
     write('main.tex', 'proposed\n')
