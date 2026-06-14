@@ -11,6 +11,7 @@ import type {
   DocumentInfo,
   DocumentOpenRequest,
   FileEntry,
+  FileMutationResult,
   InversePoint,
   OpRecord,
   PdfRect,
@@ -46,6 +47,19 @@ export const api = {
   /** Working-tree file content (F4 editor). Contract addition, flagged at gate. */
   documentRead: (relPath: string) => invoke<string>(IpcChannels.documentRead, relPath),
   documentFiles: () => invoke<FileEntry[]>(IpcChannels.documentFiles),
+  /** Sidebar file management (v0.2). Each returns the post-op file listing
+   *  (drop-in for setFiles); `doc` is set only when the main/tex set changed;
+   *  `newRelPath` is the file to focus/open. Backend = Lane 1 FileService. */
+  documentRename: (req: { from: string; to: string }) =>
+    invoke<FileMutationResult>(IpcChannels.documentRename, req),
+  documentDuplicate: (req: { relPath: string }) =>
+    invoke<FileMutationResult>(IpcChannels.documentDuplicate, req),
+  documentDelete: (req: { relPath: string }) =>
+    invoke<FileMutationResult>(IpcChannels.documentDelete, req),
+  documentCreateFile: (req: { dir: string; name: string }) =>
+    invoke<FileMutationResult>(IpcChannels.documentCreateFile, req),
+  documentCreateFolder: (req: { dir: string; name: string }) =>
+    invoke<FileMutationResult>(IpcChannels.documentCreateFolder, req),
   /** Every project file's blocks merged into one tree (multi-file overlays).
    *  Each span carries its own file. Contract addition, flagged at gate. */
   documentProjectBlocks: () => invoke<BlockNode[]>(IpcChannels.documentProjectBlocks),

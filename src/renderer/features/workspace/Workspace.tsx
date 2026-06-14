@@ -3,7 +3,15 @@ import type { JSX } from 'react'
 import { Toast } from '@renderer/components'
 import { client } from '@renderer/lib/client'
 import type { BlockNode } from '@shared/blocks/types'
-import type { BlockSpan, CommitInfo, CompileError, DocumentInfo, FileEntry, OpRecord } from '@shared/ipc'
+import type {
+  BlockSpan,
+  CommitInfo,
+  CompileError,
+  DocumentInfo,
+  FileEntry,
+  FileMutationResult,
+  OpRecord
+} from '@shared/ipc'
 import { ChatPane } from '../chat/ChatPane'
 import type { ChatMessage, ComposeChip } from '../chat/ChatPane'
 import { AUTO_COMPILE_MS, createDebounce } from '../editor/autoCompile'
@@ -16,17 +24,21 @@ import { resolveToKnownFile } from '@renderer/lib/paths'
 import { blockLabel, tagKind } from '../tasks/TaskCard'
 import { initialTaskState, taskReducer } from '../tasks/taskStore'
 import { Sidebar } from './Sidebar'
+import { uniqueName } from './fileMenu'
 import { TitleBar } from './TitleBar'
 import type { CompileInfo } from './TitleBar'
 
 interface Props {
   doc: DocumentInfo
+  /** Full main-file propagation: a rename/delete that changes the detected
+   *  main file (or texFiles) returns a fresh DocumentInfo — lift it to App. */
+  onDocChanged?: (doc: DocumentInfo) => void
 }
 
 /** Workspace — design §2: TitleBar, sidebar, paper pane with the margin-rail
  *  edit loop (FD4). Source editor (F4) and chat pane (FD6) still plug into
  *  placeholders. ⌘R compile · ⌘E source · ⌘J assistant. */
-export function Workspace({ doc }: Props): JSX.Element {
+export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
   const [files, setFiles] = useState<FileEntry[]>([])
   const [blocks, setBlocks] = useState<BlockNode[]>([])
   const [history, setHistory] = useState<CommitInfo[]>([])
@@ -53,6 +65,9 @@ export function Workspace({ doc }: Props): JSX.Element {
   const [compileErrors, setCompileErrors] = useState<CompileError[]>([])
   const [pdfState, setPdfState] = useState<{ rel: string; nonce: number } | null>(null)
   const [pdfFlash, setPdfFlash] = useState<PdfFlash | null>(null)
+  // A just-created file the sidebar should drop into inline rename (type-name).
+  const [renameOnAppear, setRenameOnAppear] = useState<string | null>(null)
+  const clearRenameOnAppear = useCallback(() => setRenameOnAppear(null), [])
   const editorApi = useRef<EditorApi | null>(null)
 
   useEffect(() => setActiveFile(doc.mainFile), [doc])
@@ -80,14 +95,18 @@ export function Workspace({ doc }: Props): JSX.Element {
     void client.documentProjectBlocks().then(setBlocks, () => setBlocks([]))
   }, [])
 
-  useEffect(() => {
+  const loadFiles = useCallback(() => {
     void client.documentFiles().then(setFiles, () => setFiles([]))
+  }, [])
+
+  useEffect(() => {
+    loadFiles()
     // Blocks for the whole project (all \include'd files), not just main —
     // chapters in ch1/ch2 must be selectable too (BUG-3).
     loadBlocks()
     loadHistory()
     loadOps()
-  }, [doc, loadBlocks, loadHistory, loadOps])
+  }, [doc, loadFiles, loadBlocks, loadHistory, loadOps])
 
   // Pending proposals re-emitted on open (crash recovery, FR7).
   useEffect(
@@ -196,6 +215,110 @@ export function Workspace({ doc }: Props): JSX.Element {
     () => compileErrors.map((e) => ({ ...e, file: resolveToKnownFile(e.file, doc.texFiles) })),
     [compileErrors, doc.texFiles]
   )
+
+  // ---- v0.2 sidebar file management ----
+
+  // Files whose Rename/Delete the sidebar must block: a busy/review task owns a
+  // block in them (UI mirror of the backend SPANS_LOCKED check).
+  const lockedFiles = useMemo(() => {
+    const set = new Set<string>()
+    for (const t of state.tasks) {
+      if (t.phase === 'busy' || t.phase === 'review') {
+        for (const span of taskSpans(t.blockIds, blocks)) set.add(span.file)
+      }
+    }
+    return set
+  }, [state.tasks, blocks])
+
+  const showErrToast = (err: unknown): void =>
+    setToast({
+      title: 'File operation failed',
+      message: err instanceof Error ? err.message : String(err),
+      tone: 'danger'
+    })
+
+  const applyMutation = (res: FileMutationResult): void => {
+    setFiles(res.files)
+    loadBlocks() // spans/overlays follow renames & deletes
+    loadHistory() // the wip: commit lands in HISTORY
+    if (res.doc) onDocChanged?.(res.doc) // main/tex set changed (e.g. main renamed)
+  }
+
+  // Flush the editor first — a git mv under a dirty buffer would drop the
+  // unsaved edit — then run the op and refresh files/blocks/history.
+  const runFileOp = (
+    op: () => Promise<FileMutationResult>,
+    after?: (res: FileMutationResult) => void
+  ): void => {
+    void (editorApi.current?.saveDirty() ?? Promise.resolve([]))
+      .then(op)
+      .then((res) => {
+        applyMutation(res)
+        after?.(res)
+      }, showErrToast)
+  }
+
+  /** Basenames directly inside `dir` ('' = root) — seeds a non-colliding
+   *  default for New file/folder. */
+  const namesInDir = (dir: string): string[] =>
+    files
+      .filter((f) =>
+        dir
+          ? f.relPath.startsWith(`${dir}/`) && !f.relPath.slice(dir.length + 1).includes('/')
+          : !f.relPath.includes('/')
+      )
+      .map((f) => f.relPath.split('/').pop() ?? f.relPath)
+
+  const onRenameFile = (from: string, to: string): void =>
+    runFileOp(
+      () => client.documentRename({ from, to }),
+      () => {
+        // Keep the open tab on the renamed path — a file, or a file carried by
+        // a folder rename (prefix rewrite).
+        if (activeFile === from) setActiveFile(to)
+        else if (activeFile.startsWith(`${from}/`)) setActiveFile(to + activeFile.slice(from.length))
+      }
+    )
+
+  const onDeleteFile = (relPath: string): void =>
+    runFileOp(
+      () => client.documentDelete({ relPath }),
+      (res) => {
+        if (activeFile === relPath || activeFile.startsWith(`${relPath}/`)) {
+          setActiveFile(res.doc?.mainFile ?? doc.mainFile)
+        }
+      }
+    )
+
+  const onDuplicateFile = (relPath: string): void =>
+    runFileOp(
+      () => client.documentDuplicate({ relPath }),
+      (res) => {
+        if (res.newRelPath) {
+          setActiveFile(res.newRelPath)
+          setSourceOpen(true)
+        }
+      }
+    )
+
+  const onCreateFile = (dir: string): void => {
+    const name = uniqueName(namesInDir(dir), 'untitled', '.tex')
+    runFileOp(
+      () => client.documentCreateFile({ dir, name }),
+      (res) => {
+        if (res.newRelPath) {
+          setActiveFile(res.newRelPath)
+          setSourceOpen(true)
+          setRenameOnAppear(res.newRelPath) // drop the user straight into renaming
+        }
+      }
+    )
+  }
+
+  const onCreateFolder = (dir: string): void => {
+    const name = uniqueName(namesInDir(dir), 'untitled', '')
+    runFileOp(() => client.documentCreateFolder({ dir, name }))
+  }
 
   /** Fire claude:run for a task already in busy phase and wire its result
    *  back by taskId (op-started → proposal/noop, or op-failed). */
@@ -325,6 +448,18 @@ export function Workspace({ doc }: Props): JSX.Element {
             dispatch({ type: 'set-view', view: 'select' })
             dispatch({ type: 'toggle-block', ids: expandIds(blocks, id), additive: false })
           }}
+          onOpenFile={(relPath) => {
+            setActiveFile(relPath)
+            setSourceOpen(true)
+          }}
+          onRename={onRenameFile}
+          onDuplicate={onDuplicateFile}
+          onDelete={onDeleteFile}
+          onCreateFile={onCreateFile}
+          onCreateFolder={onCreateFolder}
+          lockedFiles={lockedFiles}
+          renameOnAppear={renameOnAppear}
+          onRenameHandled={clearRenameOnAppear}
         />
         {sourceOpen && (
           <EditorPane
