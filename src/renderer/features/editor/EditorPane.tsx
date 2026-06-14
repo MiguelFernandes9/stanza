@@ -16,6 +16,8 @@ export interface EditorApi {
 
 interface Props {
   doc: DocumentInfo
+  /** Editor pane width (px) — drag-resizable via usePaneWidths. */
+  width: number
   activeFile: string
   onSelectFile: (file: string) => void
   /** Any buffer edit — F6 debounce hook. */
@@ -33,6 +35,7 @@ interface Props {
  *  dirty dots, ⌘S save, design §2 chrome. */
 export function EditorPane({
   doc,
+  width,
   activeFile,
   onSelectFile,
   onDocChanged,
@@ -192,7 +195,7 @@ export function EditorPane({
   return (
     <section
       style={{
-        width: 460,
+        width,
         flex: '0 0 auto',
         display: 'flex',
         flexDirection: 'column',

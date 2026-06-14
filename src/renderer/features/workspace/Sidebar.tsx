@@ -27,6 +27,8 @@ import type { ContextMenuEntry } from './FileContextMenu'
 
 interface Props {
   doc: DocumentInfo
+  /** Sidebar width (px) — drag-resizable via usePaneWidths. */
+  width: number
   files: FileEntry[]
   blocks: BlockNode[]
   history: CommitInfo[]
@@ -313,6 +315,7 @@ interface MenuState {
  *  OUTLINE, HISTORY. */
 export function Sidebar({
   doc,
+  width,
   files,
   blocks,
   history,
@@ -441,7 +444,7 @@ export function Sidebar({
   return (
     <div
       style={{
-        width: 'var(--rail-sidebar)',
+        width,
         flex: '0 0 auto',
         display: 'flex',
         flexDirection: 'column',
