@@ -1267,3 +1267,36 @@ update) — separate, file under a BUG-31 if it survives the live gate.
 
 **Lane.** Renderer paper geometry (`paperModel.ts` + test) — small. No
 paper-geometry work in flight (BUG-25/26/27 all merged); branch off main.
+
+## BUG-31 — the PDF view randomly jumps to the top (scroll reset on recompile)
+
+While reading/editing, the preview randomly snaps back to the top of the
+document. Always coincides with a recompile.
+
+**Root cause.** A recompile changes `pdfUrl` (compile nonce) → `usePdfDocument`
+loads a new proxy → `pdf` swaps → `PdfPageStack`'s `[pdf, scale]` effect runs
+`setGeo(null)` (`PdfPageStack.tsx`). The render guard `if (!geo) return <div />`
+then replaces the whole page stack with an empty div, so the scroll content
+**collapses to zero height** and the browser clamps `scrollTop` to 0. geo
+re-measures a tick later and pages re-render, but the position is already gone.
+It fires on every recompile — auto-compile after an edit, accept/reject, and
+(now most often) the BUG-24 external-edit watcher (`#41`) on any file touch —
+hence "random."
+
+**Fix (`PdfPageStack.tsx`).** Don't null `geo` on reload. In the `[pdf, scale]`
+effect, drop `setGeo(null)` and instead measure the new page-1 viewport and
+`setGeo(newGeo)` directly — geo goes old→new without a null in between, so the
+guard never collapses the stack after the first load. Keep the page-cache /
+range reset; the page slots still render at `geo.height` while canvases
+re-fetch, so the content height (and `scrollTop`) holds. For a same-document
+recompile the dims are identical → zero visual jump. A scale (zoom) change still
+re-measures to the new dims as today. (Optional belt-and-suspenders: capture
+`scrollRef.scrollTop` before the swap and restore after the new geo lands — not
+needed if geo never nulls.)
+
+**Test (live gate, Miguel).** Scroll mid-document, trigger a recompile (edit +
+auto-compile, or touch the .tex externally) → the view stays put instead of
+snapping to the top.
+
+**Lane.** Renderer pdf (`PdfPageStack.tsx`) — small. Independent of paper
+geometry; branch off main.
