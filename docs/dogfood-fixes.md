@@ -932,3 +932,43 @@ w283/w325): tightened box height stays `[264.2, 320.5]`, width drops to
 equation falls back to full width unchanged. A figure block (non-math env)
 is untouched. **Lane.** Renderer paper geometry (`paperModel.ts`,
 `PaperPane.tsx`) — small. Conflict-free (paper/* idle since #35).
+
+## BUG-24 — external source edits leave a stale view (empty boxes + Claude noops)
+
+Two reported symptoms, **one root cause**:
+1. Selecting a block washes an **empty region** (box maps onto the old PDF
+   where no text is — block spans from the new source, SyncTeX from the old).
+2. A Claude edit returns **"no changes"** — Claude reads the live file, gets
+   a block span that undershoots/straddles the real paragraph, and refuses
+   (e.g. card span `ch1.tex:12-16`/`36-41` while the current parser gives
+   `@16-28`/`@40-48` — the card spans no longer exist).
+
+**Root cause: no recompile / block-refresh after an *external* source edit.**
+Auto-compile is debounced on the **in-app editor** only (`autoCompile.ts`);
+blocks refresh on **compile-ok** (BUG-15). Editing a `.tex` outside the app
+(another editor, `git pull`, manual fixture edits) fires neither → the PDF,
+SyncTeX, and block tree all lag the source on disk. Confirmed by mtimes:
+`chapters/ch1.tex` newer than `main.pdf`/`main.synctex.gz` during the
+repro; a manual recompile self-heals both symptoms. Claude's edits are
+unaffected (they go through the op pipeline + recompile on accept) — only
+**user external edits** go stale silently.
+
+The watcher primitives already exist (`FileWatcher.watchSettled`, ignoring
+`.pdf/.synctex.gz/.log/.aux`) but are only wired into the Claude-op settle
+(`armSettleWatcher`), not a live doc-dir watch.
+
+**Fix.** Wire a per-session doc-dir watcher: on settled external changes to
+source files (`.tex`/`.bib`/`.cls`/`.sty`, not build artifacts), trigger a
+**recompile** (which refreshes blocks via the existing compile-ok path).
+Guard against fighting the app's own writes — debounce, and pause/ignore
+during accept/reject git ops and in-app saves (those already recompile).
+
+**⚠️ Conflict scoping.** The natural home is `ipc-registry.ts`/`session.ts`,
+but the in-flight v0.4 file-mgmt-2 sibling edits `ipc-registry.ts` +
+`shared/ipc`. To avoid collision: either land v0.4 first, or scope the
+watcher wiring to `session.ts` + `index.ts` (+ the existing `FileWatcher`)
+and keep out of `ipc-registry.ts`. **Lane.** Main process — small/medium.
+
+**Test.** A source file changed on disk (outside an in-app save) triggers a
+recompile after the settle window; a build-artifact change (`.pdf` etc.)
+does not; an in-app save/accept doesn't double-fire.
