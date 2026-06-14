@@ -64,7 +64,7 @@ export function PaperPane(props: Props): JSX.Element {
   const { mainFile, pageBlocks, state, pdfUrl, onInverseSearch, flash, onView } = props
   const [hover, setHover] = useState<string | null>(null)
   const [reviewId, setReviewId] = useState<number | null>(null)
-  const [zoom, setZoom] = useState(1.1)
+  const [zoom, setZoom] = useState(1.5)
   const [geo, setGeo] = useState<PageGeometry | null>(null)
   const [numPages, setNumPages] = useState(0)
   const [containerW, setContainerW] = useState(900)
