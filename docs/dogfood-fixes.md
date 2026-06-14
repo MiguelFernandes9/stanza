@@ -1337,3 +1337,60 @@ the block, never at the screen top.
 **⚠️ Sequencing.** Touches `cardAnchorTops` in `paperModel.ts` — the same file
 BUG-30 (`fix/drop-stray-page-box`) edits. **Branch off main AFTER BUG-30
 merges.** **Lane.** Renderer paper (`paperModel.ts` + `PaperPane.tsx`) — small.
+
+## BUG-33 — accepting one pending review makes another pending review vanish from the PDF
+
+Two edits pending review at once (non-overlapping blocks, e.g. one upper in the
+PDF and one lower). Accept the **upper** one → the **lower** one's wash + badge
++ connector + bubble **disappear from the PDF pane**. The proposal is not
+actually lost: its op branch (`stanza/op-<id>`) still exists and its **chat
+card** still offers accept/reject (`Workspace.tsx` builds chat messages by
+`opId`, not by block id) — so it's recoverable from the assistant pane. But on
+the PDF, where the user is reviewing, the pending edit silently evaporates and
+reads as data loss.
+
+**Root cause.** Tasks anchor to a block **id** that encodes the block's
+*positional* path: `assignIds` (`src/shared/blocks/parse.ts:226`) builds
+`id = ${path}#${contentHash(text)}` where `path` is a sibling counter
+(`sec1/par3`). When an accepted edit **adds or removes a block above** a
+still-pending one, the lower block's counter shifts (`par3` → `par4`) and it
+gets a **new id** on reparse — even though its own text (and so its `#hash`
+suffix) is unchanged. The accept flow then guarantees a reparse: `resolveTask`
+→ `runCompile()` → on compile `ok` → `loadBlocks()`
+(`Workspace.tsx:381`, `:134`) refetches the whole tree. `blockRects` is keyed
+by the **current** ids (`PaperPane.tsx:146`, `pageBlocks.map(... b.id ...)`),
+but the pending task still holds the **old** id, so `rects.get(t.blockIds[0])`
+misses → `cardAnchorTops` returns `top: null` (`paperModel.ts:385`) → after the
+BUG-32 fix the renderer **hides** any null-anchored badge/connector/bubble, and
+`washBoxesFor(t.blockIds)` (`PaperPane.tsx:128`) finds no boxes for the stale id
+either. Net: the lower proposal's entire PDF presence is dropped. (Pure
+*in-place* edits that don't change the block count keep the id stable — those
+only shift the bubble's position via `blocksSig`, they don't make it vanish.
+The trigger is specifically a block-count change above the pending block, which
+prose edits hit often: paragraph splits/merges, an added sentence that crosses a
+blank line, an inserted environment.)
+
+**Fix (recommended — re-anchor pending tasks on reparse).** After
+`loadBlocks()` lands a fresh tree, reconcile every **review/busy** task whose
+`blockIds` no longer resolve in the new tree: remap each stale id to the new
+block carrying the same `#contentHash` suffix in the same file (disambiguate by
+nearest position when a hash repeats), and patch `task.blockIds`. Smallest
+blast radius, lives renderer-side (a reconciler in `Workspace` + a
+`reanchor`-style action in `taskStore.ts`); leverages the already-stable hash
+component. **Alternatives:** (2) make block ids position-independent
+(content-hash only) — most "correct" but touches selection/locking everywhere
+and needs collision handling; (3) anchor review overlays to the proposal's
+changed line range via synctex instead of by block id — decouples review from
+block identity, medium change. Recommend (1) now, consider (3) as the durable
+follow-up.
+
+**Test.** Reducer/reconciler unit test: a review task with a stale `blockId`
+remaps to the new id sharing its content hash after a tree refresh; a task whose
+hash truly vanished is left untouched (or surfaced as unanchored). Live gate
+(Miguel): on the demo, queue two edits in different paragraphs (upper edit must
+add/remove a line — e.g. split a paragraph), accept the upper → the lower's
+bubble + wash stay put on the PDF, anchored to its block.
+
+**Lane.** Renderer workspace + tasks (`Workspace.tsx` + `taskStore.ts`),
+possibly `paperModel.ts` if reconciliation needs a tree lookup helper. Branch
+off main. Independent of any open paper-geometry branch.
