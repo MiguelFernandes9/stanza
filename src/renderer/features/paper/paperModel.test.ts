@@ -276,12 +276,19 @@ describe('cardAnchorTops — geometry-anchored rail cards (BUG-17)', () => {
     expect(out).toEqual([{ id: 2, top: 2196 }])
   })
 
-  it('falls back to scrollTop when the block has no resolved rect or geometry is absent', () => {
+  // BUG-32: a scoped task whose box isn't resolved yet must NOT park at
+  // scrollTop (= the screen top on open). It returns null so the renderer can
+  // hide the badge/bubble until geometry lands. Only a genuinely unscoped task
+  // (empty blockIds) keeps the scrollTop anchor.
+  it('returns null for a scoped task with no resolved rect — geometry not ready (BUG-32)', () => {
     expect(cardAnchorTops([{ id: 3, blockIds: ['missing'] }], rects, geo, 1, 300)).toEqual([
-      { id: 3, top: 300 }
+      { id: 3, top: null }
     ])
+  })
+
+  it('returns null for a scoped task when page geometry is absent (BUG-32)', () => {
     expect(cardAnchorTops([{ id: 4, blockIds: ['b-pg3'] }], rects, null, 1, 300)).toEqual([
-      { id: 4, top: 300 }
+      { id: 4, top: null }
     ])
   })
 })
