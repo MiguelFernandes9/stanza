@@ -13,7 +13,7 @@ import type { PaneView, TaskState } from '../tasks/taskStore'
 import { BlockOverlay } from './BlockOverlay'
 import { FillerPage } from './FillerPage'
 import { PaperToolbar } from './PaperToolbar'
-import { blockBoxesByPage, blockGeometryRects, cardAnchorTops, combinedSpanLabel, expandIds, isTightAbove, padBoxClamped, resolveBoxOverlaps, selectionBounds, spanLabel } from './paperModel'
+import { blockBoxesByPage, blockGeometryRects, cardAnchorTops, combinedSpanLabel, expandIds, isMathEnvName, isTightAbove, mathBoxesByPage, padBoxClamped, resolveBoxOverlaps, selectionBounds, spanLabel } from './paperModel'
 import type { BlockMark, PageBlock } from './paperModel'
 
 const FALLBACK_PAGE_WIDTH = 564
@@ -129,7 +129,9 @@ export function PaperPane(props: Props): JSX.Element {
         // Drop page-break artifacts (the solid-rect filter) and keep one box
         // per page, so a \chapter heading adds no 0-height box on the preceding
         // page (BUG-5) and a block straddling a break is washed on both (BUG-16).
-        const boxes = blockBoxesByPage(rects)
+        // Display-math envs additionally hug the box width to the formula
+        // glyphs, dropping the full-textwidth container/number rects (BUG-23).
+        const boxes = isMathEnvName(b.envName) ? mathBoxesByPage(rects) : blockBoxesByPage(rects)
         return boxes.length ? ([b.id, boxes] as const) : null
       })
     ).then((entries) => {
