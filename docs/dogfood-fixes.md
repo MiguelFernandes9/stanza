@@ -1026,8 +1026,61 @@ existing overlap case still meets at midpoint (no regression). (d) Single
 box / last-on-page → unchanged. Live gate (Miguel): the paragraph wash now
 reaches its true last line at real zoom.
 
-**⚠️ Sequencing.** Touches `paperModel.ts`, which `feat/v03-pane-bubbles`
-(#39, in review) also edits. **Branch off main *after* #39 merges** to avoid
-a `paperModel.ts`/`PaperPane.tsx` collision. No `PaperPane.tsx` change needed
-(it already calls `resolveBoxOverlaps`); keep the fix to `paperModel.ts` +
-its test. **Lane.** Renderer paper geometry — small.
+**⚠️ Sequencing.** #39 (`feat/v03-pane-bubbles`) is now **merged** to main
+(along with #40, #41), so branch off current main. Touches `paperModel.ts`
+only — no `PaperPane.tsx` change needed (it already calls
+`resolveBoxOverlaps`); keep the fix to `paperModel.ts` + its test.
+**Lane.** Renderer paper geometry — small. Pairs with BUG-26 (different file:
+`PaperPane.tsx`) — one sibling can land both.
+
+## BUG-26 — selecting a section washes the whole section as one slab over the text
+
+Select a section (or a multi-block task); the selection wash is a single big
+filled rectangle covering the **entire section** — its paragraphs, the gaps
+between them, and the heading/title whitespace above the first paragraph.
+Pressing another section leaves the previous one sitting there as a big box
+"covering the text" (the slab is the *previously* selected task's wash).
+Confirmed with Miguel: trigger is selecting a **section**, not a single
+paragraph; the box is the prior selection.
+
+**Root cause.** `onToggleBlock` → `dispatch(toggle-block, expandIds(blocks,
+id))` (`Workspace.tsx:513`): selecting a section heading expands to the whole
+**subtree**, so the task's `blockIds` = every block in the section. The wash
+(`PaperPane.tsx` `taskWashes` → `boxesFor` → `selectionBounds` →
+`unionRectsByPage`, `paperModel.ts`) then **unions all those rects into one
+envelope per page** — min-top → max-bottom — so the box spans from the
+heading (high, with title whitespace) down to the last block, covering every
+gap. Measured: ch1 page 4 has chapter title @177–241, section head @289,
+then paragraphs to ~711 with normal gaps; a section union envelope is a
+single slab over all of it. **Not** geometry (each block's box is tight) and
+**not** opacity (`--select-fill` is `rgba(194,92,57,0.13)`, 13%).
+
+The design mock (`ui_kits/stanza/PdfPane.jsx:400-403,496`) merges *contiguous
+same-task* blocks into one run-rect — same slab look. Miguel (designer) wants
+the **per-block** behavior instead: only real text blocks washed, gaps clear.
+
+**Fix (renderer, `PaperPane.tsx`).** Make a task's wash **one rect per
+block**, not a union: add e.g. `washBoxesFor(ids) =
+ids.flatMap(id => (blockRects.get(id) ?? []).map(b => padBoxClamped(b,
+SELECT_PAD, allBoxes)))` and use it for `taskWashes[].boxes` (and for
+`hoverBoxes`, so a section *preview* is also per-block). Each block stays
+tight to its text; inter-paragraph gaps and the heading whitespace stay
+unwashed. The active-task edge bar + 1px ring now render per block (multiple
+thin bars for a multi-block task — acceptable; flag at the live gate if it
+reads busy). The single-block path is unchanged (`blockRects.get(id)` is
+already one box per page).
+
+**⚠️ React keys.** Per-block means multiple wash boxes can share a page, so
+the current `key={`wash-${w.taskId}@${sb.page}`}` would collide — key by a
+per-box index or block id (`wash-${taskId}-${i}`).
+
+**Test.** `selectionBounds`/union stays as-is (still used elsewhere); the new
+per-block wash builder, given a task over 3 blocks, returns 3 padded boxes
+(not 1 union), and a section-heading task (subtree) returns one box per
+descendant block — none spanning the inter-block gaps. Live gate (Miguel):
+selecting a section washes each paragraph tightly, the title/heading
+whitespace stays clear, and a stale prior-section box no longer slabs over
+the text.
+
+**Lane.** Renderer paper (`PaperPane.tsx`) — small. Pairs with BUG-25
+(`paperModel.ts`, different file) — one sibling can do both in one PR.
