@@ -701,3 +701,45 @@ extra times beyond the return (only `reEmitPendingProposals` emits).
 `ReviewService.resolve`: resolving an opId whose branch is gone returns
 `committed:true`/`false` and does not throw. **Lane.** `ipc-registry.ts`,
 `ReviewService.ts`, `GitClient.ts` — backend, small/medium.
+
+## BUG-19 — figure/float overlay box + pill overlap the paragraph above
+
+A figure block's selection/hover box (and its `∑` pill) overlaps the
+prose line directly above it. v0.1-era; surfaced again on `/tmp/stanza-demo`
+ch2.tex figure (`∑ ch2.tex:11-16`).
+
+**Root cause — overlay dressing, not the box.** The figure box itself is
+correct. Real synctex (page 6): `\includegraphics` (line 13) baseline
+`v=544.14`, `H=179.47` → box top `y = v − H = 364.67` (the
+`{x:h, y:v−H, width:W, height:H}` build in `shared/latex/synctex.ts:27`
+is right). The paragraph above (line 9) has rect top `y≈350.48`, ~12pt
+line → bottom `≈362`. The float sits only **~2.7pt** below it. Then:
+- `padBox(box, SELECT_PAD=5)` (`PaperPane.tsx`, `paperModel.ts:85`)
+  expands the box top to `~359.67` → into the paragraph's last line.
+- the hover pill is drawn at `top:-9` (`BlockOverlay.tsx:84`) → lands on
+  that paragraph line.
+
+Prose-tuned padding + a negative-offset pill are too aggressive for a
+float placed flush against text. Pure renderer geometry; the backend rect
+is fine (`CompileService.forward` untouched).
+
+**Fix (renderer only).** Stop the padded overlay + pill from crossing into
+an adjacent block:
+- Clamp the padded union box so it can't expand past the nearest
+  neighboring block's edge — compute the vertical gap to the previous/next
+  block box on the same page and cap the pad at ≤ half that gap (so two
+  adjacent blocks never overlap). Simpler interim: cap vertical pad to a
+  few pt and/or skip top/bottom pad for `kind === 'environment'`.
+- Keep the pill inside the box for tight blocks (e.g. `top: 2` instead of
+  `-9` when the block top is within ~12pt of the previous block), so the
+  label never sits on the line above.
+
+**Conflict-free.** Touches `paperModel.ts` (`padBox`/a clamp helper),
+`PaperPane.tsx` (`SELECT_PAD`/box build), `BlockOverlay.tsx` (pill offset)
+— none edited by the in-flight file-mgmt lanes (`shared/ipc`, `main/*`,
+`Sidebar`/`FileContextMenu`/`Workspace`/`App`/`lib/ipc`) or the done
+dup-proposal branch.
+
+**Test.** `paperModel`: a padded box whose neighbor is ≤ 2·pad away is
+clamped so the two don't overlap; an isolated block still gets full pad.
+**Lane.** Renderer paper geometry — small.
