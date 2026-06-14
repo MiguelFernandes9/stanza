@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { BlockNode } from '../../../shared/blocks/types'
-import type { PdfRect } from '../../../shared/ipc'
+import type { BlockSpan, PdfRect } from '../../../shared/ipc'
 import {
   blockBoxesByPage,
+  blockGeometryRects,
   cardAnchorTops,
   combinedSpanLabel,
+  environmentInteriorSpan,
   expandIds,
   flattenBlocks,
   isTightAbove,
@@ -14,6 +16,7 @@ import {
   spanLabel,
   taskSpans
 } from './paperModel'
+import type { PageBlock } from './paperModel'
 
 const span = (startLine: number, endLine: number): BlockNode['span'] => ({
   file: 'main.tex',
@@ -403,5 +406,119 @@ describe('selectionBounds — straddling block reaches both pages (BUG-16)', () 
     const p2 = out.find((b) => b.page === 2)!
     expect(p2.y + p2.height).toBeGreaterThanOrEqual(702)
     expect(out.find((b) => b.page === 3)).toMatchObject({ page: 3, x: 72, y: 60 })
+  })
+})
+
+describe('environmentInteriorSpan — exclude \\begin/\\end delimiter lines (BUG-21)', () => {
+  const envBlock = (startLine: number, endLine: number): PageBlock => ({
+    id: 'fig#1',
+    kind: 'environment',
+    span: { file: 'ch2.tex', startLine, endLine },
+    sectionId: null
+  })
+
+  it('returns the interior span for an environment with content between delimiters', () => {
+    // figure spans 11–16 (\begin 11 … \end 16); geometry uses 12–15
+    expect(environmentInteriorSpan(envBlock(11, 16))).toEqual({
+      file: 'ch2.tex',
+      startLine: 12,
+      endLine: 15
+    })
+  })
+
+  it('returns null for a non-environment block (full span is used)', () => {
+    const para: PageBlock = {
+      id: 'p#1',
+      kind: 'paragraph',
+      span: { file: 'ch2.tex', startLine: 18, endLine: 20 },
+      sectionId: null
+    }
+    expect(environmentInteriorSpan(para)).toBeNull()
+  })
+
+  it('returns null for a single-line or empty-interior environment', () => {
+    expect(environmentInteriorSpan(envBlock(5, 5))).toBeNull() // one line
+    expect(environmentInteriorSpan(envBlock(5, 6))).toBeNull() // \begin+\end only, no interior
+  })
+
+  it('keeps a one-line interior (begin, content, end)', () => {
+    expect(environmentInteriorSpan(envBlock(5, 7))).toEqual({
+      file: 'ch2.tex',
+      startLine: 6,
+      endLine: 6
+    })
+  })
+})
+
+describe('blockGeometryRects — query interior, exclude \\end phantom (BUG-21)', () => {
+  const rect = (top: number, bottom: number): PdfRect => ({
+    page: 6,
+    x: 72,
+    y: top,
+    width: 200,
+    height: bottom - top
+  })
+  const figure: PageBlock = {
+    id: 'fig#1',
+    kind: 'environment',
+    span: { file: 'ch2.tex', startLine: 11, endLine: 16 },
+    sectionId: null
+  }
+
+  it('queries only the interior span, so the \\end rect never enters the box', async () => {
+    const calls: BlockSpan[] = []
+    const interiorRects = [rect(364.7, 569.9)] // graphic + caption, real content end
+    const forward = async (span: BlockSpan): Promise<PdfRect[]> => {
+      calls.push(span)
+      // the full span would also pull line-16 \end → para-below rect 585.6–595.4
+      return span.endLine === 15 ? interiorRects : [...interiorRects, rect(585.6, 595.4)]
+    }
+    const rects = await blockGeometryRects(figure, forward)
+    expect(calls).toEqual([{ file: 'ch2.tex', startLine: 12, endLine: 15 }])
+    expect(rects).toEqual(interiorRects)
+    // the phantom \end rect (bottom 595.4, onto the paragraph below) is gone
+    expect(Math.max(...rects.map((r) => r.y + r.height))).toBeCloseTo(569.9, 6)
+  })
+
+  it('falls back to the full span when the interior yields no rects', async () => {
+    const calls: BlockSpan[] = []
+    const fullRects = [rect(364.7, 595.4)]
+    const forward = async (span: BlockSpan): Promise<PdfRect[]> => {
+      calls.push(span)
+      return span.endLine === 15 ? [] : fullRects
+    }
+    const rects = await blockGeometryRects(figure, forward)
+    expect(calls.map((c) => c.endLine)).toEqual([15, 16]) // interior first, then full fallback
+    expect(rects).toEqual(fullRects)
+  })
+
+  it('uses the full span directly for a tiny environment (no interior)', async () => {
+    const calls: BlockSpan[] = []
+    const tiny: PageBlock = {
+      id: 'e#1',
+      kind: 'environment',
+      span: { file: 'a.tex', startLine: 5, endLine: 6 },
+      sectionId: null
+    }
+    await blockGeometryRects(tiny, async (span) => {
+      calls.push(span)
+      return [rect(0, 10)]
+    })
+    expect(calls).toEqual([{ file: 'a.tex', startLine: 5, endLine: 6 }])
+  })
+
+  it('uses the full span for a non-environment block', async () => {
+    const calls: BlockSpan[] = []
+    const para: PageBlock = {
+      id: 'p#1',
+      kind: 'paragraph',
+      span: { file: 'a.tex', startLine: 18, endLine: 20 },
+      sectionId: null
+    }
+    await blockGeometryRects(para, async (span) => {
+      calls.push(span)
+      return [rect(0, 10)]
+    })
+    expect(calls).toEqual([{ file: 'a.tex', startLine: 18, endLine: 20 }])
   })
 })
