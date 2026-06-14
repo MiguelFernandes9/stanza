@@ -10,6 +10,7 @@ import type {
   CompileStatus,
   DocumentInfo,
   FileEntry,
+  FileMutationResult,
   InversePoint,
   IpcChannel,
   OpRecord,
@@ -165,6 +166,41 @@ export function registerIpcHandlers(): void {
       after: await doc.git.show(`stanza/op-${args.opId}`, args.file),
     }
   })
+
+  // v0.2 sidebar file management — each op mutates the doc repo (commit-per-op
+  // for a clean tree), then returns the fresh listing + a new DocumentInfo
+  // when the .tex set changed (full main-file propagation).
+  ipcMain.handle(IpcChannels.documentRename, async (_e, a: { from: string; to: string }) => {
+    const doc = requireSession()
+    await assertNoPendingProposal(doc, a.from)
+    await doc.files.rename(a.from, a.to)
+    return fileMutationResult(doc)
+  })
+
+  ipcMain.handle(IpcChannels.documentDuplicate, async (_e, a: { relPath: string }) => {
+    const doc = requireSession()
+    const newRelPath = await doc.files.duplicate(a.relPath)
+    return fileMutationResult(doc, newRelPath)
+  })
+
+  ipcMain.handle(IpcChannels.documentDelete, async (_e, a: { relPath: string }) => {
+    const doc = requireSession()
+    await assertNoPendingProposal(doc, a.relPath)
+    await doc.files.remove(a.relPath)
+    return fileMutationResult(doc)
+  })
+
+  ipcMain.handle(IpcChannels.documentCreateFile, async (_e, a: { dir: string; name: string }) => {
+    const doc = requireSession()
+    const newRelPath = await doc.files.createFile(a.dir, a.name)
+    return fileMutationResult(doc, newRelPath)
+  })
+
+  ipcMain.handle(IpcChannels.documentCreateFolder, async (_e, a: { dir: string; name: string }) => {
+    const doc = requireSession()
+    await doc.files.createFolder(a.dir, a.name)
+    return fileMutationResult(doc)
+  })
 }
 
 /** Diff-gated op pipeline (FR7): lock check → clean tree → arm watcher →
@@ -250,6 +286,41 @@ function patchOpRecord(root: string, opId: string, patch: Partial<OpRecord>): vo
     op.opId === opId ? { ...op, ...patch } : op,
   )
   store.setProject(root, { ops })
+}
+
+/** Post-op result: fresh listing + a new DocumentInfo only when the op
+ *  changed mainFile/texFiles (e.g. renamed a .tex), so the renderer can
+ *  propagate it to App.setDoc. Keeps the session's info authoritative. */
+async function fileMutationResult(
+  doc: DocumentSession,
+  newRelPath?: string,
+): Promise<FileMutationResult> {
+  const before = doc.info
+  const info = await documents.open(doc.info.root)
+  let changed = false
+  if (info) {
+    changed =
+      info.mainFile !== before.mainFile ||
+      info.texFiles.length !== before.texFiles.length ||
+      info.texFiles.some((file, i) => file !== before.texFiles[i])
+    doc.info = info
+  }
+  return {
+    files: listFiles(doc.info.root),
+    ...(changed && info ? { doc: info } : {}),
+    ...(newRelPath ? { newRelPath } : {}),
+  }
+}
+
+/** Best-effort guard (FR5 sibling): don't rename/delete a path an unresolved
+ *  proposal still references — that strands the op's branch on a dead file.
+ *  The renderer mirrors this; FILE_LOCKED lets it toast. */
+async function assertNoPendingProposal(doc: DocumentSession, relPath: string): Promise<void> {
+  const proposals = await doc.review.list()
+  const hit = proposals.some((p) =>
+    p.files.some((file) => file === relPath || file.startsWith(`${relPath}/`)),
+  )
+  if (hit) throw new Error('FILE_LOCKED')
 }
 
 async function pickFolder(): Promise<string | null> {

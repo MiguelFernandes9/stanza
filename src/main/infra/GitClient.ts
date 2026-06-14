@@ -77,6 +77,21 @@ export class GitClient {
     }
   }
 
+  /** Move/rename a tracked path (file or directory) in tree + index. */
+  async mv(from: string, to: string): Promise<void> {
+    await this.must(['mv', from, to])
+  }
+
+  /** Remove a tracked path (recursive for directories) from tree + index. */
+  async rm(path: string): Promise<void> {
+    await this.must(['rm', '-r', '--', path])
+  }
+
+  /** True when the path is tracked in the index — picks git-vs-fs ops. */
+  async isTracked(rel: string): Promise<boolean> {
+    return (await this.run(['ls-files', '--error-unmatch', '--', rel])).code === 0
+  }
+
   async switchCreate(branch: string): Promise<void> {
     await this.must(['switch', '-c', branch])
   }
