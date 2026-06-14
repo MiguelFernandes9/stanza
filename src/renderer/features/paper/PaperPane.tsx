@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { JSX } from 'react'
+import { Check, CircleSlash, PenLine, Sparkles } from 'lucide-react'
 import { client } from '@renderer/lib/client'
 import type { CompileState } from '@renderer/components'
 import type { BlockSpan, PdfRect } from '@shared/ipc'
@@ -8,13 +9,14 @@ import { usePdfDocument } from '../pdf/usePdfDocument'
 import { PdfPageStack } from '../pdf/PdfPageStack'
 import type { PageGeometry } from '../pdf/PdfPageStack'
 import { ReviewOverlay } from '../review/ReviewOverlay'
-import { blockLabel, RAIL, RAIL_GAP, TaskCard, tagKind } from '../tasks/TaskCard'
-import type { PaneView, TaskState } from '../tasks/taskStore'
+import { blockLabel, TaskCard, tagKind } from '../tasks/TaskCard'
+import type { PaneView, TaskPhase, TaskState } from '../tasks/taskStore'
 import { BlockOverlay } from './BlockOverlay'
 import { FillerPage } from './FillerPage'
 import { PaperToolbar } from './PaperToolbar'
 import { blockBoxesByPage, blockGeometryRects, cardAnchorTops, combinedSpanLabel, expandIds, isMathEnvName, isTightAbove, mathBoxesByPage, padBoxClamped, resolveBoxOverlaps, selectionBounds, spanLabel } from './paperModel'
 import type { BlockMark, PageBlock } from './paperModel'
+import { BADGE, PAD, RAIL, connectorPath, paneLayout, phaseTone, stackTops } from './paperPaneLayout'
 
 const FALLBACK_PAGE_WIDTH = 564
 
@@ -52,22 +54,32 @@ interface Props {
   onView: (view: PaneView) => void
 }
 
-/** Preview pane: rail (316px) + 22px gap + the REAL compiled page (F5).
- *  Block geometry comes from synctex:forward rects scaled over the canvas;
- *  the FD4 filler page remains as the pre-first-compile fallback. */
+/** Preview pane (v0.3 model): the compiled page is centered in the scroll
+ *  container; every task is a phase-toned badge at the page's right edge that
+ *  opens a bubble (TaskCard) in a right rail, linked by a bezier connector.
+ *  Block geometry still comes from synctex rects (`blockRects`); v0.3 only
+ *  changes how that geometry is presented (centering, per-task washes, badges)
+ *  — the BUG-10..23 box math is untouched. */
 export function PaperPane(props: Props): JSX.Element {
   const { mainFile, pageBlocks, state, pdfUrl, onInverseSearch, flash, onView } = props
   const [hover, setHover] = useState<string | null>(null)
   const [reviewId, setReviewId] = useState<number | null>(null)
   const [zoom, setZoom] = useState(1.1)
   const [geo, setGeo] = useState<PageGeometry | null>(null)
+  const [numPages, setNumPages] = useState(0)
+  const [containerW, setContainerW] = useState(900)
   // Per-page boxes per block: a block straddling a page break has a box on
   // each page it touches, so neither page's wash drops out (BUG-16).
   const [blockRects, setBlockRects] = useState<Map<string, PdfRect[]>>(new Map())
   const [activeFlash, setActiveFlash] = useState<PdfFlash | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const cardEls = useRef<Record<number, HTMLDivElement | null>>({})
+  // Anchor (block top) per task and the collision-stacked top per open bubble.
+  const [anchorTops, setAnchorTops] = useState<Record<number, number>>({})
   const [tops, setTops] = useState<Record<number, number>>({})
+  // Bubbles open on demand; a fresh compose task auto-opens exactly once.
+  const [openIds, setOpenIds] = useState<number[]>([])
+  const autoOpened = useRef<Set<number>>(new Set())
 
   const { pdf } = usePdfDocument(pdfUrl)
 
@@ -96,15 +108,23 @@ export function PaperPane(props: Props): JSX.Element {
       padBoxClamped(box, SELECT_PAD, allBoxes)
     )
 
-  // Active selection: union over the whole selected subtree (expandIds already
-  // populated the task's blockIds, so marks-active covers chapter → section →
-  // paragraph/figure). Content rects anchor the envelope (BUG-11).
-  const selectionBoxes = boxesFor(pageBlocks.filter((b) => marks[b.id]?.active).map((b) => b.id))
-
   // Hover preview: the same envelope a click would select — a section heading
-  // previews its whole section; a leaf previews its own box (BUG-12).
+  // previews its whole section; a leaf previews its own box (BUG-12). Only for
+  // UNSELECTED blocks (an owned block already carries its task's wash).
   const hoverBoxes =
-    state.view === 'select' && hover ? boxesFor(expandIds(props.blocks, hover)) : []
+    state.view === 'select' && hover && !marks[hover] ? boxesFor(expandIds(props.blocks, hover)) : []
+
+  // One phase-toned wash per task (computed once, filtered per page in
+  // overlaysFor — which PdfPageStack calls for every page). noop owns no live
+  // selection, so it gets no wash.
+  const taskWashes = state.tasks
+    .filter((t) => t.phase !== 'noop')
+    .map((t) => ({
+      taskId: t.id,
+      active: t.id === state.activeTask,
+      tone: phaseTone(t.phase),
+      boxes: boxesFor(t.blockIds)
+    }))
 
   // Re-map geometry whenever any span MOVES — keyed by a value signature of
   // the spans, not the block COUNT. An in-place edit that shifts line numbers
@@ -149,13 +169,43 @@ export function PaperPane(props: Props): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pdf, blocksSig])
 
+  // Measure the scroll container so the page can center and the rail can sit
+  // to its right (mock's containerW). ResizeObserver tracks pane resizes.
+  useLayoutEffect(() => {
+    const sc = scrollRef.current
+    if (!sc || typeof ResizeObserver === 'undefined') return
+    const measure = (): void => setContainerW(sc.clientWidth)
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(sc)
+    return () => ro.disconnect()
+  }, [])
+
+  // A fresh compose task opens its bubble once (so it's editable); afterwards
+  // the user may collapse it freely and it won't re-open.
+  useLayoutEffect(() => {
+    const fresh = state.tasks.filter((t) => t.phase === 'compose' && !autoOpened.current.has(t.id))
+    if (fresh.length) {
+      fresh.forEach((t) => autoOpened.current.add(t.id))
+      setOpenIds((s) => [...s, ...fresh.map((t) => t.id).filter((id) => !s.includes(id))])
+    }
+  })
+
+  // Drop open ids for tasks that no longer exist (resolved / dismissed).
+  useEffect(() => {
+    setOpenIds((s) => {
+      const live = s.filter((id) => state.tasks.some((t) => t.id === id))
+      return live.length === s.length ? s : live
+    })
+  }, [state.tasks])
+
   // F7 forward flash: scroll to the rect, glow briefly.
   useEffect(() => {
     if (!flash || !geo) return
     const el = scrollRef.current
     if (el) {
       const slot = geo.height + geo.gap
-      el.scrollTo({ top: (flash.page - 1) * slot + flash.y * zoom - el.clientHeight / 3, behavior: 'smooth' })
+      el.scrollTo({ top: PAD + (flash.page - 1) * slot + flash.y * zoom - el.clientHeight / 3, behavior: 'smooth' })
     }
     setActiveFlash(flash)
     const t = setTimeout(() => setActiveFlash(null), 1100)
@@ -163,38 +213,47 @@ export function PaperPane(props: Props): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flash?.nonce, geo != null])
 
-  // Align cards with their blocks from geometry (not the DOM), so a card whose
-  // block scrolled out of the virtualization window — or an unscoped whole-doc
-  // card with no block — no longer pins to the page top (BUG-17). Stack on
-  // collision (design: 14px min gap).
+  // Anchor every task to its first block's box (geometry, not the DOM, so a
+  // card stays aligned even when its page is virtualized out — BUG-17), then
+  // collision-stack only the OPEN bubbles (design: 14px min gap). Whole-doc
+  // tasks with no block fall back to the current scrollTop.
   useLayoutEffect(() => {
-    const ideal = cardAnchorTops(
-      state.tasks,
-      blockRects,
-      geo,
-      zoom,
-      scrollRef.current?.scrollTop ?? 0
-    ).sort((a, b) => a.top - b.top)
-    let cursor = 0
-    const next: Record<number, number> = {}
-    for (const it of ideal) {
-      const h = cardEls.current[it.id]?.offsetHeight ?? 120
-      const top = Math.max(it.top, cursor)
-      next[it.id] = top
-      cursor = top + h + 14
-    }
-    setTops((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next))
+    const anchors = cardAnchorTops(state.tasks, blockRects, geo, zoom, scrollRef.current?.scrollTop ?? 0)
+    const anchorById: Record<number, number> = {}
+    for (const a of anchors) anchorById[a.id] = a.top
+    setAnchorTops((prev) => (JSON.stringify(prev) === JSON.stringify(anchorById) ? prev : anchorById))
+
+    const stacked = stackTops(
+      state.tasks
+        .filter((t) => openIds.includes(t.id))
+        .map((t) => ({ id: t.id, top: anchorById[t.id] ?? 0, height: cardEls.current[t.id]?.offsetHeight ?? 120 }))
+    )
+    setTops((prev) => (JSON.stringify(prev) === JSON.stringify(stacked) ? prev : stacked))
   })
 
   const pageWidth = geo?.width ?? FALLBACK_PAGE_WIDTH
+  const { pageLeft, pageRightX, railLeft, cW } = paneLayout(containerW, pageWidth)
+  const slot = geo ? geo.height + geo.gap : 0
+  const pageStackH = geo ? numPages * slot : 0
+  const openTasks = state.tasks.filter((t) => openIds.includes(t.id))
+  const bubbleBottom = openTasks.reduce(
+    (m, t) => Math.max(m, PAD + (tops[t.id] ?? 0) + (cardEls.current[t.id]?.offsetHeight ?? 120)),
+    0
+  )
+  const contentH = Math.max(pageStackH + PAD * 2, bubbleBottom + PAD)
+
+  const toggleOpen = (taskId: number): void => {
+    setOpenIds((s) => (s.includes(taskId) ? s.filter((x) => x !== taskId) : [...s, taskId]))
+    if (!openIds.includes(taskId)) props.onActivateTask(taskId)
+  }
 
   const overlaysFor = (pageNo: number): JSX.Element[] => {
     const out: JSX.Element[] = []
     for (const b of pageBlocks) {
       const boxes = blockRects.get(b.id)
       if (!boxes) continue
-      // A straddling block gets an overlay on every page it touches; the rail
-      // card anchors from geometry (cardAnchorTops), so no DOM ref is needed.
+      // A straddling block gets an overlay (hit-area + pill) on every page it
+      // touches; the wash and the rail badge anchor from geometry, no DOM ref.
       for (const rect of boxes) {
         if (rect.page !== pageNo) continue
         out.push(
@@ -234,40 +293,31 @@ export function PaperPane(props: Props): JSX.Element {
       )
     }
 
-    // Selection bounds: one union box per page (+ a left edge-bar) framing
-    // the active selection. Replaces the per-block active outline (BUG-10).
-    for (const sb of selectionBoxes) {
-      if (sb.page !== pageNo) continue
-      out.push(
-        <div
-          key="sel-bar"
-          style={{
-            position: 'absolute',
-            left: sb.x * zoom - 7,
-            top: sb.y * zoom,
-            width: 3,
-            height: sb.height * zoom,
-            background: 'var(--select-edge)',
-            borderRadius: 2,
-            pointerEvents: 'none'
-          }}
-        />
-      )
-      out.push(
-        <div
-          key="sel-box"
-          style={{
-            position: 'absolute',
-            left: sb.x * zoom,
-            top: sb.y * zoom,
-            width: sb.width * zoom,
-            height: sb.height * zoom,
-            boxShadow: 'inset 0 0 0 1.5px var(--select-edge)',
-            borderRadius: 'var(--radius-sm)',
-            pointerEvents: 'none'
-          }}
-        />
-      )
+    // One phase-toned wash per task over its block boxes (replaces the single
+    // union selection box). Active task = wash + edge bar + 1px ring; an owned
+    // but inactive task = tint + edge bar.
+    for (const w of taskWashes) {
+      for (const sb of w.boxes) {
+        if (sb.page !== pageNo) continue
+        out.push(
+          <div
+            key={`wash-${w.taskId}@${sb.page}`}
+            style={{
+              position: 'absolute',
+              left: sb.x * zoom,
+              top: sb.y * zoom,
+              width: sb.width * zoom,
+              height: sb.height * zoom,
+              background: w.active ? w.tone.wash : w.tone.tint,
+              boxShadow: w.active
+                ? `inset 3px 0 0 ${w.tone.accent}, inset 0 0 0 1px ${w.tone.edge}`
+                : `inset 3px 0 0 ${w.tone.accent}`,
+              borderRadius: 'var(--radius-sm)',
+              pointerEvents: 'none'
+            }}
+          />
+        )
+      }
     }
 
     if (activeFlash && activeFlash.page === pageNo) {
@@ -292,6 +342,9 @@ export function PaperPane(props: Props): JSX.Element {
     return out
   }
 
+  const badgeLabel = (phase: TaskPhase): string =>
+    phase === 'review' ? 'Proposal ready' : phase === 'busy' ? 'Editing…' : phase === 'noop' ? 'No changes' : 'Draft edit'
+
   return (
     <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: 'var(--surface-canvas)' }}>
       <PaperToolbar
@@ -303,57 +356,131 @@ export function PaperPane(props: Props): JSX.Element {
         onZoom={setZoom}
       />
 
-      <div ref={scrollRef} style={{ flex: 1, overflow: 'auto', padding: '26px 24px 40px' }}>
-        <div style={{ position: 'relative', width: RAIL + RAIL_GAP + pageWidth, margin: '0 auto', minHeight: '100%' }}>
-          {state.tasks.map((t) => (
-            <div
-              key={t.id}
-              style={{
-                position: 'absolute',
-                left: 0,
-                top: tops[t.id] ?? 0,
-                width: RAIL,
-                zIndex: t.id === state.activeTask ? 6 : 5,
-                transition: 'top var(--dur-base, 200ms) var(--ease-out)'
-              }}
+      <div ref={scrollRef} style={{ flex: 1, overflow: 'auto', background: 'var(--surface-canvas)' }}>
+        {pdf ? (
+          <div style={{ position: 'relative', width: cW, height: contentH, minHeight: '100%' }}>
+            {/* connector lines: one bezier per open bubble */}
+            <svg
+              width={cW}
+              height={contentH}
+              style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', overflow: 'visible' }}
             >
-              <TaskCard
-                task={t}
-                blocks={blocksOf(t.blockIds)}
-                expanded={t.id === state.activeTask}
-                adding={state.adding}
-                onToggleAdding={props.onToggleAdding}
-                onRemoveBlock={(bid) => props.onRemoveBlock(t.id, bid)}
-                onActivate={() => props.onActivateTask(t.id)}
-                refCb={(el) => {
-                  cardEls.current[t.id] = el
-                }}
-                onUpdate={(instruction) => props.onUpdateInstruction(t.id, instruction)}
-                onSubmit={() => props.onSubmitTask(t.id)}
-                onDismiss={() => props.onDismissTask(t.id)}
-                onResolve={(accept) => props.onResolveTask(t.id, accept)}
-                onOpenReview={() => setReviewId(t.id)}
-              />
-            </div>
-          ))}
+              {openTasks.map((t) => {
+                const by = PAD + (anchorTops[t.id] ?? 0) + 12
+                const cy = PAD + (tops[t.id] ?? 0) + 22
+                return (
+                  <path
+                    key={t.id}
+                    d={connectorPath(pageRightX, railLeft, by, cy)}
+                    fill="none"
+                    stroke={phaseTone(t.phase).accent}
+                    strokeWidth={2}
+                    opacity={0.7}
+                  />
+                )
+              })}
+            </svg>
 
-          <div style={{ marginLeft: RAIL + RAIL_GAP, width: pageWidth }}>
-            {pdf ? (
+            {/* the centered page */}
+            <div style={{ position: 'absolute', left: pageLeft, top: PAD, width: pageWidth }}>
               <PdfPageStack
                 pdf={pdf}
                 scale={zoom}
                 scrollRef={scrollRef}
-                onGeometry={(g) => setGeo(g)}
+                onGeometry={(g, n) => {
+                  setGeo(g)
+                  setNumPages(n)
+                }}
                 overlay={overlaysFor}
                 onPageClick={(pageNo, x, y) => {
                   if (state.view === 'read') onInverseSearch(pageNo, x, y)
                 }}
               />
-            ) : (
-              <FillerPage state={props.compile.state} errors={props.compile.errors} />
-            )}
+            </div>
+
+            {/* state badges at the page's right edge — click to open the bubble */}
+            {state.tasks.map((t) => {
+              const tone = phaseTone(t.phase)
+              const Icon = t.phase === 'review' ? Check : t.phase === 'busy' ? Sparkles : t.phase === 'noop' ? CircleSlash : PenLine
+              const isOpen = openIds.includes(t.id)
+              const label = badgeLabel(t.phase)
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => toggleOpen(t.id)}
+                  aria-label={label}
+                  title={`${label}${t.instruction ? ` — ${t.instruction}` : ''}`}
+                  style={{
+                    position: 'absolute',
+                    left: pageRightX - 13,
+                    top: PAD + (anchorTops[t.id] ?? 0),
+                    width: BADGE,
+                    height: BADGE,
+                    borderRadius: '50%',
+                    border: '2px solid var(--paper-2)',
+                    padding: 0,
+                    background: tone.accent,
+                    color: '#fff',
+                    boxShadow: isOpen ? `0 0 0 3px ${tone.edge}, var(--shadow-md)` : 'var(--shadow-md)',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    transform: isOpen ? 'scale(1.08)' : 'none',
+                    transition: 'top var(--dur-base, 200ms) var(--ease-out)',
+                    zIndex: 6,
+                    animation: t.phase === 'busy' ? 'stz-pulse 1.1s var(--ease-in-out) infinite' : 'none'
+                  }}
+                >
+                  <Icon size={14} />
+                </button>
+              )
+            })}
+
+            {/* open bubbles, each a TaskCard in the right rail (collision-stacked) */}
+            {openTasks.map((t) => (
+              <div
+                key={t.id}
+                style={{
+                  position: 'absolute',
+                  left: railLeft,
+                  top: PAD + (tops[t.id] ?? 0),
+                  width: RAIL,
+                  zIndex: 7,
+                  transition: 'top var(--dur-base, 200ms) var(--ease-out)'
+                }}
+              >
+                <TaskCard
+                  task={t}
+                  blocks={blocksOf(t.blockIds)}
+                  expanded
+                  side="right"
+                  adding={state.adding}
+                  onToggleAdding={props.onToggleAdding}
+                  onRemoveBlock={(bid) => props.onRemoveBlock(t.id, bid)}
+                  onActivate={() => props.onActivateTask(t.id)}
+                  refCb={(el) => {
+                    cardEls.current[t.id] = el
+                  }}
+                  onUpdate={(instruction) => props.onUpdateInstruction(t.id, instruction)}
+                  onSubmit={() => props.onSubmitTask(t.id)}
+                  onDismiss={() => {
+                    props.onDismissTask(t.id)
+                    setOpenIds((s) => s.filter((x) => x !== t.id))
+                  }}
+                  onResolve={(accept) => props.onResolveTask(t.id, accept)}
+                  onOpenReview={() => setReviewId(t.id)}
+                />
+              </div>
+            ))}
           </div>
-        </div>
+        ) : (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '28px 24px 40px' }}>
+            <div style={{ width: pageWidth }}>
+              <FillerPage state={props.compile.state} errors={props.compile.errors} />
+            </div>
+          </div>
+        )}
       </div>
 
       {(() => {

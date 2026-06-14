@@ -14,6 +14,9 @@ interface Props {
   task: EditTask
   blocks: PageBlock[]
   expanded: boolean
+  /** v0.3: which rail the card sits in. When set, the built-in connector nub
+   *  is dropped — PaperPane draws an SVG bezier from the page to the bubble. */
+  side?: 'left' | 'right'
   adding: boolean
   onToggleAdding: () => void
   onRemoveBlock: (blockId: string) => void
@@ -51,6 +54,7 @@ export function TaskCard({
   task,
   blocks,
   expanded,
+  side,
   adding,
   onToggleAdding,
   onRemoveBlock,
@@ -85,7 +89,9 @@ export function TaskCard({
   if (!expanded) {
     return (
       <div ref={refCb} onClick={onActivate} style={{ position: 'relative', cursor: 'pointer' }}>
-        <div style={{ position: 'absolute', top: 16, right: -RAIL_GAP, width: RAIL_GAP, height: 1.5, background: phaseColor, opacity: 0.4 }} />
+        {side === undefined && (
+          <div style={{ position: 'absolute', top: 16, right: -RAIL_GAP, width: RAIL_GAP, height: 1.5, background: phaseColor, opacity: 0.4 }} />
+        )}
         <div
           style={{
             display: 'flex',
@@ -145,7 +151,9 @@ export function TaskCard({
 
   return (
     <div ref={refCb} style={{ position: 'relative' }}>
-      <div style={{ position: 'absolute', top: 18, right: -RAIL_GAP, width: RAIL_GAP, height: 1.5, background: phaseColor, opacity: 0.55 }} />
+      {side === undefined && (
+        <div style={{ position: 'absolute', top: 18, right: -RAIL_GAP, width: RAIL_GAP, height: 1.5, background: phaseColor, opacity: 0.55 }} />
+      )}
       <div
         style={{
           background: 'var(--surface-overlay)',
