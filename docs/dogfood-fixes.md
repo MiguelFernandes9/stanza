@@ -1300,3 +1300,40 @@ snapping to the top.
 
 **Lane.** Renderer pdf (`PdfPageStack.tsx`) — small. Independent of paper
 geometry; branch off main.
+
+## BUG-32 — bubbles park at the top of the screen before block geometry is ready
+
+On app open (and any moment `blockRects` is empty), task badges/bubbles sit at
+the **top of the screen** instead of beside their blocks. Restored review
+proposals show this immediately on open; it can also flash after events that
+empty/recompute geometry. Distinct from BUG-30 (whose phantom anchors a badge
+to a *mid-document* page-top, not the screen top).
+
+**Root cause.** `cardAnchorTops` (`paperModel.ts`) computes a task's anchor as
+`rect && geo ? (rect.page-1)*slot + rect.y*zoom : scrollTop`. The `: scrollTop`
+fallback is meant for **unscoped whole-doc tasks** (no `blockIds`), but it also
+catches **scoped** tasks whose box isn't resolved yet — on open `blockRects`
+starts as an empty `Map` and is filled async (PDF load → synctex forward), so
+every scoped task falls back to `scrollTop` (= 0 at the top) until geometry
+lands. Restored proposals (`restore-proposal` on open) become bubbles right
+away, so they render at the top.
+
+**Fix (`paperModel.ts` `cardAnchorTops` + `PaperPane.tsx`).** Distinguish
+"unscoped" from "geometry-not-ready": a task **with** `blockIds` but **no**
+resolved rect should NOT fall back to `scrollTop` — return a sentinel (e.g.
+`top: null`) so the renderer can **hide the badge/bubble until its box
+resolves**. Only a genuinely unscoped task (empty `blockIds`) keeps the
+`scrollTop` anchor. In `PaperPane`, skip rendering badges/connectors/bubbles
+whose anchor is null (or render them hidden) until geometry is in. Net: no
+bubble appears at the top before it has a real position; it pops in beside its
+block once `blockRects` populates.
+
+**Test (`paperModel.test.ts`).** `cardAnchorTops`: a scoped task with no entry
+in `rects` → `top === null` (not `scrollTop`); a scoped task WITH a box →
+geometry anchor; an unscoped task (empty `blockIds`) → `scrollTop` as today.
+Live gate (Miguel): open a doc with a pending proposal → its bubble appears at
+the block, never at the screen top.
+
+**⚠️ Sequencing.** Touches `cardAnchorTops` in `paperModel.ts` — the same file
+BUG-30 (`fix/drop-stray-page-box`) edits. **Branch off main AFTER BUG-30
+merges.** **Lane.** Renderer paper (`paperModel.ts` + `PaperPane.tsx`) — small.
