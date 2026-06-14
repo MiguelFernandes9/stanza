@@ -145,14 +145,26 @@ export function isTightAbove(box: PdfRect, neighbors: PdfRect[], threshold: numb
   return gapAbove(box, neighbors) < threshold
 }
 
-/** Trim vertically-overlapping block boxes so no two cover the same band.
- *  Raw synctex can place a float's box (its `\end`/caption strut) over the
- *  next paragraph's box; without this the lower block's wash/selection bleeds
- *  into the float and vice-versa, and padding alone can't fix an overlap in
- *  the box EXTENT (BUG-19 reopened). Per page, boxes are sorted top-to-bottom
- *  and each overlapping adjacent pair has its shared edge set to the overlap
- *  midpoint (`m = (aBottom + bTop) / 2`). Returns a new map; input boxes are
- *  not mutated. */
+/** Multiplier on the upper box's line-height: a vertical gap up to this many
+ *  lines between page-adjacent boxes is settled (a synctex-dropped wrapped
+ *  line is ~1 line; structural gaps before floats/sections are larger). */
+const SETTLE_GAP_K = 1.8
+/** Line-height cap (pt) for the settle threshold. The boxes reaching here are
+ *  unioned to one rect per page, so per-line H is gone — estimate it as the
+ *  box's own height capped at a typical body line, so a tall multi-line box
+ *  doesn't earn a proportionally huge gap budget. */
+const LINE_H_CAP = 16
+
+/** Settle vertical relationships between page-adjacent block boxes so a
+ *  block's wash/selection neither bleeds into its neighbour nor stops short of
+ *  it. Per page, boxes are sorted top-to-bottom; for each adjacent pair the
+ *  shared edge is pulled to the midpoint `m = (aBottom + bTop) / 2` when they
+ *  OVERLAP (a float's `\end` strut over the next paragraph, BUG-19) OR sit
+ *  within ~1.8 line-heights of each other (a paragraph whose synctex-dropped
+ *  last wrapped line left its box a line short, BUG-25). Genuine structural
+ *  gaps (before floats/equations/section breaks) and the last box on a page
+ *  exceed the threshold and stay put. Returns a new map; inputs aren't
+ *  mutated. */
 export function resolveBoxOverlaps(rects: Map<string, PdfRect[]>): Map<string, PdfRect[]> {
   const out = new Map<string, PdfRect[]>()
   const byPage = new Map<number, PdfRect[]>()
@@ -171,8 +183,10 @@ export function resolveBoxOverlaps(rects: Map<string, PdfRect[]>): Map<string, P
       const a = boxes[i]!
       const b = boxes[i + 1]!
       const aBottom = a.y + a.height
-      if (aBottom > b.y) {
-        // overlap: meet at the midpoint of the overlapping band
+      const lineHeight = Math.min(a.height, LINE_H_CAP)
+      // gap < 0 is overlap (BUG-19); 0 ≤ gap ≤ ~1.8 lines is an undershoot
+      // (BUG-25). Either way, meet at the midpoint of the band between them.
+      if (b.y - aBottom <= SETTLE_GAP_K * lineHeight) {
         const bBottom = b.y + b.height
         const m = (aBottom + b.y) / 2
         a.height = m - a.y

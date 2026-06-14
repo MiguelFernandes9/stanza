@@ -350,7 +350,7 @@ describe('isTightAbove — pill placement for flush floats (BUG-19)', () => {
   })
 })
 
-describe('resolveBoxOverlaps — split overlapping block boxes (BUG-19 reopened)', () => {
+describe('resolveBoxOverlaps — settle overlaps and small gaps (BUG-19 / BUG-25)', () => {
   it('splits a figure box overlapping the paragraph below at the overlap midpoint', () => {
     // real ch2.tex page-6 boxes: figure 364.7–595.4 sits over para-18 585.6–622.5
     const rects = new Map<string, PdfRect[]>([
@@ -369,14 +369,44 @@ describe('resolveBoxOverlaps — split overlapping block boxes (BUG-19 reopened)
     expect(para.y + para.height).toBeCloseTo(622.5, 6)
   })
 
-  it('leaves non-overlapping boxes untouched', () => {
+  it('settles a ~1-line undershoot gap to the midpoint (BUG-25)', () => {
+    // A paragraph whose synctex-dropped last wrapped line left its box bottom
+    // a line high (256), with the next block ~16pt below (272).
+    const rects = new Map<string, PdfRect[]>([
+      ['a', [{ page: 1, x: 72, y: 200, width: 300, height: 56 }]], // bottom 256
+      ['b', [{ page: 1, x: 72, y: 272, width: 300, height: 40 }]] // top 272, 16pt gap
+    ])
+    const out = resolveBoxOverlaps(rects)
+    const a = out.get('a')![0]!
+    const b = out.get('b')![0]!
+    // both pulled to the gap midpoint 264 — the upper box reclaims its last line
+    expect(a.y + a.height).toBe(264)
+    expect(b.y).toBe(264)
+    expect(a.y).toBe(200) // outer edges preserved
+    expect(b.y + b.height).toBe(312)
+  })
+
+  it('leaves a large structural gap untouched (e.g. before a float)', () => {
     const rects = new Map<string, PdfRect[]>([
       ['a', [{ page: 1, x: 72, y: 100, width: 100, height: 40 }]], // 100–140
-      ['b', [{ page: 1, x: 72, y: 160, width: 100, height: 40 }]] // 160–200, 20pt gap
+      ['b', [{ page: 1, x: 72, y: 190, width: 100, height: 40 }]] // 190–230, 50pt gap
     ])
     const out = resolveBoxOverlaps(rects)
     expect(out.get('a')![0]).toEqual({ page: 1, x: 72, y: 100, width: 100, height: 40 })
-    expect(out.get('b')![0]).toEqual({ page: 1, x: 72, y: 160, width: 100, height: 40 })
+    expect(out.get('b')![0]).toEqual({ page: 1, x: 72, y: 190, width: 100, height: 40 })
+  })
+
+  it('leaves a single box (no neighbour / last-on-page) unchanged', () => {
+    const rects = new Map<string, PdfRect[]>([
+      ['only', [{ page: 1, x: 72, y: 100, width: 100, height: 40 }]]
+    ])
+    expect(resolveBoxOverlaps(rects).get('only')![0]).toEqual({
+      page: 1,
+      x: 72,
+      y: 100,
+      width: 100,
+      height: 40
+    })
   })
 
   it('returns a new map without mutating the input boxes', () => {
