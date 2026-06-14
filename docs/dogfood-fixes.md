@@ -1394,3 +1394,39 @@ bubble + wash stay put on the PDF, anchored to its block.
 **Lane.** Renderer workspace + tasks (`Workspace.tsx` + `taskStore.ts`),
 possibly `paperModel.ts` if reconciliation needs a tree lookup helper. Branch
 off main. Independent of any open paper-geometry branch.
+
+## BUG-34 — an inactive task's wash paints OPAQUE over the PDF, hiding the text
+
+With two or more tasks owning blocks at once, every task that is **not** the
+active one renders its block as a **solid** clay/cream box that fully covers the
+glyphs (see: a "Claude editing — locked" busy block whose paragraph text is
+gone). A single task is fine — it's the active one, so it gets the translucent
+wash; the bug only shows once a second task makes the first inactive.
+
+**Root cause.** `PaperPane` paints each owned task's box with
+`w.active ? w.tone.wash : w.tone.tint` (`PaperPane.tsx:316`). The `wash`
+(active) values in `phaseTone` (`paperPaneLayout.ts:78`) are correct low-alpha
+overlays — `busy → var(--select-fill)` = `rgba(194,92,57,0.13)`, review/compose
+are explicit `rgba(...,0.10–0.13)`. But the `tint` (inactive) values are
+**opaque surface tokens** built for solid card backgrounds, not overlays:
+`busy → --clay-50` = `#faf0ea`, `compose → --blue-50` = `#eef3f8`,
+`review → --add-bg` = `#e7f0e9` (all in `styles/tokens/colors.css`). Painted as
+an absolutely-positioned box over the rendered PDF, an opaque fill occludes the
+text underneath. So any inactive owned task hides its paragraph.
+
+**Fix (`paperPaneLayout.ts` `phaseTone`).** Give each phase a **translucent**
+`tint` — a low-alpha `rgba` of the same hue, lighter than its `wash` (e.g. busy
+`rgba(194,92,57,0.06)`, compose `rgba(61,110,156,0.05)`, review
+`rgba(60,138,93,0.06)`). Do NOT reuse the opaque `--clay-50/--blue-50/--add-bg`
+surface tokens for overlay fills. (noop already never washes — `taskWashes`
+filters it — so its tint is moot.) Net: an inactive task shows a faint hue over
+its block, glyphs still readable; the active task stays slightly stronger.
+
+**Test.** `phaseTone` unit test: every phase's `tint` is a translucent value
+(alpha < 1), and `tint` alpha < `wash` alpha, for busy/compose/review. Live gate
+(Miguel): two edits pending at once → the inactive one's paragraph text stays
+readable through a faint tint, never a solid box.
+
+**Lane.** Renderer paper, `paperPaneLayout.ts` only (1 function) — tiny. Branch
+off main. Disjoint from BUG-33 (`taskStore`/`Workspace`) and the PDF-blur lane
+(`features/pdf`).
