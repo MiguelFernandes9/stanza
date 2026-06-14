@@ -74,16 +74,20 @@ export interface PhaseTone {
 /** Per-phase palette: compose→blue (drafting), busy→clay (editing, locked),
  *  review→green (proposal ready). noop (terminal "no changes") gets a neutral
  *  palette — it owns no live selection, so it never washes a block; the badge
- *  still uses `accent` so the card stays reopenable. */
+ *  still uses `accent` so the card stays reopenable.
+ *  Both `tint` (inactive) and `wash` (active) paint over the rendered PDF, so
+ *  both must be translucent rgba of the phase hue — never the opaque surface
+ *  tokens (--clay-50/--blue-50/--add-bg), which occlude the glyphs (BUG-34).
+ *  tint is the fainter of the two. */
 export function phaseTone(phase: TaskPhase): PhaseTone {
   switch (phase) {
     case 'review':
-      return { accent: 'var(--add-600)', tint: 'var(--add-bg)', wash: 'rgba(60,138,93,0.13)', edge: 'rgba(60,138,93,0.5)' }
+      return { accent: 'var(--add-600)', tint: 'rgba(60,138,93,0.06)', wash: 'rgba(60,138,93,0.13)', edge: 'rgba(60,138,93,0.5)' }
     case 'busy':
-      return { accent: 'var(--clay-400)', tint: 'var(--clay-50)', wash: 'var(--select-fill)', edge: 'var(--select-edge)' }
+      return { accent: 'var(--clay-400)', tint: 'rgba(194,92,57,0.06)', wash: 'var(--select-fill)', edge: 'var(--select-edge)' }
     case 'noop':
       return { accent: 'var(--ink-400)', tint: 'var(--surface-well)', wash: 'var(--hover-fill)', edge: 'var(--border-default)' }
     default:
-      return { accent: 'var(--blue-500)', tint: 'var(--blue-50)', wash: 'rgba(61,110,156,0.10)', edge: 'rgba(61,110,156,0.45)' }
+      return { accent: 'var(--blue-500)', tint: 'rgba(61,110,156,0.05)', wash: 'rgba(61,110,156,0.10)', edge: 'rgba(61,110,156,0.45)' }
   }
 }

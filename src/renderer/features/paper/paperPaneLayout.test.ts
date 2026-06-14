@@ -68,3 +68,33 @@ describe('phaseTone', () => {
     }
   })
 })
+
+/** Alpha of an `rgb()/rgba()` literal; null when the value is not a literal
+ *  rgba (a hex or a `var(--token)` surface color, i.e. opaque). */
+const alpha = (color: string): number | null => {
+  const m = /^rgba?\(([^)]+)\)$/.exec(color.trim())
+  if (!m) return null
+  const parts = m[1].split(',').map((p) => p.trim())
+  return parts.length === 4 ? Number(parts[3]) : 1
+}
+
+// Active-wash CSS tokens resolved to their literal value (mirrors
+// styles/tokens/colors.css) so the inactive-vs-active alpha comparison is real.
+const WASH_TOKEN: Record<string, string> = { 'var(--select-fill)': 'rgba(194,92,57,0.13)' }
+
+describe('phaseTone — inactive tint is a translucent overlay (BUG-34)', () => {
+  for (const phase of ['busy', 'compose', 'review'] as const) {
+    it(`${phase}: tint is a translucent rgba, fainter than its active wash`, () => {
+      const { tint, wash } = phaseTone(phase)
+      const tintA = alpha(tint)
+      const washA = alpha(WASH_TOKEN[wash] ?? wash)
+      // Not an opaque surface token (--clay-50/--blue-50/--add-bg) — those
+      // painted solid over the PDF and hid the glyphs (BUG-34).
+      expect(tintA).not.toBeNull()
+      expect(tintA as number).toBeLessThan(1)
+      // Inactive must be fainter than the active wash.
+      expect(washA).not.toBeNull()
+      expect(tintA as number).toBeLessThan(washA as number)
+    })
+  }
+})
