@@ -23,7 +23,9 @@ import { expandIds, flattenBlocks, spanLabel, taskSpans } from '../paper/paperMo
 import { resolveToKnownFile } from '@renderer/lib/paths'
 import { blockLabel, tagKind } from '../tasks/TaskCard'
 import { initialTaskState, taskReducer } from '../tasks/taskStore'
+import { ResizeHandle } from './ResizeHandle'
 import { Sidebar } from './Sidebar'
+import { usePaneWidths } from './usePaneWidths'
 import { uniqueName } from './fileMenu'
 import { TitleBar } from './TitleBar'
 import type { CompileInfo } from './TitleBar'
@@ -44,6 +46,9 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
   const [history, setHistory] = useState<CommitInfo[]>([])
   const [sourceOpen, setSourceOpen] = useState(false)
   const [chatOpen, setChatOpen] = useState(false)
+  // Drag-resizable sidebar + editor widths (clamped, persisted); PaperPane
+  // keeps flex:1 and fills the remainder.
+  const panes = usePaneWidths()
   const [unreadNotes, setUnreadNotes] = useState(0)
   const [compile, setCompile] = useState<CompileInfo>({ state: 'idle', errors: 0, warnings: 0 })
   const [toast, setToast] = useState<{ title: string; message: string; tone: 'danger' | 'success' } | null>(null)
@@ -440,6 +445,7 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         <Sidebar
           doc={doc}
+          width={panes.sidebar}
           files={files}
           blocks={blocks}
           history={history}
@@ -461,9 +467,11 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
           renameOnAppear={renameOnAppear}
           onRenameHandled={clearRenameOnAppear}
         />
+        <ResizeHandle ariaLabel="Resize sidebar" onResize={panes.resizeSidebar} />
         {sourceOpen && (
           <EditorPane
             doc={doc}
+            width={panes.editor}
             activeFile={activeFile}
             onSelectFile={setActiveFile}
             onDocChanged={() => debounce.trigger()}
@@ -473,6 +481,9 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
               editorApi.current = api
             }}
           />
+        )}
+        {sourceOpen && (
+          <ResizeHandle ariaLabel="Resize source editor" onResize={panes.resizeEditor} />
         )}
         <PaperPane
           mainFile={doc.mainFile}
