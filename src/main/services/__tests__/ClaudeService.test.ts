@@ -79,6 +79,22 @@ describe('ClaudeService.runOp', () => {
     expect(note).toBe('done')
   })
 
+  test('strips ANTHROPIC_API_KEY / AUTH_TOKEN so claude uses the subscription (BUG-29)', async () => {
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-should-not-reach-claude')
+    vi.stubEnv('ANTHROPIC_AUTH_TOKEN', 'tok-should-not-reach-claude')
+    const runner = new MockRunner(() => claudeJson('done'))
+    const service = new ClaudeService(runner, store, doc)
+
+    await service.runOp({ instruction: 'x', spans: [] }, () => {})
+
+    expect(runner.calls.length).toBeGreaterThan(0)
+    for (const call of runner.calls) {
+      expect(call.env).toBeDefined()
+      expect(call.env?.ANTHROPIC_API_KEY).toBeUndefined()
+      expect(call.env?.ANTHROPIC_AUTH_TOKEN).toBeUndefined()
+    }
+  })
+
   test('second op resumes only; session id persisted in the store', async () => {
     const runner = new MockRunner(() => claudeJson('ok'))
     const service = new ClaudeService(runner, store, doc)

@@ -61,6 +61,22 @@ describe('DefaultProcessRunner', () => {
     expect(result.stdout).toBe('')
   })
 
+  test('runs the child with the supplied env, omitting scrubbed vars (BUG-29)', async () => {
+    const env = { ...process.env }
+    delete env.ANTHROPIC_API_KEY
+    env.STANZA_TEST_VAR = 'present'
+    const result = await runner.run({
+      cmd: 'node',
+      args: [
+        '-e',
+        'process.stdout.write((process.env.ANTHROPIC_API_KEY ?? "UNSET") + ":" + (process.env.STANZA_TEST_VAR ?? "none"))',
+      ],
+      cwd,
+      env,
+    })
+    expect(result.stdout).toBe('UNSET:present')
+  })
+
   test('rejects when the binary does not exist', async () => {
     await expect(
       runner.run({ cmd: 'definitely-not-a-real-binary-xyz', args: [], cwd }),
