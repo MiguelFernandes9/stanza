@@ -146,86 +146,14 @@ export function isTightAbove(box: PdfRect, neighbors: PdfRect[], threshold: numb
   return gapAbove(box, neighbors) < threshold
 }
 
-/** Tolerance (pt) for "is this baseline below the box bottom" — absorbs sub-pt
- *  rounding between the synctex box bottom and the converted text baseline. */
-const RECLAIM_BELOW_EPS = 2
-/** A row is contiguous with the box's tail only if the baseline-to-baseline gap
- *  is at most this many font-heights. One line of normal leading is ~1.2 font
- *  heights, two lines ~2.4 — so ~1.5 reclaims a single dropped line but stops
- *  before the next block. */
-const RECLAIM_GAP_K = 1.5
-
-/** Extend each block box DOWN to cover the block's OWN rendered text rows that
- *  synctex dropped (it collapses a wrapped last source line onto the previous
- *  baseline, so the box comes out a line short — the BUG-25/37/40 family). The
- *  pdf.js text layer has every line, so this measures the real extent instead of
- *  guessing from the inter-block gap. For each box, pull the bottom to the last
- *  text row that is below it, x-overlaps it, sits above the next block on the
- *  page, and follows contiguously (no row-height-sized gap). Whitespace before a
- *  section heading or a float has NO rows in the gap, so those boxes stay put —
- *  no neighbour-kind gating. Pure; returns a new map, inputs untouched. */
-export function reclaimDroppedRows(
-  boxesById: Map<string, PdfRect[]>,
-  rowsByPage: Map<number, TextRow[]>
-): Map<string, PdfRect[]> {
-  const topsByPage = new Map<number, number[]>()
-  for (const boxes of boxesById.values()) {
-    for (const b of boxes) {
-      const arr = topsByPage.get(b.page)
-      if (arr) arr.push(b.y)
-      else topsByPage.set(b.page, [b.y])
-    }
-  }
-  const out = new Map<string, PdfRect[]>()
-  for (const [id, boxes] of boxesById) {
-    out.set(
-      id,
-      boxes.map((b) => {
-        const rows = rowsByPage.get(b.page)
-        if (!rows) return { ...b }
-        const boxBottom = b.y + b.height
-        // Ceiling: the nearest block starting below this box — never reclaim
-        // rows that belong to it.
-        const nextTop = Math.min(
-          ...(topsByPage.get(b.page) ?? []).filter((t) => t > b.y + RECLAIM_BELOW_EPS),
-          Infinity
-        )
-        // Partition on the row BASELINE (= converted transform[5] = synctex `v`
-        // basis), NOT yTop. yTop is baseline − pdf.js font height, ~3.5pt taller
-        // than synctex's box height, so a yTop-based ceiling let the next
-        // block's first row clear `nextTop` and get absorbed (BUG-41). boxBottom
-        // and nextTop are both synctex-basis, so the baseline lines up with them.
-        const below = rows
-          .filter(
-            (r) =>
-              r.baseline > boxBottom - RECLAIM_BELOW_EPS &&
-              r.baseline < nextTop &&
-              r.xRight > b.x &&
-              r.xLeft < b.x + b.width
-          )
-          .sort((p, q) => p.baseline - q.baseline)
-        let newBottom = boxBottom
-        for (const r of below) {
-          if (r.baseline - newBottom <= RECLAIM_GAP_K * (r.baseline - r.yTop)) {
-            newBottom = Math.max(newBottom, r.baseline)
-          } else break
-        }
-        return newBottom > boxBottom ? { ...b, height: newBottom - b.y } : { ...b }
-      })
-    )
-  }
-  return out
-}
-
 /** Resolve genuine OVERLAPS between page-adjacent block boxes: when a box's top
  *  falls inside the box above (a float's `\end` strut over the next paragraph),
  *  the two meet at the midpoint of the overlapping band so neither bleeds into
- *  the other (BUG-19). A box that ends a line SHORT — synctex dropped its
- *  wrapped last row — is handled separately by `reclaimDroppedRows` against the
- *  real pdf.js text layer, not guessed from the inter-block gap (which couldn't
- *  tell a dropped line from section/float/list whitespace, the BUG-25/37/40 +
- *  list-over-fire churn). Per page, boxes are sorted top-to-bottom and only
- *  overlapping pairs are touched. Returns a new map; inputs aren't mutated. */
+ *  the other (BUG-19). Text boxes now come from a disjoint row partition
+ *  (binContentToBlocks) so they can't overlap each other; this only touches a
+ *  graphic env's coarse synctex box overlapping a text box, until 2b removes it.
+ *  Per page, boxes are sorted top-to-bottom and only overlapping pairs are
+ *  touched. Returns a new map; inputs aren't mutated. */
 export function resolveBoxOverlaps(rects: Map<string, PdfRect[]>): Map<string, PdfRect[]> {
   const out = new Map<string, PdfRect[]>()
   const byPage = new Map<number, PdfRect[]>()
@@ -341,67 +269,193 @@ const MATH_ENV_NAMES = new Set([
   'flalign',
 ])
 
-/** Is this a display-math environment name (starred variants included)? Only
- *  these get width-tightened to the formula ink (BUG-23); figure/table/verbatim
- *  keep their full union box (so BUG-21's figure geometry isn't regressed). */
+/** Is this a display-math environment name (starred variants included)? Drives
+ *  pill placement (a centered formula box parks its pill in the left margin,
+ *  BUG-35); the box itself comes from the text-row union like any text block. */
 export function isMathEnvName(name: string | undefined): boolean {
   return name !== undefined && MATH_ENV_NAMES.has(name.replace(/\*$/, ''))
 }
 
-/** Slack (pt) when testing whether a text-row baseline sits in a block's synctex
- *  y-band: absorbs sub-pixel measurement drift without reaching into the next
- *  block's rows. The band bottom already trails the last glyph baseline by the
- *  equation's descender + display spacing, so a 2pt pad never crosses into a
- *  neighbouring block. */
-const MATH_BAND_EPS = 2
+const GRAPHIC_ENV_NAMES = new Set(['figure', 'table'])
 
-/** Per-page box for a display-math block, built from the pdf.js TEXT LAYER: the
- *  union of the rendered text rows whose baseline falls in the block's synctex
- *  y-band on that page and which horizontally overlap its synctex region.
- *
- *  synctex only LOCATES the band (coarse source→region) — it never sets the box
- *  extent — so the \textwidth / numbered / page-margin CONTAINER rects, which
- *  carry no glyphs of their own, can no longer inflate the box. That retires the
- *  whole synctex-width heuristic pile (BUG-23/35/36/38/39): rendered glyph
- *  extents are exact, with no container or margin overhang to special-case. The
- *  equation NUMBER ("(1.1)") renders in the same band and is part of the
- *  equation, so it is simply included — this deletes BUG-23's exclude-the-number
- *  case rather than reincarnating it (a deliberate, arguably more correct change).
- *
- *  Falls back to the coarse synctex union for a block whose page carries no text
- *  rows (text layer unavailable), so a box is never lost. */
-export function mathBoxesByPage(rects: PdfRect[], rowsByPage: Map<number, TextRow[]>): PdfRect[] {
-  const byPage = new Map<number, PdfRect[]>()
-  for (const r of rects) {
-    if (r.width <= 0 || r.height <= 0) continue
-    const arr = byPage.get(r.page)
-    if (arr) arr.push(r)
-    else byPage.set(r.page, [r])
+/** Float/graphic environments whose box needs rendered GRAPHIC content (an
+ *  image, a rule, a tikz canvas), not just glyph rows. 2a keeps these on the
+ *  coarse synctex union (blockBoxesByPage) until 2b folds op-list graphic bboxes
+ *  into binContentToBlocks; every other block (paragraph, heading, math, list)
+ *  is pure text and routes through binContentToBlocks. */
+export function isGraphicEnvName(name: string | undefined): boolean {
+  return name !== undefined && GRAPHIC_ENV_NAMES.has(name.replace(/\*$/, ''))
+}
+
+/** Vertical gap (pt) above which two stacked text baselines belong to separate
+ *  clusters when inferring the body text area. A body line is ~13.5pt; running
+ *  heads and page-number folios sit a full margin (>25pt on the demo) from the
+ *  body, so any baseline gap beyond this splits furniture off the body run. */
+const MAX_LINE_GAP = 18
+/** A leading/trailing baseline cluster smaller than this fraction of the largest
+ *  cluster is page furniture (a running head or folio — one short line per page,
+ *  a minority isolated in the margin) and is peeled off the content band. */
+const FURNITURE_SHARE = 0.25
+/** Slack (pt) for content-band membership and region/row binning — absorbs the
+ *  sub-pt drift between a synctex rect's baseline (v) and the converted pdf.js
+ *  text-row baseline (the bullet measured 719.86 vs 717.7 on the demo). */
+const BAND_EPS = 2
+
+/** The document's body text-area vertical band `{top, bottom}` (PDF pt),
+ *  inferred from the pdf.js text rows of EVERY page overlaid: the body is the
+ *  single contiguous baseline cluster, while running heads and page-number
+ *  folios sit in the top/bottom margins as small clusters isolated from it by a
+ *  margin-sized gap. The type block is a per-document constant, so overlaying
+ *  pages keeps the body contiguous even where one page's display math leaves a
+ *  gap — another page has rows there (measured: row-gap or single-page region
+ *  heuristics both fail; the global row cluster is the robust signal). Returns
+ *  null when there are no rows. The band drops non-content rows AND
+ *  header-margin stray synctex rects (BUG-30) before binning, and clamps the
+ *  editing pill out of the running head (M2-6). Pure. */
+export function contentBand(rowsByPage: Map<number, TextRow[]>): { top: number; bottom: number } | null {
+  const baselines: number[] = []
+  for (const rows of rowsByPage.values()) for (const r of rows) baselines.push(r.baseline)
+  if (!baselines.length) return null
+  baselines.sort((a, b) => a - b)
+  const clusters: number[][] = [[baselines[0]!]]
+  for (let i = 1; i < baselines.length; i++) {
+    if (baselines[i]! - baselines[i - 1]! > MAX_LINE_GAP) clusters.push([])
+    clusters[clusters.length - 1]!.push(baselines[i]!)
   }
-  return [...byPage.entries()]
-    .sort(([a], [b]) => a - b)
-    .map(([page, rs]) => {
-      const synTop = Math.min(...rs.map((r) => r.y))
-      const synBottom = Math.max(...rs.map((r) => r.y + r.height))
-      const synLeft = Math.min(...rs.map((r) => r.x))
-      const synRight = Math.max(...rs.map((r) => r.x + r.width))
-      const rows = (rowsByPage.get(page) ?? []).filter(
-        (row) =>
-          row.baseline >= synTop - MATH_BAND_EPS &&
-          row.baseline <= synBottom + MATH_BAND_EPS &&
-          row.xRight > synLeft &&
-          row.xLeft < synRight
-      )
-      // No glyphs measured (text layer absent) → coarse synctex union, never lost.
-      if (!rows.length) {
-        return { page, x: synLeft, y: synTop, width: synRight - synLeft, height: synBottom - synTop }
+  const maxCount = Math.max(...clusters.map((c) => c.length))
+  // Peel small, margin-isolated furniture clusters off each end (running head at
+  // the top, folio at the bottom); never touch the interior, so a section
+  // heading isolated mid-page by its \beforeskip is kept.
+  let lo = 0
+  let hi = clusters.length - 1
+  while (hi > lo && clusters[lo]!.length < FURNITURE_SHARE * maxCount) lo++
+  while (hi > lo && clusters[hi]!.length < FURNITURE_SHARE * maxCount) hi--
+  return { top: clusters[lo]![0]!, bottom: clusters[hi]![clusters[hi]!.length - 1]! }
+}
+
+export interface BinnedContent {
+  /** Per-page boxes per block, built from the rendered text rows. */
+  boxesById: Map<string, PdfRect[]>
+  /** Per page, the top (min PDF-pt y) of the page's content band — the topmost
+   *  binned box's top — so the editing pill clamps out of the running head
+   *  (M2-6). */
+  contentTopByPage: Map<number, number>
+}
+
+/** Build EVERY text block's box as the union of the rendered text rows in the
+ *  region synctex locates it to — one rule for paragraphs, headings, math and
+ *  lists. Generalises Tier 1's `mathBoxesByPage` and replaces both
+ *  `blockBoxesByPage`'s union and the separate `reclaimDroppedRows` pass for
+ *  text blocks (graphic envs — figure/table — keep `blockBoxesByPage` until 2b).
+ *
+ *  Per page: each block's solid synctex rects, filtered to the content band,
+ *  union to a region `{top, x-band}`. Regions sort by `top` and each takes a
+ *  ceiling at the NEXT region's top (page bottom for the last) — so a block's
+ *  box runs down to the next block and includes the wrapped last line synctex
+ *  drops, with no reclaim pass. A row joins the region whose `[top-ε, ceiling)`
+ *  holds its BASELINE (synctex `v` basis, never the font-inflated `yTop` — a
+ *  yTop ceiling leaks the next block's first row in, BUG-41) and whose x-band it
+ *  overlaps; the box is the union of that region's rows.
+ *
+ *  The content band first drops non-content rows (running head / folio / footer)
+ *  and header-margin stray rects (a phantom \ref fragment that else binds the
+ *  running head — BUG-30), so no furniture lands in a block and the bottom
+ *  block's page-bottom ceiling can't swallow a footer folio (M2-6). A page with
+ *  rects but no rows falls back to the coarse synctex union (text layer
+ *  unavailable) so a box is never lost. Pure; inputs untouched. */
+export function binContentToBlocks(
+  rectsById: Map<string, PdfRect[]>,
+  rowsByPage: Map<number, TextRow[]>
+): BinnedContent {
+  const band = contentBand(rowsByPage)
+  const inBand = (yTop: number, yBottom: number): boolean =>
+    !band || (yBottom >= band.top - BAND_EPS && yTop <= band.bottom + BAND_EPS)
+
+  interface Region {
+    id: string
+    top: number
+    bottom: number
+    xLeft: number
+    xRight: number
+  }
+  const regionsByPage = new Map<number, Region[]>()
+  for (const [id, rects] of rectsById) {
+    const byPage = new Map<number, PdfRect[]>()
+    for (const r of rects) {
+      if (r.width <= 0 || r.height <= 0) continue
+      if (!inBand(r.y, r.y + r.height)) continue // header/footer-margin stray (BUG-30)
+      const arr = byPage.get(r.page)
+      if (arr) arr.push(r)
+      else byPage.set(r.page, [r])
+    }
+    for (const [page, rs] of byPage) {
+      const region: Region = {
+        id,
+        top: Math.min(...rs.map((r) => r.y)),
+        bottom: Math.max(...rs.map((r) => r.y + r.height)),
+        xLeft: Math.min(...rs.map((r) => r.x)),
+        xRight: Math.max(...rs.map((r) => r.x + r.width))
       }
-      const x = Math.min(...rows.map((r) => r.xLeft))
-      const right = Math.max(...rows.map((r) => r.xRight))
-      const top = Math.min(...rows.map((r) => r.yTop))
-      const bottom = Math.max(...rows.map((r) => r.yBottom))
-      return { page, x, y: top, width: right - x, height: bottom - top }
+      const arr = regionsByPage.get(page)
+      if (arr) arr.push(region)
+      else regionsByPage.set(page, [region])
+    }
+  }
+
+  const boxesById = new Map<string, PdfRect[]>()
+  const pushBox = (id: string, box: PdfRect): void => {
+    const arr = boxesById.get(id)
+    if (arr) arr.push(box)
+    else boxesById.set(id, [box])
+  }
+
+  for (const [page, regions] of regionsByPage) {
+    regions.sort((a, b) => a.top - b.top)
+    const rows = (rowsByPage.get(page) ?? []).filter((r) => inBand(r.baseline, r.baseline))
+    if (!rows.length) {
+      // Text layer unavailable for this page → coarse synctex union, never lost.
+      for (const reg of regions)
+        pushBox(reg.id, { page, x: reg.xLeft, y: reg.top, width: reg.xRight - reg.xLeft, height: reg.bottom - reg.top })
+      continue
+    }
+    const rowsByRegion = new Map<number, TextRow[]>()
+    for (const row of rows) {
+      for (let i = 0; i < regions.length; i++) {
+        const reg = regions[i]!
+        const ceiling = i + 1 < regions.length ? regions[i + 1]!.top : Infinity
+        if (
+          row.baseline >= reg.top - BAND_EPS &&
+          row.baseline < ceiling &&
+          row.xRight > reg.xLeft &&
+          row.xLeft < reg.xRight
+        ) {
+          const arr = rowsByRegion.get(i)
+          if (arr) arr.push(row)
+          else rowsByRegion.set(i, [row])
+          break
+        }
+      }
+    }
+    regions.forEach((reg, i) => {
+      const rs = rowsByRegion.get(i)
+      if (!rs) return // a phantom region bins no rows → no box (BUG-30)
+      const x = Math.min(...rs.map((r) => r.xLeft))
+      const right = Math.max(...rs.map((r) => r.xRight))
+      const top = Math.min(...rs.map((r) => r.yTop))
+      const bottom = Math.max(...rs.map((r) => r.yBottom))
+      pushBox(reg.id, { page, x, y: top, width: right - x, height: bottom - top })
     })
+  }
+
+  for (const boxes of boxesById.values()) boxes.sort((a, b) => a.page - b.page)
+
+  const contentTopByPage = new Map<number, number>()
+  for (const boxes of boxesById.values())
+    for (const b of boxes) {
+      const cur = contentTopByPage.get(b.page)
+      if (cur === undefined || b.y < cur) contentTopByPage.set(b.page, b.y)
+    }
+  return { boxesById, contentTopByPage }
 }
 
 /** Geometry query span for a block, excluding an environment's \begin/\end
@@ -475,16 +529,18 @@ export interface PillPlacement {
 export const PILL_MARGIN_GAP = 6
 
 /** Where a block's hover/lock pill sits relative to its overlay box.
- *  - Prose: a flush float (`tight`) tucks the pill INSIDE the box (top 2) so
- *    its label doesn't land on the line above (BUG-19); otherwise the usual
- *    -9 lift above the box.
- *  - Display math: the box hugs the top glyph (mathBoxesByPage) and is
+ *  - Prose: a flush float (`tight`) OR a block at the page's content-band top
+ *    (`atBandTop`) tucks the pill INSIDE the box (top 2) so its label doesn't
+ *    land on the line above (BUG-19) or lift into the running head (M2-6);
+ *    otherwise the usual -9 lift above the box.
+ *  - Display math: the box hugs the top glyph (the text-row union) and is
  *    centered, so `top:2` would print the pill ON the formula and the -9 lift
  *    would print it on the paragraph above. Park it in the left margin instead
- *    — beside the formula, at the box top — clear of both (BUG-35). */
-export function pillPlacement(opts: { math: boolean; tight: boolean }): PillPlacement {
+ *    — beside the formula, at the box top — clear of both (BUG-35); the
+ *    running-head clamp is moot for a margin pill, so `atBandTop` is ignored. */
+export function pillPlacement(opts: { math: boolean; tight: boolean; atBandTop?: boolean }): PillPlacement {
   if (opts.math) return { top: 0, left: -PILL_MARGIN_GAP, transform: 'translateX(-100%)' }
-  return { top: opts.tight ? 2 : -9, left: -1 }
+  return { top: opts.tight || opts.atBandTop ? 2 : -9, left: -1 }
 }
 
 export function spanLabel(span: BlockSpan): string {

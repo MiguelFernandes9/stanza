@@ -14,7 +14,7 @@ import type { PaneView, TaskPhase, TaskState } from '../tasks/taskStore'
 import { BlockOverlay } from './BlockOverlay'
 import { FillerPage } from './FillerPage'
 import { PaperToolbar } from './PaperToolbar'
-import { blockBoxesByPage, blockGeometryRects, cardAnchorTops, combinedSpanLabel, expandIds, isMathEnvName, isTightAbove, mathBoxesByPage, reclaimDroppedRows, resolveBoxOverlaps, spanLabel, washBoxes } from './paperModel'
+import { binContentToBlocks, blockBoxesByPage, blockGeometryRects, cardAnchorTops, combinedSpanLabel, expandIds, isGraphicEnvName, isMathEnvName, isTightAbove, resolveBoxOverlaps, spanLabel, washBoxes } from './paperModel'
 import type { BlockMark, PageBlock } from './paperModel'
 import { pageTextRows } from './pdfTextRows'
 import type { TextRow } from './pdfTextRows'
@@ -72,6 +72,9 @@ export function PaperPane(props: Props): JSX.Element {
   // Per-page boxes per block: a block straddling a page break has a box on
   // each page it touches, so neither page's wash drops out (BUG-16).
   const [blockRects, setBlockRects] = useState<Map<string, PdfRect[]>>(new Map())
+  // Per page, the top (PDF pt) of the content band — the topmost block box —
+  // so the editing pill clamps out of the running head (M2-6).
+  const [contentTops, setContentTops] = useState<Map<number, number>>(new Map())
   const [activeFlash, setActiveFlash] = useState<PdfFlash | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const cardEls = useRef<Record<number, HTMLDivElement | null>>({})
@@ -150,10 +153,10 @@ export function PaperPane(props: Props): JSX.Element {
       pageBlocks.map(async (b) => ({ b, rects: await blockGeometryRects(b, forward) }))
     ).then(async (perBlock) => {
       if (!alive) return
-      // The pdf.js text layer is the source of truth for box EXTENT — display-
-      // math width/height (Tier 1) and prose dropped-line reclaim both read it —
-      // so fetch the rows for every page any block's synctex rects touch BEFORE
-      // building boxes. synctex is used only to locate each block's region.
+      // The pdf.js text layer is the source of truth for box EXTENT — every text
+      // block's box is the union of its rendered rows — so fetch the rows for
+      // every page any block's synctex rects touch BEFORE building boxes. synctex
+      // is used only to locate each block's region (which page, x-band, top).
       const pages = [...new Set(perBlock.flatMap(({ rects }) => rects.map((r) => r.page)))]
       const rowsByPage = new Map<number, TextRow[]>()
       await Promise.all(
@@ -166,24 +169,31 @@ export function PaperPane(props: Props): JSX.Element {
         )
       )
       if (!alive) return
-      const entries = perBlock
-        .map(({ b, rects }) => {
-          // Drop page-break artifacts (the solid-rect filter) and keep one box
-          // per page, so a \chapter heading adds no 0-height box on the preceding
-          // page (BUG-5) and a block straddling a break is washed on both (BUG-16).
-          // Display-math envs take their box from the rendered text rows in the
-          // block's synctex band — exact glyph extent, no \textwidth/number/margin
-          // container rects to hug around (Tier 1, retires BUG-23/35/36/38/39).
-          const boxes = isMathEnvName(b.envName) ? mathBoxesByPage(rects, rowsByPage) : blockBoxesByPage(rects)
-          return boxes.length ? ([b.id, boxes] as const) : null
-        })
-        .filter((e): e is NonNullable<typeof e> => e != null)
-      const built = new Map(entries)
-      // Reclaim each prose box's synctex-dropped last row from the text layer
-      // (BUG-25/37/40 + list over-fire), then trim raw-synctex overlaps (a
-      // float's box extends over the next paragraph's box) so overlays, allBoxes,
-      // selection and hover all consume non-overlapping extents (BUG-19).
-      setBlockRects(resolveBoxOverlaps(reclaimDroppedRows(built, rowsByPage)))
+      // Every text block (paragraph, heading, math, list) takes its box from the
+      // union of the rendered text rows in its synctex region — ONE rule, no
+      // per-kind builder, no separate dropped-line reclaim (a region's box runs
+      // to the next region's top, so the wrapped last line is included by
+      // construction). The content band drops running heads / folios / footers
+      // and header-margin stray rects first (M2-6, BUG-30). Graphic envs
+      // (figure/table) keep the coarse synctex union until 2b adds graphic bboxes.
+      const textRects = new Map<string, PdfRect[]>()
+      const graphicEntries: (readonly [string, PdfRect[]])[] = []
+      for (const { b, rects } of perBlock) {
+        if (b.kind === 'environment' && isGraphicEnvName(b.envName)) {
+          const boxes = blockBoxesByPage(rects) // BUG-5/16/30 dodges retained
+          if (boxes.length) graphicEntries.push([b.id, boxes])
+        } else {
+          textRects.set(b.id, rects)
+        }
+      }
+      const { boxesById, contentTopByPage } = binContentToBlocks(textRects, rowsByPage)
+      const built = new Map<string, PdfRect[]>([...boxesById, ...graphicEntries])
+      // Trim raw-synctex overlaps (a float's \end strut box extends over the next
+      // paragraph) so overlays, allBoxes, selection and hover all consume
+      // non-overlapping extents (BUG-19); a disjoint row partition can't overlap,
+      // so this only touches graphic-vs-text pairs now (removed in 2b).
+      setBlockRects(resolveBoxOverlaps(built))
+      setContentTops(contentTopByPage)
     })
     return () => {
       alive = false
@@ -278,6 +288,10 @@ export function PaperPane(props: Props): JSX.Element {
             selectMode={state.view === 'select'}
             tight={isTightAbove(rect, allBoxes, TIGHT_GAP)}
             math={isMathEnvName(b.envName)}
+            // Topmost box on its page (box top == the content-band top) — clamp
+            // the pill out of the running head (M2-6), a band consumer, not a
+            // first-block special-case.
+            atBandTop={rect.y <= (contentTops.get(rect.page) ?? -Infinity) + 1}
             onEnter={() => setHover(b.id)}
             onLeave={() => setHover((h) => (h === b.id ? null : h))}
             onClick={(e) => props.onToggleBlock(b.id, state.adding || e.shiftKey || e.metaKey || e.ctrlKey)}

@@ -2,20 +2,20 @@ import { describe, expect, it } from 'vitest'
 import type { BlockNode } from '../../../shared/blocks/types'
 import type { BlockSpan, PdfRect } from '../../../shared/ipc'
 import {
+  binContentToBlocks,
   blockBoxesByPage,
   blockGeometryRects,
   cardAnchorTops,
   combinedSpanLabel,
+  contentBand,
   environmentInteriorSpan,
   expandIds,
   flattenBlocks,
   isMathEnvName,
   isTightAbove,
-  mathBoxesByPage,
   padBoxClamped,
   PILL_MARGIN_GAP,
   pillPlacement,
-  reclaimDroppedRows,
   resolveBoxOverlaps,
   selectionBounds,
   spanLabel,
@@ -219,97 +219,177 @@ describe('isMathEnvName — display-math detection (BUG-23)', () => {
       expect(isMathEnvName(n)).toBe(false)
   })
 })
+// baseline = converted transform[5] (synctex `v` basis) = the row's yBottom.
+const trow = (yTop: number, baseline: number, xLeft: number, xRight: number): TextRow => ({
+  baseline,
+  yTop,
+  yBottom: baseline,
+  xLeft,
+  xRight
+})
+const prect = (page: number, x: number, y: number, w: number, h: number): PdfRect => ({
+  page,
+  x,
+  y,
+  width: w,
+  height: h
+})
+const boxBottom = (b: PdfRect): number => b.y + b.height
+// A contiguous body run top→bottom with ≤13pt line gaps (one cluster), so the
+// band test never spuriously splits it.
+const bodyRun = (top: number, bot: number, xL = 90, xR = 522): TextRow[] => {
+  const rows: TextRow[] = []
+  for (let y = top; y < bot - 1; y += 13) rows.push(trow(y - 11, y, xL, xR))
+  rows.push(trow(bot - 11, bot, xL, xR))
+  return rows
+}
 
-describe('mathBoxesByPage — union of the text-layer rows (Tier 1)', () => {
-  // baseline = converted transform[5] (synctex `v` basis) = the row's yBottom.
-  const row = (yTop: number, baseline: number, xLeft: number, xRight: number): TextRow => ({
-    baseline,
-    yTop,
-    yBottom: baseline,
-    xLeft,
-    xRight
+describe('contentBand — type block from global row clustering', () => {
+  it('peels the running head and footer folio, keeps the body band (demo numbers)', () => {
+    const rows: TextRow[] = []
+    for (let p = 0; p < 5; p++) rows.push(trow(75, 85.9, 90, 522)) // running heads (5 pages)
+    rows.push(...bodyRun(116.7, 717.7)) // body
+    for (let p = 0; p < 5; p++) rows.push(trow(734, 745.1, 304, 308)) // folios (5 pages)
+    const band = contentBand(new Map([[1, rows]]))
+    expect(band).not.toBeNull()
+    expect(band!.top).toBeCloseTo(116.7, 1)
+    expect(band!.bottom).toBeCloseTo(717.7, 1)
   })
-  const pageRows = (page: number, rows: TextRow[]): Map<number, TextRow[]> => new Map([[page, rows]])
 
-  it('hugs the frac to its rendered glyph rows, incl. \\bigg|_{J=0} (ch1:197-203)', () => {
-    // synctex region (page 6) — the formula line box + inner \frac fragments,
-    // used ONLY to locate the band, never for the box extent.
-    const rects: PdfRect[] = [
-      { page: 6, x: 198.54, y: 100, width: 214.92, height: 26.68 }, // formula line box
-      { page: 6, x: 308.01, y: 115.77, width: 80.89, height: 10.91 }, // denominator
-      { page: 6, x: 306.82, y: 100.91, width: 83.28, height: 25.77 }, // numerator
-      { page: 6, x: 390.1, y: 100.5, width: 3.64, height: 26.18 } // \bigg| rule
-    ]
-    // Live text layer: ⟨ϕ⟩ = runs along the main line out to the trailing '.';
-    // separate numerator and denominator rows. Glyph union x = [198.54, 413.46].
-    const rows = pageRows(6, [
-      row(100.91, 110, 306.82, 390.1), // numerator
-      row(104.5, 115.46, 198.54, 413.46), // ⟨ϕ⟩ = … \bigg|_{J=0} .
-      row(116, 126.68, 308.01, 388.9) // denominator δJ(x)
+  it('keeps a two-line display block as one band (no spurious furniture peel)', () => {
+    // a frac: rule row 439.7 + main row 466.3 (gap 26.6 > a line) — equal-size
+    // clusters, neither a furniture minority, so the band spans both.
+    const band = contentBand(new Map([[7, [trow(428, 439.7, 390, 394), trow(453, 466.3, 198, 413)]]]))
+    expect(band!.top).toBeCloseTo(439.7, 1)
+    expect(band!.bottom).toBeCloseTo(466.3, 1)
+  })
+
+  it('returns null when there are no rows', () => {
+    expect(contentBand(new Map())).toBeNull()
+    expect(contentBand(new Map([[1, []]]))).toBeNull()
+  })
+})
+
+describe('binContentToBlocks — one row-union builder for every text block', () => {
+  it('extends a paragraph to its synctex-dropped last line via the next-block ceiling', () => {
+    // para1 synctex region bottoms at 681 (drops the wrapped "follows:" row at
+    // 692.4); the next block's region begins at 710. The row-union runs para1 to
+    // 692.4 (next-top ceiling) — no separate reclaim pass — while the next block's
+    // rows (≥710) stay out of para1 (ch1:255-265 → itemize, page 7).
+    const rects = new Map<string, PdfRect[]>([
+      ['para#1', [prect(7, 90, 573, 432, 108)]], // region top 573, synctex bottom 681
+      ['para#2', [prect(7, 90, 710, 432, 60)]] // next block, region top 710
     ])
-    const [box] = mathBoxesByPage(rects, rows)
-    expect(box!.x).toBeCloseTo(198.54, 1) // formula left, NOT a \frac fragment (308)
-    expect(box!.x + box!.width).toBeCloseTo(413.46, 1) // reaches \bigg|_{J=0} and the '.'
-    expect(box!.y).toBeCloseTo(100.91, 1)
-    expect(box!.y + box!.height).toBeCloseTo(126.68, 1)
-  })
-
-  it('includes the equation number, no margin/\\textwidth overhang (ch1:144-161)', () => {
-    // synctex region (page 5): a page-MARGIN container (x36.46, left of the text
-    // column), the \textwidth formula box, glyph rows, and the (1.1) number —
-    // all coarse band-locators only, none of them text.
-    const rects: PdfRect[] = [
-      { page: 5, x: 36.46, y: 100, width: 485.54, height: 73.88 }, // margin container
-      { page: 5, x: 143.54, y: 100, width: 324.46, height: 73.88 }, // \textwidth formula box
-      { page: 5, x: 143.54, y: 100, width: 200, height: 25.77 }, // glyph row 1
-      { page: 5, x: 160, y: 140, width: 180, height: 25.77 }, // glyph row 2
-      { page: 5, x: 499.6, y: 100, width: 22.4, height: 73.88 } // (1.1) number container
+    const rows = [
+      ...bodyRun(584, 692.4), // para1 body incl the dropped "follows:" tail
+      ...bodyRun(717.7, 758.2) // para2 rows, below the 710 ceiling
     ]
-    // Live text layer: two formula rows (right edge 468) plus the (1.1) number
-    // (x499.6 → 522). The number is part of the equation → included (this retires
-    // BUG-23's exclude-the-number special-case; a deliberate behaviour change).
-    const rows = pageRows(5, [
-      row(108, 120, 143.54, 440), // formula line 1
-      row(138, 150, 160, 468), // formula line 2 — formula's right edge
-      row(127, 135, 499.6, 522) // (1.1) number
+    const { boxesById } = binContentToBlocks(rects, new Map([[7, rows]]))
+    expect(boxBottom(boxesById.get('para#1')![0]!)).toBeCloseTo(692.4, 1) // dropped line included
+    const p2 = boxesById.get('para#2')![0]!
+    expect(p2.y).toBeLessThan(710) // its first row's yTop
+    expect(boxBottom(p2)).toBeCloseTo(758.2, 1)
+  })
+
+  it('partitions on the baseline so a tight stack does not bleed into the next block (BUG-41)', () => {
+    // {\large} abstract: para1 box bottoms at 294.5 with a dropped "emblem." row
+    // (baseline 306); para2's region top is 311.52 and its first row has yTop
+    // 307.99 (ABOVE the ceiling) but baseline 319.94 (below it). Binning on the
+    // baseline reclaims only "emblem." and leaves para2 put — yTop would leak it in.
+    const rects = new Map<string, PdfRect[]>([
+      ['par1#abc', [prect(2, 90, 250, 300, 44.5)]], // region 250–294.5
+      ['par2#def', [prect(2, 90, 311.52, 300, 60)]] // next block, region top 311.52
     ])
-    const [box] = mathBoxesByPage(rects, rows)
-    expect(box!.x).toBeCloseTo(143.54, 1) // formula left, NOT the margin container (36.46)
-    expect(box!.x).toBeGreaterThan(90) // no margin/\textwidth overhang into the body column
-    expect(box!.x + box!.width).toBeCloseTo(522, 1) // number INCLUDED (was 468 pre-Tier-1)
-  })
-
-  it('hugs a single-line equation to its glyph row, not the synctex container', () => {
-    const rects: PdfRect[] = [{ page: 2, x: 72, y: 100, width: 400, height: 20 }] // \textwidth container
-    const rows = pageRows(2, [row(102, 116, 150, 360)]) // the one rendered line
-    const [box] = mathBoxesByPage(rects, rows)
-    expect(box!.x).toBeCloseTo(150, 5)
-    expect(box!.width).toBeCloseTo(210, 5) // 360 − 150 glyph width, NOT the 400 container
-  })
-
-  it('excludes rows outside the block synctex y-band (a neighbour block row)', () => {
-    const rects: PdfRect[] = [{ page: 1, x: 143, y: 100, width: 300, height: 30 }] // band [100,130]
-    const rows = pageRows(1, [
-      row(108, 120, 143, 443), // in-band formula row
-      row(140, 152, 90, 450) // next paragraph's first row — baseline 152 ≫ band bottom 130
-    ])
-    const [box] = mathBoxesByPage(rects, rows)
-    expect(box!.x + box!.width).toBeCloseTo(443, 5) // only the formula row
-    expect(box!.y + box!.height).toBeCloseTo(120, 5)
-  })
-
-  it('falls back to the synctex union when the page has no text rows', () => {
-    const rects: PdfRect[] = [
-      { page: 3, x: 100, y: 50, width: 200, height: 40 },
-      { page: 3, x: 120, y: 60, width: 150, height: 20 }
+    const rows = [
+      trow(247, 258, 90, 522),
+      trow(260, 271.5, 90, 522),
+      trow(283, 294.5, 90, 522),
+      trow(294.04, 306.0, 90, 140), // "emblem." — para1's dropped tail (baseline 306 < 311.52)
+      trow(307.99, 319.94, 90, 360), // para2 first row: yTop 307.99 < 311.52, baseline 319.94 ≥ it
+      trow(321, 333.5, 90, 522)
     ]
-    const [box] = mathBoxesByPage(rects, new Map()) // text layer unavailable
-    expect(box).toEqual({ page: 3, x: 100, y: 50, width: 200, height: 40 })
+    const { boxesById } = binContentToBlocks(rects, new Map([[2, rows]]))
+    expect(boxBottom(boxesById.get('par1#abc')![0]!)).toBeCloseTo(306, 1) // reclaim "emblem." only
+    expect(boxesById.get('par2#def')![0]!.y).toBeCloseTo(307.99, 1) // para2 keeps its first row
   })
 
-  it('drops degenerate rects and returns nothing when none remain', () => {
-    expect(mathBoxesByPage([{ page: 1, x: 0, y: 0, width: 0, height: 0 }], new Map())).toEqual([])
-    expect(mathBoxesByPage([], new Map())).toEqual([])
+  it('ends a paragraph at its last line before a section heading — no extend into the gap', () => {
+    // ch1 Scope para → \section{Outline}: no rows in the beforeskip gap, so the box
+    // stops at the last body line, not the heading whitespace.
+    const rects = new Map<string, PdfRect[]>([
+      ['par#1', [prect(6, 90, 343, 432, 64)]], // region 343–407
+      ['sec#2', [prect(6, 90, 429, 432, 11)]], // "Outline" heading top 429
+      ['par#3', [prect(6, 90, 456, 432, 64)]] // para after the heading
+    ])
+    const rows = [
+      ...bodyRun(351, 405.4), // Scope para, last line 405.4
+      trow(425, 439.7, 90, 178), // "1.3 Outline" heading row (gap 405→439)
+      ...bodyRun(464, 518) // para after
+    ]
+    const { boxesById } = binContentToBlocks(rects, new Map([[6, rows]]))
+    expect(boxBottom(boxesById.get('par#1')![0]!)).toBeCloseTo(405.4, 1) // ends at last line
+    expect(boxesById.get('sec#2')![0]!.y).toBeCloseTo(425, 1) // heading boxed separately
+  })
+
+  it('builds a math box from glyph rows — hugs the ink, includes the number, no margin overhang', () => {
+    // numbered split: a page-margin container (x36.46) + the (1.1) number row.
+    // The box is the union of rendered rows: left at the formula glyphs, right at
+    // the number — no \textwidth/margin container inflation.
+    const rects = new Map<string, PdfRect[]>([
+      ['eq#1', [prect(5, 36.46, 100, 485.54, 73.88)]] // wide margin container, band-locator only
+    ])
+    const rows = [
+      trow(108, 120, 143.54, 440), // formula line 1
+      trow(127, 135, 499.6, 522), // (1.1) number — same band
+      trow(138, 150, 160, 468) // formula line 2
+    ]
+    const [box] = binContentToBlocks(rects, new Map([[5, rows]])).boxesById.get('eq#1')!
+    expect(box!.x).toBeCloseTo(143.54, 1) // formula left, NOT the margin container 36.46
+    expect(box!.x + box!.width).toBeCloseTo(522, 1) // number included
+    expect(box!.y).toBeCloseTo(108, 1)
+    expect(boxBottom(box!)).toBeCloseTo(150, 1)
+  })
+
+  it('excludes a footer folio from the bottom block (M2-6)', () => {
+    // chapter-opening plain page: the page-bottom ceiling would bin the centred
+    // folio into the last block; the band drops it first (ch1 page 4).
+    const rects = new Map<string, PdfRect[]>([['par#1', [prect(4, 90, 600, 432, 104)]]]) // region 600–704
+    const rows = [...bodyRun(608, 704), trow(734, 745.1, 303, 309)] // body + folio at 745
+    const { boxesById } = binContentToBlocks(rects, new Map([[4, rows]]))
+    expect(boxBottom(boxesById.get('par#1')![0]!)).toBeCloseTo(704, 1) // ends at last body line, NOT 745
+  })
+
+  it('drops the running head and a header-margin stray rect (BUG-30 / M2-6)', () => {
+    // The block forward-maps an 8pt stray into the header band (top 78) plus real
+    // rects lower down. The band filters the stray (so it forms no region top and
+    // binds no head row) and drops the running-head row.
+    const rects = new Map<string, PdfRect[]>([
+      ['p#1', [prect(5, 90, 78, 432, 8), prect(5, 90, 250, 432, 60)]] // header stray + real region
+    ])
+    const rows = [trow(72, 85.9, 90, 522), ...bodyRun(258, 400)] // running head + body
+    const { boxesById } = binContentToBlocks(rects, new Map([[5, rows]]))
+    const boxes = boxesById.get('p#1')!
+    expect(boxes).toHaveLength(1) // one box, no phantom in the header band
+    expect(boxes[0]!.y).toBeGreaterThan(200) // box starts at the body, NOT the stray's 78
+  })
+
+  it('exposes the per-page content-band top (the topmost box) for the pill clamp', () => {
+    // headings page: running head above, first body paragraph at the band top.
+    const rects = new Map<string, PdfRect[]>([
+      ['p#1', [prect(5, 90, 108, 432, 60)]], // first body para, region top 108
+      ['p#2', [prect(5, 90, 178, 432, 90)]]
+    ])
+    const rows = [trow(75, 85.9, 90, 522), ...bodyRun(116.7, 270)] // running head + body
+    const { contentTopByPage } = binContentToBlocks(rects, new Map([[5, rows]]))
+    expect(contentTopByPage.get(5)).toBeCloseTo(105.7, 1) // topmost box top (first body row yTop), head excluded
+  })
+
+  it('falls back to the coarse synctex union when a page has no text rows', () => {
+    const rects = new Map<string, PdfRect[]>([
+      ['p#1', [prect(3, 100, 50, 200, 40), prect(3, 120, 60, 150, 20)]]
+    ])
+    const { boxesById } = binContentToBlocks(rects, new Map()) // text layer unavailable
+    expect(boxesById.get('p#1')).toEqual([{ page: 3, x: 100, y: 50, width: 200, height: 40 }])
   })
 })
 
@@ -742,111 +822,20 @@ describe('pillPlacement (BUG-35)', () => {
       pillPlacement({ math: true, tight: true })
     )
   })
-})
 
-describe('reclaimDroppedRows — extend a box to cover its dropped text rows', () => {
-  const box = (page: number, x: number, y: number, width: number, height: number): PdfRect => ({
-    page,
-    x,
-    y,
-    width,
-    height
-  })
-  // baseline = the converted transform[5] (synctex `v` basis) = the row's
-  // yBottom in pdf.js geometry; reclaim partitions on it, not the taller yTop.
-  const row = (yTop: number, baseline: number, xLeft: number, xRight: number): TextRow => ({
-    baseline,
-    yTop,
-    yBottom: baseline,
-    xLeft,
-    xRight
-  })
-  const bottom = (b: PdfRect): number => b.y + b.height
-
-  it('extends a paragraph to cover its synctex-dropped last row (ch1:205-215 "follows:")', () => {
-    // synctex stops the box at 186.57, dropping the wrapped "follows:" row; the
-    // text layer has it at y[189.21, 200.12], above the itemize that starts ~205.
-    const boxes = new Map<string, PdfRect[]>([
-      ['par1#aaaaaa', [box(1, 90, 150, 300, 36.57)]], // bottom 186.57
-      ['env2#bbbbbb', [box(1, 90, 205, 300, 50)]] // itemize, top 205
-    ])
-    const rows = new Map<number, TextRow[]>([
-      [
-        1,
-        [
-          row(160, 171, 90, 380), // a body line already inside the box
-          row(189.21, 200.12, 90, 131), // the DROPPED "follows:" row
-          row(206, 217, 110, 360) // first itemize row — belongs to env2
-        ]
-      ]
-    ])
-    const out = reclaimDroppedRows(boxes, rows)
-    expect(bottom(out.get('par1#aaaaaa')![0]!)).toBeCloseTo(200.12, 2) // reclaimed
-    expect(out.get('env2#bbbbbb')![0]).toEqual(box(1, 90, 205, 300, 50)) // untouched
+  it('tucks the prose pill inside when the block sits at the content-band top (M2-6)', () => {
+    // The topmost block on a page has no neighbour above but DOES have the running
+    // head; lifting -9 would land the pill on it, so clamp to tuck inside.
+    expect(pillPlacement({ math: false, tight: false, atBandTop: true })).toEqual({ top: 2, left: -1 })
   })
 
-  it('does not swallow the next block whose row TOP clears nextTop but baseline does not (BUG-41)', () => {
-    // Live pdf.js, tightly-stacked {\large} abstract (page 2). para1's box bottoms
-    // at 294.50 with a dropped "emblem." row (baseline 306); para2's synctex box
-    // top (nextTop) is 311.52. para2's first row has yTop 307.99 — ABOVE the
-    // nextTop ceiling — but its BASELINE 319.94 is below it. Gating on yTop
-    // absorbed para2's first line into para1 (and cascaded); gating on baseline
-    // reclaims only "emblem." and leaves para2 put.
-    const boxes = new Map<string, PdfRect[]>([
-      ['par1#abc123', [box(2, 90, 250, 300, 44.5)]], // bottom 294.50
-      ['par2#def456', [box(2, 90, 311.52, 300, 40)]] // next block, synctex top 311.52
-    ])
-    const rows = new Map<number, TextRow[]>([
-      [
-        2,
-        [
-          row(294.04, 306.0, 90, 140), // "emblem." — para1's dropped tail
-          row(307.99, 319.94, 90, 360) // "The argument…" — para2's first line
-        ]
-      ]
-    ])
-    const out = reclaimDroppedRows(boxes, rows)
-    expect(bottom(out.get('par1#abc123')![0]!)).toBeCloseTo(306, 2) // reclaim "emblem." only
-    expect(bottom(out.get('par1#abc123')![0]!)).toBeLessThan(311.52) // NOT into para2
-    expect(out.get('par2#def456')![0]).toEqual(box(2, 90, 311.52, 300, 40)) // untouched
+  it('lifts normally when not at the band top and not tight', () => {
+    expect(pillPlacement({ math: false, tight: false, atBandTop: false })).toEqual({ top: -9, left: -1 })
   })
 
-  it('does not extend before a section heading (gap has no text rows)', () => {
-    // ch1:97-102 → \section{Outline}: box bottom 638.08, heading row at 658.79,
-    // nothing between — synctex did NOT drop a line here.
-    const boxes = new Map<string, PdfRect[]>([
-      ['par3#cccccc', [box(1, 90, 600, 300, 38.08)]], // bottom 638.08
-      ['sec1#dddddd', [box(1, 90, 658.79, 300, 14)]] // "Outline" heading top 658.79
-    ])
-    const rows = new Map<number, TextRow[]>([
-      [1, [row(627, 638.08, 90, 380), row(658.79, 669.7, 90, 200)]]
-    ])
-    const out = reclaimDroppedRows(boxes, rows)
-    expect(out.get('par3#cccccc')![0]).toEqual(box(1, 90, 600, 300, 38.08)) // unchanged
-  })
-
-  it('does not extend before a figure float (no text rows in the gap)', () => {
-    // ch2:6-9 → figure: box bottom 352.72, figure top 364.68, image has no rows.
-    const boxes = new Map<string, PdfRect[]>([
-      ['par4#eeeeee', [box(1, 90, 320, 300, 32.72)]], // bottom 352.72
-      ['env5#ffffff', [box(1, 90, 364.68, 400, 200)]] // figure top 364.68
-    ])
-    const rows = new Map<number, TextRow[]>([[1, [row(341, 352.72, 90, 380)]]])
-    const out = reclaimDroppedRows(boxes, rows)
-    expect(out.get('par4#eeeeee')![0]).toEqual(box(1, 90, 320, 300, 32.72)) // unchanged
-  })
-
-  it('does not absorb a lone row a full line-height below (real next block)', () => {
-    const boxes = new Map<string, PdfRect[]>([['par6#999999', [box(1, 90, 100, 300, 30)]]]) // bottom 130
-    const rows = new Map<number, TextRow[]>([[1, [row(152, 163, 90, 200)]]]) // gap 22 ≫ one row
-    const out = reclaimDroppedRows(boxes, rows)
-    expect(out.get('par6#999999')![0]).toEqual(box(1, 90, 100, 300, 30)) // unchanged
-  })
-
-  it('ignores a row below the box but in a different column (no x-overlap)', () => {
-    const boxes = new Map<string, PdfRect[]>([['par7#888888', [box(1, 90, 100, 100, 30)]]]) // x[90,190], bottom 130
-    const rows = new Map<number, TextRow[]>([[1, [row(132, 143, 300, 400)]]]) // far-right column
-    const out = reclaimDroppedRows(boxes, rows)
-    expect(out.get('par7#888888')![0]).toEqual(box(1, 90, 100, 100, 30)) // unchanged
+  it('math pill ignores atBandTop — stays parked in the left margin', () => {
+    const p = pillPlacement({ math: true, tight: false, atBandTop: true })
+    expect(p.left).toBe(-PILL_MARGIN_GAP)
+    expect(p.transform).toBe('translateX(-100%)')
   })
 })
