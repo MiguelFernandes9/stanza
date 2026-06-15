@@ -543,6 +543,31 @@ describe('resolveBoxOverlaps — settle overlaps and small gaps (BUG-19 / BUG-25
     // extend by one line: min(352.72+16=368.72, 364.68-2=362.68) = 362.68
     expect(out.get('par2#a1a1a1')![0]!.y + out.get('par2#a1a1a1')![0]!.height).toBeCloseTo(362.68, 6)
   })
+
+  it('reclaims the dropped last line of a paragraph before a LIST (itemize settles)', () => {
+    // demo ch1.tex 205-215: "…follows:" then \begin{itemize}. synctex drops the
+    // paragraph's wrapped final row, so its box bottoms a line short; a list is
+    // body text flow (not a float), so the BUG-37 env guard must NOT apply — the
+    // small-gap reclaim still fires. The env NAME distinguishes list from float.
+    const rects = new Map<string, PdfRect[]>([
+      ['par2#a1a1a1', [{ page: 8, x: 72, y: 320, width: 300, height: 32.72 }]], // bottom 352.72
+      ['env5#d4d4d4', [{ page: 8, x: 72, y: 364.68, width: 300, height: 200 }]] // itemize top 364.68
+    ])
+    const out = resolveBoxOverlaps(rects, new Map([['env5#d4d4d4', 'itemize']]))
+    // settles like par→par: min(352.72+16, 364.68-2) = 362.68
+    expect(out.get('par2#a1a1a1')![0]!.y + out.get('par2#a1a1a1')![0]!.height).toBeCloseTo(362.68, 6)
+    expect(out.get('env5#d4d4d4')![0]!.y).toBeCloseTo(364.68, 6) // list untouched
+  })
+
+  it('still does NOT settle before a named float env (figure stays put, BUG-37 kept)', () => {
+    const rects = new Map<string, PdfRect[]>([
+      ['par2#a1a1a1', [{ page: 8, x: 72, y: 320, width: 300, height: 32.72 }]], // bottom 352.72
+      ['env3#b2b2b2', [{ page: 8, x: 72, y: 364.68, width: 300, height: 200 }]] // figure top 364.68
+    ])
+    const out = resolveBoxOverlaps(rects, new Map([['env3#b2b2b2', 'figure']]))
+    expect(out.get('par2#a1a1a1')![0]!.y + out.get('par2#a1a1a1')![0]!.height).toBeCloseTo(352.72, 6)
+    expect(out.get('env3#b2b2b2')![0]!.y).toBeCloseTo(364.68, 6) // float untouched
+  })
 })
 
 describe('blockBoxesByPage — per-page boxes for a straddling block (BUG-16)', () => {

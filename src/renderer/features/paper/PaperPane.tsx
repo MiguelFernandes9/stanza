@@ -166,11 +166,19 @@ export function PaperPane(props: Props): JSX.Element {
           return boxes.length ? ([b.id, boxes] as const) : null
         })
         .filter((e): e is NonNullable<typeof e> => e != null)
+      // Env name per environment block, so the settle pass can tell a list
+      // (body text flow — its gap above may be a dropped wrapped line) from a
+      // float (figure/table/display — real \intextsep) (BUG-37 / BUG-40-list).
+      const envNames = new Map(
+        perBlock
+          .filter(({ b }) => b.kind === 'environment' && b.envName)
+          .map(({ b }) => [b.id, b.envName!] as const)
+      )
       // Trim raw-synctex box overlaps (a float's box extends over the next
       // paragraph's box) before storing, so overlays, allBoxes, selection and
       // hover all consume non-overlapping extents — padding can't fix an
       // overlap in the box itself (BUG-19 reopened).
-      setBlockRects(resolveBoxOverlaps(new Map(entries)))
+      setBlockRects(resolveBoxOverlaps(new Map(entries), envNames))
     })
     return () => {
       alive = false
