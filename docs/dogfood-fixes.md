@@ -1526,3 +1526,43 @@ the left margin, never on the equation.
 
 **Lane.** Renderer paper, `paperModel.ts` `mathBoxesByPage` (1 function). Branch
 off main. Disjoint from the in-flight parser work (`shared/blocks/parse.ts`).
+
+## BUG-37 — a paragraph box extends down into the whitespace before a figure/float
+
+A block box reaches past its text into the empty space below — e.g. the
+paragraph `ch2.tex:6-9` ("Figure~\ref… before any data is ready.") whose box
+(and left edge bar) hangs down into the gap above the figure float.
+
+**Root cause (verified with live synctex on the demo).** `resolveBoxOverlaps`
+(`paperModel.ts:176`, the BUG-25 settle) treats any downward gap up to
+`SETTLE_GAP_K = 2.5` line-heights as a synctex-dropped wrapped line and extends
+the upper box down to `b.y − MIN_GAP` to reclaim it. Real rects for the
+paragraph (page 8, `x=h, y=v−H`): three visual lines, bottom at **352.72**. The
+next block is the **figure float** (`\begin{figure}`), top at **364.68** — a
+gap of **11.96pt** that is genuine `\intextsep` float spacing, not a dropped
+line. `lineHeight = min(boxH, 16) = 16`, `2.5×16 = 40 ≥ 11.96`, so the settle
+fires and grows the paragraph box to `364.68 − 2 = 362.68` — ~10pt into the
+whitespace above the figure. The heuristic can't tell "synctex dropped my last
+line" from "structural whitespace before a float" by geometry alone.
+
+**Fix (gate the settle on block kind).** The "reclaim a dropped last line"
+extension only makes sense between text blocks; whitespace before/after a float
+or display is real and must stay clear. Thread each box's block kind into
+`resolveBoxOverlaps` (the map is keyed by blockId, whose last path segment
+prefix is `par`/`sec`/`env`/`pre` from `assignIds` in `shared/blocks/parse.ts` —
+or pass a `kindById` map from `PaperPane`), and **skip the small-gap downward
+extend when either neighbour is an `environment`** (figure/table/display-math).
+Keep the overlap→midpoint branch (BUG-19) and the paragraph→paragraph extend
+(BUG-25) untouched.
+
+**Test (`paperModel.test.ts`, real fixture).** Two boxes — a paragraph
+(`bottom 352.72`) above a figure-env box (`top 364.68`, gap 11.96) — with the
+env's kind marked → assert the paragraph box is NOT extended (stays at 352.72).
+Keep the existing BUG-25 paragraph→paragraph case → still extends. Live gate
+(Miguel): the `ch2.tex:6-9` paragraph box ends at its last line, no edge bar
+hanging into the figure gap.
+
+**⚠️ Sequencing.** Touches `paperModel.ts` like BUG-36 (`mathBoxesByPage`) —
+different function, but to avoid a merge conflict give both to the **same
+sibling**, or branch BUG-37 after BUG-36 merges. **Lane.** Renderer paper,
+`paperModel.ts` `resolveBoxOverlaps` (+ a kind map wired from `PaperPane.tsx`).
