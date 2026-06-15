@@ -373,3 +373,80 @@ holder).
 **Status.** Diagnosed (static, grounded in the code paths). **Not reproduced
 live yet** — confirm pill-rect vs header band on the demo before dispatch.
 Folded into Tier 2 Stage 2a (this commit). Not dispatched.
+
+---
+
+## M2-7 — Equation box merges with the paragraph above it (a leading `\label` drags the region up)
+
+**Symptom.** A numbered display equation that sits directly under a prose
+paragraph renders **inside the same block box** as that paragraph, instead of as
+its own box. Seen on the demo (`ch1.tex`, the generating-functional passage):
+the box covers "In symbols, $Z$ is … familiar definitions," **and** equation
+(1.2) `F_{\mu\nu}=…, D_\mu=…`. The block model is already correct — only the
+drawn box is wrong.
+
+**Not the parser (measured).** Running the real parser on the source
+(`/tmp/stanza-demo/chapters/ch1.tex`) gives separate blocks:
+`paragraph 224-238`, `environment(equation) 239-244`, `paragraph 245-246`,
+`environment(displaymath) 247-253`, … So the split exists in the model; the
+merge is **box geometry**.
+
+**Root cause (measured via synctex).** `environmentInteriorSpan`
+([paperModel.ts:415](src/renderer/features/paper/paperModel.ts#L415)) takes an
+env's geometry span as `startLine+1 … endLine-1`. For the equation that is lines
+**240-243**, and line 240 is `\label{eq:field-defs}`. `\label` synctex-maps to
+the **end of the prose line above it**, not to the equation — the same
+"invisible macro maps upward" hazard as BUG-11/BUG-20. Synctex forward on
+`ch1.tex`:
+
+| line | content | synctex `v` |
+|---|---|---|
+| 238 | prose "definitions," | **507.66** |
+| 240 | `\label{eq:field-defs}` | **507.66** ← equals the prose line |
+| 241/243 | `F_{\mu\nu}` / `D_\mu` (real math) | 510.84 |
+| 245 | prose "and every…" | 534.33 |
+
+So `blockGeometryRects`
+([paperModel.ts:426](src/renderer/features/paper/paperModel.ts#L426)) feeds the
+equation a band whose top is the prose line (507.66). `mathBoxesByPage`
+([paperModel.ts:373](src/renderer/features/paper/paperModel.ts#L373)) then unions
+every text row in that band — including the prose's last line — so the equation
+box reaches **up into the paragraph**, and the boxes merge.
+
+**Discriminator (proves it).** The *second* equation (displaymath 247-253) has
+**no `\label`** and is **not** merged — its band starts cleanly at v=572.9, well
+below the prose at v=534.3. `\label` present → merged; absent → fine. The `\label`
+line is the only difference.
+
+**The parser already guards this; the geometry doesn't.** `\label` is a
+`TRANSPARENT_MACRO` in the parser
+([parse.ts:56](src/shared/blocks/parse.ts#L56)) precisely because it maps onto
+the position above. `environmentInteriorSpan` re-imports the bug by blindly
+taking `startLine+1` without skipping leading invisible-macro lines.
+
+**Fix (durable, one rule).** When deriving an environment's **geometry region**,
+skip leading invisible/transparent-macro lines (`\label`, `\index`, `\glossary`,
+`\nomenclature`, `\hypertarget`, `\phantomsection`, `\addcontentsline`,
+`\addtocontents`) so the region starts at the first real content line (241 here,
+v=510.84). Reuse the parser's `TRANSPARENT_MACROS` as the **single source of
+truth** — do not duplicate the list. Preferred seam: have the parser record the
+env's first-content line (it already classifies these macros in the AST) and let
+the geometry use it; `environmentInteriorSpan`'s change is then minimal.
+Dissolves the whole class (any env with a leading `\label`), no per-equation
+special case.
+
+**Test.** parse.test.ts (or a geometry-region unit): an `\begin{equation}` whose
+first interior line is `\label{…}` yields a geometry start at the first math
+line, not the label. Live on `/tmp/stanza-demo`: equation (1.2) renders as its
+own box and the paragraph above stops above it; the second (label-less) equation
+stays unmerged (regression guard).
+
+**Lane.** `environmentInteriorSpan` is in `paperModel.ts`, **held by
+`pensive-allen` (Tier 2 Stage 2b)**, which may delete/replace it. The
+content-start logic belongs in `src/shared/blocks/parse.ts` (free lane); only a
+tiny consumer change touches `paperModel.ts`. Branch off latest main; if 2b is
+unmerged, coordinate/rebase and make sure the fix survives the 2b region rewrite
+(its region top must also exclude `\label` lines).
+
+**Status.** Diagnosed + measured (synctex evidence + discriminator). Not
+dispatched.
