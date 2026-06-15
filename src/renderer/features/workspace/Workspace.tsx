@@ -22,7 +22,7 @@ import type { PdfFlash } from '../paper/PaperPane'
 import { expandIds, flattenBlocks, spanLabel, taskSpans } from '../paper/paperModel'
 import { resolveToKnownFile } from '@renderer/lib/paths'
 import { blockLabel, tagKind } from '../tasks/TaskCard'
-import { initialTaskState, taskReducer } from '../tasks/taskStore'
+import { dismissRoute, initialTaskState, taskReducer } from '../tasks/taskStore'
 import { pendingRemap } from '../tasks/reanchor'
 import { planMove } from './fileDrag'
 import { ResizeHandle } from './ResizeHandle'
@@ -419,6 +419,25 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
     )
   }
 
+  // Dismissing (✕) a REVIEW card must reject its backend op, not just drop the
+  // card: a review task holds ReviewService.pendingSpans + a live stanza/op-*
+  // branch, so a local-only removeTask orphans the lock → SPANS_LOCKED on those
+  // spans until restart (BUG-42). compose/noop drop locally; busy stays blocked.
+  const dismissTask = (taskId: number): void => {
+    const task = state.tasks.find((t) => t.id === taskId)
+    if (!task) return
+    switch (dismissRoute(task)) {
+      case 'reject':
+        resolveTask(taskId, false) // → reviewResolve({accept:false}): delete branch + clear lock
+        break
+      case 'drop':
+        dispatch({ type: 'dismiss', taskId })
+        break
+      case 'ignore':
+        break // busy: mid-op, not dismissible
+    }
+  }
+
   const projectName = doc.root.split('/').pop() ?? doc.root
   const activeTask = state.tasks.find((t) => t.id === state.activeTask)
   const pageById = new Map(pageBlocks.map((b) => [b.id, b]))
@@ -531,7 +550,7 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
           onRemoveBlock={(taskId, blockId) => dispatch({ type: 'remove-block', taskId, blockId })}
           onUpdateInstruction={(taskId, instruction) => dispatch({ type: 'update-instruction', taskId, instruction })}
           onSubmitTask={submitTask}
-          onDismissTask={(taskId) => dispatch({ type: 'dismiss', taskId })}
+          onDismissTask={dismissTask}
           onResolveTask={resolveTask}
           onView={(view) => dispatch({ type: 'set-view', view })}
         />

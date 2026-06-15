@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { initialTaskState, taskReducer } from './taskStore'
-import type { EditTask, TaskAction, TaskState } from './taskStore'
+import { dismissRoute, initialTaskState, taskReducer } from './taskStore'
+import type { EditTask, TaskAction, TaskPhase, TaskState } from './taskStore'
 import type { ReviewProposal } from '../../../shared/ipc'
 
 const run = (state: TaskState, ...actions: TaskAction[]): TaskState =>
@@ -178,6 +178,26 @@ describe('taskReducer — lifecycle', () => {
   it('dismiss is ignored while busy', () => {
     const s = run(composed(), { type: 'submit', taskId: 1 }, { type: 'dismiss', taskId: 1 })
     expect(s.tasks).toHaveLength(1)
+  })
+})
+
+describe('dismissRoute — dismissing must reject a review op (BUG-42)', () => {
+  const task = (phase: TaskPhase): Pick<EditTask, 'phase'> => ({ phase })
+
+  it('rejects the backend op when dismissing a review task', () => {
+    // A review task owns ReviewService.pendingSpans + a live stanza/op-* branch;
+    // dismissing it must REJECT (delete branch + free the lock), not drop locally,
+    // or the spans orphan as SPANS_LOCKED until restart (BUG-42).
+    expect(dismissRoute(task('review'))).toBe('reject')
+  })
+
+  it('drops a compose or noop task locally (no backend lock to free)', () => {
+    expect(dismissRoute(task('compose'))).toBe('drop')
+    expect(dismissRoute(task('noop'))).toBe('drop')
+  })
+
+  it('ignores dismiss while busy (mid-op, stays blocked)', () => {
+    expect(dismissRoute(task('busy'))).toBe('ignore')
   })
 })
 

@@ -125,6 +125,26 @@ function toggleBlock(s: TaskState, ids: string[], additive: boolean): TaskState 
   }
 }
 
+/** Where a dismiss (✕) of a task must go. A review task owns a backend op
+ *  (ReviewService.pendingSpans + a live stanza/op-* branch), so dismissing it
+ *  must REJECT that op — delete the branch and free the lock — or its spans
+ *  orphan as SPANS_LOCKED until restart (BUG-42). compose/noop hold no backend
+ *  lock and are dropped locally; busy is mid-op and stays put. The reducer's
+ *  'dismiss' (local removeTask) handles only the 'drop' case; the Workspace
+ *  handler routes 'reject' through resolveTask(taskId, false). */
+export type DismissRoute = 'reject' | 'drop' | 'ignore'
+
+export function dismissRoute(task: Pick<EditTask, 'phase'>): DismissRoute {
+  switch (task.phase) {
+    case 'review':
+      return 'reject'
+    case 'busy':
+      return 'ignore'
+    default:
+      return 'drop'
+  }
+}
+
 export function taskReducer(s: TaskState, a: TaskAction): TaskState {
   switch (a.type) {
     case 'toggle-block':
