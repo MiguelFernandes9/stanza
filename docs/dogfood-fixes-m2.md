@@ -244,47 +244,65 @@ already merged; no live sibling on parse.ts. Disjoint from BUG-36
 
 ---
 
-## M2-5 — Toolbar buttons jitter the centered PDF sideways
+## M2-5 — Code/AI buttons jitter the centered PDF sideways
 
-**Symptom.** Pressing toolbar buttons (top row: Compiled / recompile / source
-`<>` / sparkles / gear; preview row: Read·Select, zoom ±) makes the page
-visibly jitter/jump.
+**Symptom.** Pressing the **Code** (`<>`, ⌘E) or **Assistant** (sparkles, ⌘J)
+titlebar buttons makes the centered page visibly jitter/snap sideways. Zoom ±
+does **not** jitter. Reported live after the first fix shipped.
 
-**Root cause** (read-only investigation; Electron drag-region decisively ruled
-out — the `no-drag` opt-out on the titlebar buttons is correct
-([TitleBar.tsx:83](src/renderer/features/workspace/TitleBar.tsx#L83)) AND the
-preview toolbar isn't in the drag region yet still jitters). The PDF scroll
-container is `overflow:auto` with **no `scrollbar-gutter:stable`**
-([PaperPane.tsx:372](src/renderer/features/paper/PaperPane.tsx#L372)).
-`containerW` is read from `clientWidth`
-([PaperPane.tsx:186](src/renderer/features/paper/PaperPane.tsx#L186)) and feeds
-the page-centering math `pageLeft = (containerW - pageW) / 2`
-([paperPaneLayout.ts:28](src/renderer/features/paper/paperPaneLayout.ts#L28)).
-Any button that changes content height (zoom rescale, recompile → new page
-count, source/chat pane mount-unmount → pane width) toggles the vertical
-scrollbar → `clientWidth` jumps by the scrollbar width → ResizeObserver fires →
-`pageLeft` shifts ~7.5px → the centered page slides sideways = the jitter.
+**First hypothesis — WRONG (shipped, no effect).** I guessed scrollbar-gutter:
+a button toggling the vertical scrollbar changes `clientWidth` → re-center. That
+predicted **zoom** would jitter too (zoom rescale toggles the scrollbar). It
+doesn't. `scrollbarGutter:'stable'` was merged anyway — harmless, keep it for
+hygiene, but it is **not** this bug. Lesson: the hypothesis that doesn't explain
+the discriminator (zoom = no jitter) is the wrong hypothesis.
 
-**Caveat — confirm live.** Visible only with macOS "Show scroll bars: Always"
-(or a mouse). With overlay scrollbars ("When scrolling", zero width) there's no
-shift; if jitter persists there, the cause is different. Confirm tell: press
-zoom and watch whether the vertical scrollbar toggles and the page slides
-horizontally in lockstep. The fix is correct regardless.
+**Root cause — async measurement lag.** Horizontal layout is derived from a
+**JS-measured, async** width:
+- `pageLeft = (containerW - pageW)/2`
+  ([paperPaneLayout.ts:28](src/renderer/features/paper/paperPaneLayout.ts#L28)),
+  and `containerW` is set **only** by a ResizeObserver
+  ([PaperPane.tsx:202-210](src/renderer/features/paper/PaperPane.tsx#L202)).
+- **Zoom** changes `zoom`/`pageW` via React state *inside PaperPane* → `pageLeft`
+  recomputes in the **same render** → page re-centers atomically → no jitter.
+- **Code/AI** toggle `sourceOpen`/`chatOpen` in `Workspace`
+  ([Workspace.tsx:500,538](src/renderer/features/workspace/Workspace.tsx#L500)),
+  mounting/unmounting a flex pane → PaperPane's **width** changes. PaperPane
+  learns the new width **one frame later** (ResizeObserver). For that frame the
+  page paints at the **stale** `pageLeft` in the new-width container, then snaps
+  → jitter. The discriminator (only width-changing buttons jitter, not zoom) is
+  the signature of this lag.
 
-**Fix.** Reserve the gutter — one prop on the scroll container
-([PaperPane.tsx:372](src/renderer/features/paper/PaperPane.tsx#L372)):
-`scrollbarGutter: 'stable'`. Pins `clientWidth` so scrollbar toggling no longer
-re-centers the page. (Optional, separate micro-shift: `SegmentedControl` active
-tab is `semibold` vs inactive `medium` — a sub-pixel tab-width change; give tabs
-a fixed width if noticed.)
+**Durable fix — CSS-atomic centering (dissolves the class).** Stop deriving
+horizontal layout from the async-measured `containerW`. The content has an
+intrinsic width: `pageWidth + GAPX + RAIL`. Wrap page + rail in a fixed-width
+track and center it with **CSS** (`justify-content:center` on the scroll content,
+or `margin-inline:auto` on the track; use `safe center` / a `min-content` wrapper
+so a too-narrow container scrolls instead of clipping the left). Then:
+- page left = 0 within the track, page right = `pageWidth`, rail left =
+  `pageWidth + GAPX` — all **constants** given `pageWidth`, no `containerW`.
+- badges/bubbles/connectors position against those constants (today they use
+  `pageRightX`/`railLeft` from `containerW`).
+- `containerW` state + the centering ResizeObserver
+  ([PaperPane.tsx:72,202-210](src/renderer/features/paper/PaperPane.tsx#L72)) and
+  `paneLayout`'s `containerW` arg
+  ([paperPaneLayout.ts:27](src/renderer/features/paper/paperPaneLayout.ts#L27))
+  can be deleted.
 
-**Test.** Layout is hard to unit-test; tsc + manual confirm (jitter gone on
-zoom). If wanted, assert the scroll-container style carries
-`scrollbarGutter:'stable'`.
+Any width change — pane toggle, window resize, sidebar drag, zoom — then
+re-centers in **one** layout pass, no JS round-trip. No per-button guard; scales
+to every future pane (tables, collab, more side panels).
 
-**Lane.** `src/renderer/features/paper/PaperPane.tsx:372` — a single style prop,
-orthogonal to the geometry logic (`paperModel.ts` / the geometry effects) other
-sessions edit, but the SAME hot file → rebase immediately before pushing.
+**Test.** Pure geometry stays unit-testable: assert page/rail/connector offsets
+are functions of `pageWidth` only (no `containerW`). Layout-jitter itself is
+manual: toggle ⌘E/⌘J rapidly, page must not shift.
 
-**Status.** Diagnosed (read-only; high confidence on mechanism, live-confirm
-pending re: OS scrollbar setting). Not yet dispatched.
+**Lane.** HOT — `PaperPane.tsx` (render structure) + `paperPaneLayout.ts`
+(`paneLayout` signature). Same files the geometry sessions edit (BUG-32/37/40,
+`paperModel.ts` neighbours). Route to the PaperPane/geometry lane owner; rebase
+on latest main immediately before pushing. Manager-2 must not make a competing
+edit here.
+
+**Status.** Re-diagnosed; root cause confirmed by the live discriminator
+(zoom=no-jitter, code/ai=jitter). Durable fix specified, not yet dispatched.
+Prior gutter fix left in place (harmless).
