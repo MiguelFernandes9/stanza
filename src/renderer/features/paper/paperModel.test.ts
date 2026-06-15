@@ -220,76 +220,96 @@ describe('isMathEnvName — display-math detection (BUG-23)', () => {
   })
 })
 
-describe('mathBoxesByPage — hug the formula ink (BUG-23)', () => {
-  it('takes width from the per-line glyph rects, not the full-height containers', () => {
-    // real ch2 display equation: two full-height container rects (\textwidth,
-    // textwidth+number) + two narrower per-line glyph rects.
+describe('mathBoxesByPage — union of the text-layer rows (Tier 1)', () => {
+  // baseline = converted transform[5] (synctex `v` basis) = the row's yBottom.
+  const row = (yTop: number, baseline: number, xLeft: number, xRight: number): TextRow => ({
+    baseline,
+    yTop,
+    yBottom: baseline,
+    xLeft,
+    xRight
+  })
+  const pageRows = (page: number, rows: TextRow[]): Map<number, TextRow[]> => new Map([[page, rows]])
+
+  it('hugs the frac to its rendered glyph rows, incl. \\bigg|_{J=0} (ch1:197-203)', () => {
+    // synctex region (page 6) — the formula line box + inner \frac fragments,
+    // used ONLY to locate the band, never for the box extent.
     const rects: PdfRect[] = [
-      { page: 6, x: 72, y: 264.2, width: 432, height: 56.3 }, // \textwidth container
-      { page: 6, x: 72, y: 264.2, width: 485.5, height: 56.3 }, // textwidth + number
-      { page: 6, x: 72, y: 264.2, width: 283, height: 26.1 }, // line 1 glyphs
-      { page: 6, x: 72, y: 294.3, width: 325, height: 26.2 } // line 2 glyphs
+      { page: 6, x: 198.54, y: 100, width: 214.92, height: 26.68 }, // formula line box
+      { page: 6, x: 308.01, y: 115.77, width: 80.89, height: 10.91 }, // denominator
+      { page: 6, x: 306.82, y: 100.91, width: 83.28, height: 25.77 }, // numerator
+      { page: 6, x: 390.1, y: 100.5, width: 3.64, height: 26.18 } // \bigg| rule
     ]
-    const [box] = mathBoxesByPage(rects, 72)
-    expect(box!.y).toBeCloseTo(264.2, 5) // top from all rects
-    expect(box!.y + box!.height).toBeCloseTo(320.5, 5) // bottom from all rects
-    expect(box!.x).toBe(72)
-    expect(box!.width).toBeCloseTo(325, 5) // glyph width, not 485.5 (the number container)
+    // Live text layer: ⟨ϕ⟩ = runs along the main line out to the trailing '.';
+    // separate numerator and denominator rows. Glyph union x = [198.54, 413.46].
+    const rows = pageRows(6, [
+      row(100.91, 110, 306.82, 390.1), // numerator
+      row(104.5, 115.46, 198.54, 413.46), // ⟨ϕ⟩ = … \bigg|_{J=0} .
+      row(116, 126.68, 308.01, 388.9) // denominator δJ(x)
+    ])
+    const [box] = mathBoxesByPage(rects, rows)
+    expect(box!.x).toBeCloseTo(198.54, 1) // formula left, NOT a \frac fragment (308)
+    expect(box!.x + box!.width).toBeCloseTo(413.46, 1) // reaches \bigg|_{J=0} and the '.'
+    expect(box!.y).toBeCloseTo(100.91, 1)
+    expect(box!.y + box!.height).toBeCloseTo(126.68, 1)
   })
 
-  it('hugs both edges of a frac to the formula line box, not an inner fragment (BUG-36/39)', () => {
-    // Live synctex for the demo \[…\] at ch1.tex:197-203 (page 6, post y=v−H
-    // transform). A tall \frac leaves only the short DENOMINATOR (B) under the
-    // 0.7×height glyph filter; taking either edge from glyph rects collapses the
-    // box onto B — left to mid-formula (308, BUG-36), right short of \bigg|_{J=0}
-    // (388.9, BUG-39). Both edges must come from the full-height line box A.
+  it('includes the equation number, no margin/\\textwidth overhang (ch1:144-161)', () => {
+    // synctex region (page 5): a page-MARGIN container (x36.46, left of the text
+    // column), the \textwidth formula box, glyph rows, and the (1.1) number —
+    // all coarse band-locators only, none of them text.
     const rects: PdfRect[] = [
-      { page: 6, x: 198.54, y: 100, width: 214.92, height: 26.68 }, // A formula line box
-      { page: 6, x: 308.01, y: 115.77, width: 80.89, height: 10.91 }, // B frac denominator
-      { page: 6, x: 306.82, y: 100.91, width: 83.28, height: 25.77 }, // C frac numerator
-      { page: 6, x: 390.1, y: 100.5, width: 3.64, height: 26.18 } // D \bigg| rule
-    ]
-    const [box] = mathBoxesByPage(rects, 90)
-    expect(box!.x).toBeCloseTo(198.54, 2) // formula left (rect A), NOT 308 (denominator)
-    expect(box!.x).toBeLessThan(300) // never collapsed onto the inner fragment
-    // Right reaches the full line box A (incl. \bigg|_{J=0}), not the denominator
-    // B (388.9) — one content set drives both edges now (BUG-39).
-    expect(box!.x + box!.width).toBeCloseTo(413.46, 2)
-    expect(box!.y).toBeCloseTo(100, 5)
-    expect(box!.y + box!.height).toBeCloseTo(126.68, 5)
-  })
-
-  it('drops the margin container AND the disjoint number for a numbered/split eq (BUG-38/39)', () => {
-    // Live synctex, numbered split eq at ch1.tex:144-161. synctex emits a
-    // full-height CONTAINER out in the page margin (x≈36.5, left of the text
-    // column ≈90) and a full-height (1.1) NUMBER far to the right (x≈499.6),
-    // disjoint from the formula. The box must hug only the content [143.5, 468]:
-    // not the margin (BUG-38 left) and not the number (BUG-39 right).
-    const rects: PdfRect[] = [
-      { page: 5, x: 36.46, y: 100, width: 485.54, height: 73.88 }, // margin container (out of column)
-      { page: 5, x: 143.54, y: 100, width: 324.46, height: 73.88 }, // formula line box → right 468
+      { page: 5, x: 36.46, y: 100, width: 485.54, height: 73.88 }, // margin container
+      { page: 5, x: 143.54, y: 100, width: 324.46, height: 73.88 }, // \textwidth formula box
       { page: 5, x: 143.54, y: 100, width: 200, height: 25.77 }, // glyph row 1
       { page: 5, x: 160, y: 140, width: 180, height: 25.77 }, // glyph row 2
-      { page: 5, x: 499.6, y: 100, width: 22.4, height: 73.88 } // (1.1) number, disjoint far right
+      { page: 5, x: 499.6, y: 100, width: 22.4, height: 73.88 } // (1.1) number container
     ]
-    const [box] = mathBoxesByPage(rects, 90)
-    expect(box!.x).toBeCloseTo(143.54, 2) // formula left, NOT the margin (36.5)
-    expect(box!.x + box!.width).toBeCloseTo(468, 2) // formula right, NOT the number (522)
-    expect(box!.x + box!.width).toBeLessThan(490) // number excluded
+    // Live text layer: two formula rows (right edge 468) plus the (1.1) number
+    // (x499.6 → 522). The number is part of the equation → included (this retires
+    // BUG-23's exclude-the-number special-case; a deliberate behaviour change).
+    const rows = pageRows(5, [
+      row(108, 120, 143.54, 440), // formula line 1
+      row(138, 150, 160, 468), // formula line 2 — formula's right edge
+      row(127, 135, 499.6, 522) // (1.1) number
+    ])
+    const [box] = mathBoxesByPage(rects, rows)
+    expect(box!.x).toBeCloseTo(143.54, 1) // formula left, NOT the margin container (36.46)
+    expect(box!.x).toBeGreaterThan(90) // no margin/\textwidth overhang into the body column
+    expect(box!.x + box!.width).toBeCloseTo(522, 1) // number INCLUDED (was 468 pre-Tier-1)
   })
 
-  it('keeps full width for a single-line equation (all rects same height)', () => {
+  it('hugs a single-line equation to its glyph row, not the synctex container', () => {
+    const rects: PdfRect[] = [{ page: 2, x: 72, y: 100, width: 400, height: 20 }] // \textwidth container
+    const rows = pageRows(2, [row(102, 116, 150, 360)]) // the one rendered line
+    const [box] = mathBoxesByPage(rects, rows)
+    expect(box!.x).toBeCloseTo(150, 5)
+    expect(box!.width).toBeCloseTo(210, 5) // 360 − 150 glyph width, NOT the 400 container
+  })
+
+  it('excludes rows outside the block synctex y-band (a neighbour block row)', () => {
+    const rects: PdfRect[] = [{ page: 1, x: 143, y: 100, width: 300, height: 30 }] // band [100,130]
+    const rows = pageRows(1, [
+      row(108, 120, 143, 443), // in-band formula row
+      row(140, 152, 90, 450) // next paragraph's first row — baseline 152 ≫ band bottom 130
+    ])
+    const [box] = mathBoxesByPage(rects, rows)
+    expect(box!.x + box!.width).toBeCloseTo(443, 5) // only the formula row
+    expect(box!.y + box!.height).toBeCloseTo(120, 5)
+  })
+
+  it('falls back to the synctex union when the page has no text rows', () => {
     const rects: PdfRect[] = [
-      { page: 2, x: 72, y: 100, width: 400, height: 20 }, // container
-      { page: 2, x: 72, y: 100, width: 250, height: 20 } // single glyph line, same height
+      { page: 3, x: 100, y: 50, width: 200, height: 40 },
+      { page: 3, x: 120, y: 60, width: 150, height: 20 }
     ]
-    // no rect is < 0.7×blockHeight → no glyph signal → keep full width
-    expect(mathBoxesByPage(rects, 72)[0]!.width).toBe(400)
+    const [box] = mathBoxesByPage(rects, new Map()) // text layer unavailable
+    expect(box).toEqual({ page: 3, x: 100, y: 50, width: 200, height: 40 })
   })
 
   it('drops degenerate rects and returns nothing when none remain', () => {
-    expect(mathBoxesByPage([{ page: 1, x: 0, y: 0, width: 0, height: 0 }], 72)).toEqual([])
-    expect(mathBoxesByPage([], 72)).toEqual([])
+    expect(mathBoxesByPage([{ page: 1, x: 0, y: 0, width: 0, height: 0 }], new Map())).toEqual([])
+    expect(mathBoxesByPage([], new Map())).toEqual([])
   })
 })
 

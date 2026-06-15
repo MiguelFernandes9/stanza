@@ -348,33 +348,29 @@ export function isMathEnvName(name: string | undefined): boolean {
   return name !== undefined && MATH_ENV_NAMES.has(name.replace(/\*$/, ''))
 }
 
-/** A formula line box is indented from the text column by at least this much; a
- *  full-height rect starting within this of the column left is a \textwidth /
- *  numbered container, not formula ink (BUG-23/39). */
-const MATH_COLUMN_EPS = 2
+/** Slack (pt) when testing whether a text-row baseline sits in a block's synctex
+ *  y-band: absorbs sub-pixel measurement drift without reaching into the next
+ *  block's rows. The band bottom already trails the last glyph baseline by the
+ *  equation's descender + display spacing, so a 2pt pad never crosses into a
+ *  neighbouring block. */
+const MATH_BAND_EPS = 2
 
-/** Per-page box for a display-math block, hugged to the formula ink. synctex
- *  returns full-block-height container rects alongside narrower per-line glyph
- *  rects: the \textwidth box, the \textwidth+number box, a numbered/split
- *  equation's container out in the page margin, and the equation number off to
- *  the right. One in-column CONTENT set drives BOTH edges so neither collapses
- *  onto a fragment (the recurring BUG-23 → 35/36/38/39 cycle was a one-edge
- *  patch each time):
- *    1. `inColumn` = rects with `x ≥ bodyTextColLeft` — drops the page-margin
- *       container, which sits left of the text column (BUG-38).
- *    2. `glyphs` = inColumn rects shorter than 0.7× the block height (per-line).
- *    3. `content` = glyphs PLUS the full-height inColumn rects that are formula
- *       ink: a formula line box is indented from the column and sits over the
- *       glyphs, so admit a full-height rect only if it starts right of the
- *       column (drops the \textwidth container, which starts AT the column —
- *       BUG-23) and horizontally overlaps the glyph x-cluster (drops the
- *       equation number, full-height but disjoint far to the right — BUG-39).
- *    4. left = `min(x)`, right = `max(x+width)` over `content`; a single-line
- *       equation has no sub-height glyph, so it falls back to every in-column
- *       rect. Top/bottom always come from every rect.
- *  `bodyTextColLeft` is threaded from PaperPane (min x over non-environment
- *  block rects). */
-export function mathBoxesByPage(rects: PdfRect[], bodyTextColLeft: number): PdfRect[] {
+/** Per-page box for a display-math block, built from the pdf.js TEXT LAYER: the
+ *  union of the rendered text rows whose baseline falls in the block's synctex
+ *  y-band on that page and which horizontally overlap its synctex region.
+ *
+ *  synctex only LOCATES the band (coarse source→region) — it never sets the box
+ *  extent — so the \textwidth / numbered / page-margin CONTAINER rects, which
+ *  carry no glyphs of their own, can no longer inflate the box. That retires the
+ *  whole synctex-width heuristic pile (BUG-23/35/36/38/39): rendered glyph
+ *  extents are exact, with no container or margin overhang to special-case. The
+ *  equation NUMBER ("(1.1)") renders in the same band and is part of the
+ *  equation, so it is simply included — this deletes BUG-23's exclude-the-number
+ *  case rather than reincarnating it (a deliberate, arguably more correct change).
+ *
+ *  Falls back to the coarse synctex union for a block whose page carries no text
+ *  rows (text layer unavailable), so a box is never lost. */
+export function mathBoxesByPage(rects: PdfRect[], rowsByPage: Map<number, TextRow[]>): PdfRect[] {
   const byPage = new Map<number, PdfRect[]>()
   for (const r of rects) {
     if (r.width <= 0 || r.height <= 0) continue
@@ -385,33 +381,26 @@ export function mathBoxesByPage(rects: PdfRect[], bodyTextColLeft: number): PdfR
   return [...byPage.entries()]
     .sort(([a], [b]) => a - b)
     .map(([page, rs]) => {
-      const y = Math.min(...rs.map((r) => r.y))
-      const bottom = Math.max(...rs.map((r) => r.y + r.height))
-      const total = bottom - y
-      // Drop the page-margin container (left of the text column, BUG-38).
-      const inColumn = rs.filter((r) => r.x >= bodyTextColLeft)
-      const base = inColumn.length ? inColumn : rs
-      const isGlyph = (r: PdfRect): boolean => r.height < 0.7 * total
-      const glyphs = base.filter(isGlyph)
-      // One content set drives BOTH edges so neither collapses onto a fragment
-      // (BUG-36 left / BUG-39 right): the per-line glyphs plus the full-height
-      // rects that are formula ink — indented from the column AND overlapping
-      // the glyph x-cluster. That keeps a \frac's line box, drops the \textwidth
-      // container (starts at the column, BUG-23) and the equation number
-      // (disjoint, far right, BUG-39).
-      let content = base
-      if (glyphs.length) {
-        const gl = Math.min(...glyphs.map((r) => r.x))
-        const gr = Math.max(...glyphs.map((r) => r.x + r.width))
-        content = base.filter(
-          (r) =>
-            isGlyph(r) ||
-            (r.x > bodyTextColLeft + MATH_COLUMN_EPS && r.x < gr && r.x + r.width > gl)
-        )
+      const synTop = Math.min(...rs.map((r) => r.y))
+      const synBottom = Math.max(...rs.map((r) => r.y + r.height))
+      const synLeft = Math.min(...rs.map((r) => r.x))
+      const synRight = Math.max(...rs.map((r) => r.x + r.width))
+      const rows = (rowsByPage.get(page) ?? []).filter(
+        (row) =>
+          row.baseline >= synTop - MATH_BAND_EPS &&
+          row.baseline <= synBottom + MATH_BAND_EPS &&
+          row.xRight > synLeft &&
+          row.xLeft < synRight
+      )
+      // No glyphs measured (text layer absent) → coarse synctex union, never lost.
+      if (!rows.length) {
+        return { page, x: synLeft, y: synTop, width: synRight - synLeft, height: synBottom - synTop }
       }
-      const x = Math.min(...content.map((r) => r.x))
-      const right = Math.max(...content.map((r) => r.x + r.width))
-      return { page, x, y, width: right - x, height: bottom - y }
+      const x = Math.min(...rows.map((r) => r.xLeft))
+      const right = Math.max(...rows.map((r) => r.xRight))
+      const top = Math.min(...rows.map((r) => r.yTop))
+      const bottom = Math.max(...rows.map((r) => r.yBottom))
+      return { page, x, y: top, width: right - x, height: bottom - top }
     })
 }
 
