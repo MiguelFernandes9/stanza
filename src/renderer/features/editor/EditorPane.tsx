@@ -35,6 +35,8 @@ interface Props {
   onSelectFile: (file: string) => void
   /** Close a tab — Workspace owns the open-files set. */
   onCloseFile: (file: string) => void
+  /** Drag-reorder tabs — Workspace reorders the open-files set. */
+  onReorder: (draggedFile: string, dropTargetFile: string) => void
   /** Any buffer edit — F6 debounce hook. */
   onDocChanged: () => void
   errors: CompileError[]
@@ -56,6 +58,7 @@ export function EditorPane({
   projectContext,
   onSelectFile,
   onCloseFile,
+  onReorder,
   onDocChanged,
   errors,
   onForwardSearch,
@@ -265,18 +268,6 @@ export function EditorPane({
           overflowX: 'auto'
         }}
       >
-        <span
-          style={{
-            font: 'var(--weight-bold) var(--text-2xs)/1 var(--font-sans)',
-            letterSpacing: 'var(--tracking-caps)',
-            textTransform: 'uppercase',
-            color: 'var(--ink-400)',
-            padding: '0 8px',
-            flex: '0 0 auto'
-          }}
-        >
-          Source
-        </span>
         {openFiles.map((file) => (
           <FileTab
             key={file}
@@ -285,6 +276,7 @@ export function EditorPane({
             dirty={dirty.has(file)}
             onSelect={onSelectFile}
             onClose={requestClose}
+            onReorder={onReorder}
           />
         ))}
       </div>
