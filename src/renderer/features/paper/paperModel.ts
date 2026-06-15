@@ -169,6 +169,15 @@ function blockKindPrefix(id: string): string {
   return seg.replace(/\d+$/, '')
 }
 
+/** List environments — body text flow, not floats. Unlike a figure/table/
+ *  display-math float (real \intextsep around it), the gap above a list can be
+ *  a synctex-dropped wrapped line of the paragraph before it, so the settle
+ *  reclaim is allowed to fire across a list boundary (BUG-40-list). */
+const LIST_ENVS = new Set(['itemize', 'enumerate', 'description'])
+function isListEnv(name: string | undefined): boolean {
+  return name !== undefined && LIST_ENVS.has(name)
+}
+
 /** Settle vertical relationships between page-adjacent block boxes so a
  *  block's wash/selection neither bleeds into its neighbour nor stops short of
  *  it. Per page, boxes are sorted top-to-bottom; for each adjacent pair:
@@ -181,21 +190,31 @@ function blockKindPrefix(id: string): string {
  *     the box stops a line short; this reclaims exactly that line without going
  *     to the midpoint (which still clips it) and leaves genuine whitespace
  *     clear when the gap is bigger than one line (BUG-25). Skipped when either
- *     neighbour is an `environment`: the space before/after a float/table/
- *     display is real `\intextsep`, not a dropped line (BUG-37).
+ *     neighbour is a FLOAT-like `environment` (figure/table/display math, or
+ *     an unnamed env): the space before/after it is real `\intextsep`, not a
+ *     dropped line (BUG-37). A LIST env (itemize/enumerate/description) is body
+ *     text flow, so the reclaim still fires across it — the gap above a list
+ *     can be a paragraph's dropped wrapped last line (BUG-40-list). `envNames`
+ *     supplies each block's env name so list and float are told apart (the id
+ *     kind-prefix only says `env`).
  *  Genuine structural gaps (> ~2.5 lines) and the last box on a page stay put.
  *  Returns a new map; inputs aren't mutated. */
-export function resolveBoxOverlaps(rects: Map<string, PdfRect[]>): Map<string, PdfRect[]> {
+export function resolveBoxOverlaps(
+  rects: Map<string, PdfRect[]>,
+  envNames: Map<string, string> = new Map()
+): Map<string, PdfRect[]> {
   const out = new Map<string, PdfRect[]>()
-  const byPage = new Map<number, Array<{ box: PdfRect; kind: string }>>()
+  // `floatish`: a non-list environment whose surrounding gap is real spacing,
+  // never a dropped line — it blocks the small-gap reclaim on either side.
+  const byPage = new Map<number, Array<{ box: PdfRect; floatish: boolean }>>()
   for (const [id, boxes] of rects) {
     const clones = boxes.map((b) => ({ ...b }))
     out.set(id, clones)
-    const kind = blockKindPrefix(id)
+    const floatish = blockKindPrefix(id) === 'env' && !isListEnv(envNames.get(id))
     for (const box of clones) {
       const arr = byPage.get(box.page)
-      if (arr) arr.push({ box, kind })
-      else byPage.set(box.page, [{ box, kind }])
+      if (arr) arr.push({ box, floatish })
+      else byPage.set(box.page, [{ box, floatish }])
     }
   }
   for (const entries of byPage.values()) {
@@ -215,10 +234,11 @@ export function resolveBoxOverlaps(rects: Map<string, PdfRect[]>): Map<string, P
       } else if (b.y - aBottom <= SETTLE_GAP_K * lineHeight) {
         // small gap: extend a by ≤ one line to reclaim a synctex-dropped wrapped
         // line; leave b put so real whitespace beyond one line stays clear
-        // (BUG-25). But the gap before/after an environment (figure/table/
+        // (BUG-25). But the gap before/after a FLOAT-like env (figure/table/
         // display) is real \intextsep, never a dropped line — never extend a
         // text box into a float's whitespace, nor a float's box downward (BUG-37).
-        if (entries[i]!.kind === 'env' || entries[i + 1]!.kind === 'env') continue
+        // A list neighbour is body text, so it does NOT block the reclaim.
+        if (entries[i]!.floatish || entries[i + 1]!.floatish) continue
         const newBottom = Math.min(aBottom + lineHeight, b.y - MIN_GAP)
         a.height = Math.max(a.height, newBottom - a.y)
       }
