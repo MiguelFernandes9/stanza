@@ -14,10 +14,12 @@ import type { PaneView, TaskPhase, TaskState } from '../tasks/taskStore'
 import { BlockOverlay } from './BlockOverlay'
 import { FillerPage } from './FillerPage'
 import { PaperToolbar } from './PaperToolbar'
-import { binContentToBlocks, blockBoxesByPage, blockGeometryRects, cardAnchorTops, combinedSpanLabel, expandIds, isGraphicEnvName, isMathEnvName, isTightAbove, resolveBoxOverlaps, spanLabel, washBoxes } from './paperModel'
+import { binContentToBlocks, blockGeometryRects, cardAnchorTops, combinedSpanLabel, expandIds, isMathEnvName, isTightAbove, spanLabel, washBoxes } from './paperModel'
 import type { BlockMark, PageBlock } from './paperModel'
 import { pageTextRows } from './pdfTextRows'
 import type { TextRow } from './pdfTextRows'
+import { pageGraphics } from './pdfGraphics'
+import type { GraphicBox } from './pdfGraphics'
 import { BADGE, PAD, RAIL, connectorPath, paneLayout, phaseTone, stackTops } from './paperPaneLayout'
 
 const FALLBACK_PAGE_WIDTH = 564
@@ -153,46 +155,40 @@ export function PaperPane(props: Props): JSX.Element {
       pageBlocks.map(async (b) => ({ b, rects: await blockGeometryRects(b, forward) }))
     ).then(async (perBlock) => {
       if (!alive) return
-      // The pdf.js text layer is the source of truth for box EXTENT — every text
-      // block's box is the union of its rendered rows — so fetch the rows for
-      // every page any block's synctex rects touch BEFORE building boxes. synctex
-      // is used only to locate each block's region (which page, x-band, top).
+      // The rendered page is the source of truth for box EXTENT — a block's box
+      // is the union of its glyph rows AND its graphic/image bboxes — so fetch
+      // both the text rows and the op-list graphics for every page any block's
+      // synctex rects touch BEFORE building boxes. synctex only locates each
+      // block's region (which page, x-band, top).
       const pages = [...new Set(perBlock.flatMap(({ rects }) => rects.map((r) => r.page)))]
       const rowsByPage = new Map<number, TextRow[]>()
+      const graphicsByPage = new Map<number, GraphicBox[]>()
       await Promise.all(
         pages.map((p) =>
-          pdf
-            .getPage(p)
-            .then(pageTextRows)
-            .then((rows) => void rowsByPage.set(p, rows))
-            .catch(() => void rowsByPage.set(p, []))
+          pdf.getPage(p).then((page) =>
+            Promise.all([
+              pageTextRows(page).then((rows) => void rowsByPage.set(p, rows)).catch(() => void rowsByPage.set(p, [])),
+              pageGraphics(page).then((g) => void graphicsByPage.set(p, g)).catch(() => void graphicsByPage.set(p, []))
+            ])
+          )
         )
       )
       if (!alive) return
-      // Every text block (paragraph, heading, math, list) takes its box from the
-      // union of the rendered text rows in its synctex region — ONE rule, no
-      // per-kind builder, no separate dropped-line reclaim (a region's box runs
-      // to the next region's top, so the wrapped last line is included by
-      // construction). The content band drops running heads / folios / footers
-      // and header-margin stray rects first (M2-6, BUG-30). Graphic envs
-      // (figure/table) keep the coarse synctex union until 2b adds graphic bboxes.
-      const textRects = new Map<string, PdfRect[]>()
-      const graphicEntries: (readonly [string, PdfRect[]])[] = []
-      for (const { b, rects } of perBlock) {
-        if (b.kind === 'environment' && isGraphicEnvName(b.envName)) {
-          const boxes = blockBoxesByPage(rects) // BUG-5/16/30 dodges retained
-          if (boxes.length) graphicEntries.push([b.id, boxes])
-        } else {
-          textRects.set(b.id, rects)
-        }
-      }
-      const { boxesById, contentTopByPage } = binContentToBlocks(textRects, rowsByPage)
-      const built = new Map<string, PdfRect[]>([...boxesById, ...graphicEntries])
-      // Trim raw-synctex overlaps (a float's \end strut box extends over the next
-      // paragraph) so overlays, allBoxes, selection and hover all consume
-      // non-overlapping extents (BUG-19); a disjoint row partition can't overlap,
-      // so this only touches graphic-vs-text pairs now (removed in 2b).
-      setBlockRects(resolveBoxOverlaps(built))
+      // EVERY block — paragraph, heading, math, list, figure, table — takes its
+      // box from the union of everything it rendered (glyph rows ∪ graphic
+      // bboxes) in its synctex region. One rule, no per-kind builder. The content
+      // band drops running heads / folios / footers and header-margin stray rects
+      // first (M2-6, BUG-30); a region's box runs to the next region's top, so a
+      // dropped last line is included and a figure covers its image + caption.
+      const { boxesById, contentTopByPage } = binContentToBlocks(
+        new Map(perBlock.map(({ b, rects }) => [b.id, rects])),
+        rowsByPage,
+        graphicsByPage
+      )
+      // Boxes are unions of a disjoint row/graphic partition, so they can't
+      // overlap — the synctex-overlap resolve pass (BUG-19) is gone (verified
+      // overlap-free on the live demo).
+      setBlockRects(boxesById)
       setContentTops(contentTopByPage)
     })
     return () => {
