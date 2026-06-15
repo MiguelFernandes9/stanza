@@ -1871,3 +1871,51 @@ fully visible (not clipped). `tsc` + suite green.
 **Lane.** `src/renderer/styles/tokens/base.css` (shell overflow) +
 `src/renderer/components/feedback/Tooltip.tsx` (viewport clamp). Tiny,
 self-contained — free sibling, NOT the PaperPane lane.
+
+## BUG-45 — display math (\[…\], equation, align…) wrongly becomes its own block, splitting its paragraph
+
+**Symptom.** A display equation embedded mid-paragraph — ch1.tex:243-253, the
+paragraph "Each derivative…" flush against `\[ \partial_\mu … = 0 \]` (no blank
+line between line 248 and `\[` on 249; the blank line is at 254) — is parsed as a
+SEPARATE selectable block, and its overlay box is wrong (the paragraph 243-248 box
+and the equation 249-253 box fight over what LaTeX renders as one galley
+paragraph).
+
+**Root cause.** `parse.ts:14` puts `displaymath` (`\[…\]`, `$$…$$`) and `mathenv`
+(amsmath `equation`/`align`/`gather`/…) in `ENVIRONMENT_TYPES`, so `parse.ts:197-201`
+does `flushParagraph()` and emits each as its own `environment` block — regardless
+of blank-line / paragraph membership. But in LaTeX a display-math construct does
+NOT break a paragraph: prose flush against `\[…\]` (no blank line) is ONE
+paragraph. So the parser splits a single paragraph into two blocks, which (a) makes
+the embedded equation separately selectable (wrong) and (b) is the root of the
+geometry mis-box — binContentToBlocks gets two regions over one galley paragraph.
+
+**Decision (Miguel, 2026-06-15) — by SYNTAX, not blank lines.** `\[…\]` / `$$…$$`
+(AST type `displaymath`) are NOT blocks — they join the surrounding paragraph. A
+true equation environment (`\begin{equation}`, `align`, `gather`, … — AST type
+`mathenv`) IS its own block, unchanged and still selectable.
+
+**Fix.** Remove ONLY `'displaymath'` from `ENVIRONMENT_TYPES` (`parse.ts:14`) —
+KEEP `'mathenv'`, `'environment'`, `'verbatim'`. `displaymath` nodes then fall
+through to the existing inline path (`parse.ts:214-215`, `joinParagraph`), exactly
+how inline `$…$` already joins; `mathenv` (`\begin{equation}` etc.) still hits
+`parse.ts:197-201` and stays its own block named via `envName`. Remove the now-dead
+`node.type === 'displaymath' ? …` ternary at `parse.ts:199` (only `environment` /
+`mathenv` / `verbatim` reach it). Verify a paragraph that absorbed a `\[…\]` has its
+ownText / content-hash include the math source (stable id). **Renderer unchanged:**
+`\begin{equation}` / `align` are still math-environment blocks, so KEEP
+`isMathEnvName` and the `pillPlacement` math branch (Tier 1 row-union box +
+left-margin pill still apply to them).
+
+**Test.** parse.test.ts: an embedded `\[…\]` is part of its paragraph block (span +
+ownText cover it), NOT a separate block; an isolated `\[…\]` forms a paragraph block
+of its own; a `\begin{equation}` / `align` is STILL its own (math-env) block
+(unchanged); figure/table/itemize/verbatim unchanged. Live (Miguel,
+/tmp/stanza-demo): ch1.tex 243-253 (the `\[…\]=0` case) is ONE selectable block with
+ONE box covering prose + the equation; the numbered `\begin{equation}…\begin{split}`
+at ch1:144 stays its own block with its math box + left-margin pill; figure stays
+its own block; itemize unchanged.
+
+**Lane.** `src/shared/blocks/parse.ts` (+ parse.test.ts) ONLY — drop `'displaymath'`
+from `ENVIRONMENT_TYPES` + the dead naming ternary. No renderer change (equation /
+align blocks keep their existing math geometry + pill). One sibling; tiny.
