@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { DocumentInfo } from '@shared/ipc'
 import { EditorPane } from './EditorPane'
+import { EMPTY_CONTEXT } from './completion/projectContext'
 
 const doc: DocumentInfo = {
   root: '/proj',
@@ -18,6 +19,7 @@ function markup(openFiles: string[], activeFile = 'main.tex'): string {
       width={320}
       activeFile={activeFile}
       openFiles={openFiles}
+      projectContext={EMPTY_CONTEXT}
       onSelectFile={noop}
       onCloseFile={noop}
       onDocChanged={noop}

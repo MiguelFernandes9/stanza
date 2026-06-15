@@ -17,6 +17,8 @@ import type { ChatMessage, ComposeChip } from '../chat/ChatPane'
 import { AUTO_COMPILE_MS, createDebounce } from '../editor/autoCompile'
 import { EditorPane } from '../editor/EditorPane'
 import type { EditorApi } from '../editor/EditorPane'
+import { EMPTY_CONTEXT, loadProjectContext } from '../editor/completion/projectContext'
+import type { ProjectContext } from '../editor/completion/projectContext'
 import {
   closeTab,
   decideCloseActive,
@@ -69,6 +71,10 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
   blocksRef.current = blocks
   const tasksRef = useRef(state.tasks)
   tasksRef.current = state.tasks
+  // Latest file list, read inside the (stable) project-context loader without
+  // re-creating it on every file change.
+  const filesRef = useRef(files)
+  filesRef.current = files
 
   useEffect(() => {
     if (!toast) return
@@ -95,6 +101,9 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
   // Editor tab set (source of truth; EditorPane renders it). Starts empty;
   // reset alongside activeFile when the document changes.
   const [openFiles, setOpenFiles] = useState<string[]>([])
+  // Project facts for autocomplete (file tree + \label index + .bib keys),
+  // rebuilt on file-tree change and after each successful compile.
+  const [editorContext, setEditorContext] = useState<ProjectContext>(EMPTY_CONTEXT)
 
   // Reset the editor on a document SWITCH (root changes), not on every in-place
   // file mutation. A rename/delete returns a fresh DocumentInfo (new object,
@@ -180,6 +189,16 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
     void client.documentFiles().then(setFiles, () => setFiles([]))
   }, [])
 
+  // Rebuild the autocomplete project context: scan every .tex for \label and
+  // parse .bib keys (reads files via IPC). Cheap and debounced by its callers —
+  // file-tree changes and post-compile, never per keystroke.
+  const loadProjectCtx = useCallback(() => {
+    void loadProjectContext(filesRef.current, doc.mainFile, client.documentRead).then(
+      setEditorContext,
+      () => undefined
+    )
+  }, [doc.mainFile])
+
   useEffect(() => {
     loadFiles()
     // Blocks for the whole project (all \include'd files), not just main —
@@ -188,6 +207,10 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
     loadHistory()
     loadOps()
   }, [doc, loadFiles, loadBlocks, loadHistory, loadOps])
+
+  // Refresh autocomplete data when the file tree changes (new/renamed/deleted
+  // files, and the initial listing).
+  useEffect(() => loadProjectCtx(), [files, loadProjectCtx])
 
   // Pending proposals re-emitted on open (crash recovery, FR7).
   useEffect(
@@ -207,9 +230,11 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
           // Re-map block overlays against the recompiled source — without this
           // they keep the previous PDF's spans until a window reopen (BUG-15).
           loadBlocks()
+          // Refresh \label/\cite completion data against the just-saved source.
+          loadProjectCtx()
         }
       }),
-    [loadBlocks]
+    [loadBlocks, loadProjectCtx]
   )
 
   const runCompile = useCallback(() => {
@@ -573,6 +598,7 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
             width={panes.editor}
             activeFile={activeFile}
             openFiles={openFiles}
+            projectContext={editorContext}
             onSelectFile={openFile}
             onCloseFile={closeFile}
             onDocChanged={() => debounce.trigger()}

@@ -6,6 +6,8 @@ import { EditorView, keymap } from '@codemirror/view'
 import { client } from '@renderer/lib/client'
 import type { CompileError, DocumentInfo } from '@shared/ipc'
 import { baseExtensions } from './cmExtensions'
+import { setProjectContext } from './completion/contextFacet'
+import type { ProjectContext } from './completion/projectContext'
 import { FileTab } from './FileTab'
 
 export interface EditorApi {
@@ -28,6 +30,8 @@ interface Props {
   activeFile: string
   /** Open tabs in open order — the bar renders these, not every project file. */
   openFiles: string[]
+  /** Project facts (file tree + \label index + .bib keys) for autocomplete. */
+  projectContext: ProjectContext
   onSelectFile: (file: string) => void
   /** Close a tab — Workspace owns the open-files set. */
   onCloseFile: (file: string) => void
@@ -49,6 +53,7 @@ export function EditorPane({
   width,
   activeFile,
   openFiles,
+  projectContext,
   onSelectFile,
   onCloseFile,
   onDocChanged,
@@ -204,6 +209,15 @@ export function EditorPane({
       })
     view.dispatch(setDiagnostics(view.state, diagnostics))
   }, [errors, activeFile, lineCount])
+
+  // Feed the project context (+ the active file, for path resolution) into the
+  // editor field so the completion sources read a fresh snapshot at completion
+  // time instead of a stale build-time closure.
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+    view.dispatch({ effects: setProjectContext.of({ ...projectContext, activeFile }) })
+  }, [projectContext, activeFile])
 
   useEffect(() => {
     register({
