@@ -38,6 +38,7 @@ import { blockLabel, tagKind } from '../tasks/TaskCard'
 import { dismissRoute, initialTaskState, taskReducer } from '../tasks/taskStore'
 import { pendingRemap } from '../tasks/reanchor'
 import { planMove } from './fileDrag'
+import { revealBlock } from './revealBlock'
 import { ResizeHandle } from './ResizeHandle'
 import { Sidebar } from './Sidebar'
 import { usePaneWidths } from './usePaneWidths'
@@ -97,6 +98,9 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
   const [compileErrors, setCompileErrors] = useState<CompileError[]>([])
   const [pdfState, setPdfState] = useState<{ rel: string; nonce: number } | null>(null)
   const [pdfFlash, setPdfFlash] = useState<PdfFlash | null>(null)
+  // Outline reveal: which block PaperPane should scroll the PDF to (nonce
+  // re-fires a repeat click on the same row). Mode-aware navigation (BUG-48).
+  const [revealSignal, setRevealSignal] = useState<{ id: string; nonce: number } | null>(null)
   // A just-created file the sidebar should drop into inline rename (type-name).
   const [renameOnAppear, setRenameOnAppear] = useState<string | null>(null)
   const clearRenameOnAppear = useCallback(() => setRenameOnAppear(null), [])
@@ -641,8 +645,20 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
           history={history}
           activeBlock={activeTask?.blockIds[0] ?? null}
           onPickBlock={(id) => {
-            dispatch({ type: 'set-view', view: 'select' })
-            dispatch({ type: 'toggle-block', ids: expandIds(blocks, id), additive: false })
+            const block = pageById.get(id)
+            if (!block) return
+            // Mode-aware reveal: ALWAYS scroll the PDF + jump the source; select
+            // ONLY in select mode. Never forces the view (BUG-48).
+            revealBlock(
+              { id, file: resolveToKnownFile(block.span.file, doc.texFiles), line: block.contentStartLine ?? block.span.startLine },
+              state.view,
+              {
+                scrollPdf: (bid) => setRevealSignal({ id: bid, nonce: Date.now() }),
+                openFile,
+                jumpTo: (file, line) => editorApi.current?.jumpTo(file, line),
+                selectBlock: (bid) => dispatch({ type: 'toggle-block', ids: expandIds(blocks, bid), additive: false })
+              }
+            )
           }}
           onOpenFile={openFile}
           onRename={onRenameFile}
@@ -687,6 +703,8 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
           pdfUrl={pdfUrl}
           onInverseSearch={inverseSearch}
           flash={pdfFlash}
+          revealBlock={revealSignal}
+          onForwardSearch={forwardSearch}
           onToggleBlock={(id, additive) =>
             dispatch({ type: 'toggle-block', ids: expandIds(blocks, id), additive })
           }

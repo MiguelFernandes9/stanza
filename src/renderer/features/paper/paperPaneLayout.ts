@@ -42,6 +42,21 @@ export function paneLayout(pageW: number): PaneLayout {
   return { pageRightX, railLeft, cW }
 }
 
+/** Scroll-container `top` that lands a PDF box (`page`, `y` in PDF pt) about a
+ *  third of the way down the viewport: PAD, plus one page slot per page above
+ *  it, plus the zoomed in-page offset, minus a third of the viewport. Shared by
+ *  the synctex-forward flash and the outline reveal so both scroll identically. */
+export function pdfScrollTop(
+  page: number,
+  y: number,
+  geo: { height: number; gap: number },
+  zoom: number,
+  clientHeight: number
+): number {
+  const slot = geo.height + geo.gap
+  return PAD + (page - 1) * slot + y * zoom - clientHeight / 3
+}
+
 export interface StackItem {
   id: number
   /** Ideal top (the block anchor, PAD not yet applied). */

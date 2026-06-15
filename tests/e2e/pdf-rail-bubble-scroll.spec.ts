@@ -98,6 +98,11 @@ test('an open rail bubble is reachable by horizontal scroll; no spurious scrollb
   // (4) Dismiss the bubble → overlay clips again, no lingering scrollbar (#70).
   await page.getByRole('button', { name: 'Draft edit', exact: true }).click()
   await page.locator('[data-testid="rail-bubble"]').waitFor({ state: 'detached', timeout: 10_000 })
+  // BUG-48: the select-mode outline click that opened this bubble now ALSO opens
+  // the editor pane (the reveal always jumps the source, like inverse search),
+  // narrowing the paper pane. Close it (⌘E) so this check isolates the RAIL
+  // overlay's contribution to scroll width — the spurious-scrollbar bug here.
+  await page.keyboard.press('Meta+e')
   await page.waitForTimeout(200)
   const closed = await measure()
   expect(closed.scrollW, `scrollbar lingers after the bubble is dismissed (scrollW ${closed.scrollW} > clientW ${closed.clientW})`).toBeLessThanOrEqual(closed.clientW + 1)
