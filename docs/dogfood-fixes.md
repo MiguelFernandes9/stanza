@@ -1566,3 +1566,51 @@ hanging into the figure gap.
 different function, but to avoid a merge conflict give both to the **same
 sibling**, or branch BUG-37 after BUG-36 merges. **Lane.** Renderer paper,
 `paperModel.ts` `resolveBoxOverlaps` (+ a kind map wired from `PaperPane.tsx`).
+
+## BUG-38 — BUG-36's fix over-extends a NUMBERED equation's box into the left margin
+
+PR #58 (BUG-36) fixed the `\[...\]` fraction pill, but the numbered/`split`
+equation (1.1) at `ch1.tex:144-161` is now broken the other way: its box / wash
+/ edge-bar / pill drift ~107pt into the **left margin**, left of the formula.
+
+**Root cause (verified with live synctex).** BUG-36 set the math box left to
+`x = min(h)` over **all** rects (`mathBoxesByPage`, `paperModel.ts`). For a
+`\[...\]` that's the formula's true left, because nothing sits further left. But
+a numbered/`split` equation also emits **full-block-height container rects in
+the page margin**: real rects here include `h=36.46, W=431.99/485.54, H=73.88`
+(the body text column starts at `h≈90`; the equation's actual content column is
+`h=143.54`). `min(h)` grabs the `36.46` container → box left lands in the
+margin. The right edge is fine (still trimmed to glyph rects).
+
+**Why this keeps reopening (3rd iteration — BUG-23 → 35 → 36 → 38).** The hug
+relies on a height-only filter (`H < 0.7×total` = "glyph"). It cannot separate
+a *legitimate full-height line box* (the frac's rect A — `H=26.68=total`, the
+formula's own baseline row, must be KEPT) from a *full-height margin container*
+(the numbered eq — `H=73.88`, must be DROPPED). Both are "full height", so no
+height threshold distinguishes them. The signal that actually separates them is
+**horizontal position relative to the body text column**, which `mathBoxesByPage`
+doesn't currently know.
+
+**Fix (make the left margin-aware — durable).** Thread the body text-column left
+into `mathBoxesByPage` (compute `bodyTextColLeft` in `PaperPane` as the min `x`
+over non-environment block rects — paragraphs sit at `h≈90` — or use the page
+margin), and take the box left as `min(h)` over only the rects with
+`h ≥ bodyTextColLeft` (drop the margin containers). Verified on the real rects:
+frac → `198.5` (unchanged); numbered split → `143.5` (formula left, not `36.5`);
+BUG-23 right-trim unaffected. **Recommend stopping the height-only patching** and
+landing this position-aware version as the box geometry, with a regression test
+covering all three equation shapes.
+
+**Test (`paperModel.test.ts`, real fixtures).** Three cases, asserting box.x:
+(1) `\[...\]` frac fixture → `≈198.5`; (2) numbered/`split` fixture incl. a
+`h=36.46,W=485,H=73.88` margin container + content at `h=143.54` → box.x
+`≈143.5`, NOT `36.5`; (3) BUG-23 full-`\textwidth` container → right still hugs
+glyphs. Live gate (Miguel): hover BOTH `ch1.tex:197-203` (frac) and
+`ch1.tex:144-161` (numbered) → pill/box clear of each formula, neither in the
+margin.
+
+**⚠️ Sequencing.** Same function as BUG-36 (already merged, PR #58) and same
+file as BUG-37 (`resolveBoxOverlaps`). Branch off current main; if BUG-37 is
+in flight, one sibling should own all `paperModel.ts` geometry to avoid
+conflicts. **Lane.** Renderer paper, `paperModel.ts` `mathBoxesByPage`
+(+ `bodyTextColLeft` wired from `PaperPane.tsx`).
