@@ -1,10 +1,12 @@
 import type { TaskPhase } from '../tasks/taskStore'
 
-/** v0.3 pane geometry (pure). The page is centered in the scroll container and
- *  every task is a badge at the page's right edge that opens a bubble in a
- *  right rail, connected by a bezier. Kept JSX-free so it unit-tests like
- *  paperModel; PaperPane feeds it measured container width, page width, block
- *  anchors and card heights. Constants mirror the mock (`PdfPane.jsx`). */
+/** v0.3 pane geometry (pure). The page + right rail form one fixed-width track
+ *  that CSS centres in the scroll container; every task is a badge at the page's
+ *  right edge that opens a bubble in the rail, connected by a bezier. Kept
+ *  JSX-free so it unit-tests like paperModel; PaperPane feeds it the page width
+ *  only (no measured container width — that produced a one-frame-stale re-centre
+ *  and sideways jitter on a pane toggle, M2-5). Constants mirror the mock
+ *  (`PdfPane.jsx`). */
 
 export const PAD = 28
 export const GAPX = 30
@@ -15,21 +17,23 @@ export const CARD_GAP = 14
 export const BADGE = 28
 
 export interface PaneLayout {
-  /** Page left in container px — centered, clamped so it never hides behind PAD. */
-  pageLeft: number
+  /** Page's right edge within the track. The page sits at the track origin
+   *  (x = 0), so there is no `pageLeft` — CSS centres the whole track. */
   pageRightX: number
   /** Left edge of the right rail (where bubbles sit). */
   railLeft: number
-  /** Scroll content width: at least the container, wider when the rail overflows. */
+  /** Intrinsic track width = page + gap + rail. Fixed; CSS centres it. */
   cW: number
 }
 
-export function paneLayout(containerW: number, pageW: number): PaneLayout {
-  const pageLeft = Math.max(PAD, (containerW - pageW) / 2)
-  const pageRightX = pageLeft + pageW
+/** Layout from the page width alone — no container measure, so it can't go
+ *  stale on a resize (M2-5). The page occupies [0, pageW]; the rail follows
+ *  after GAPX; the track is exactly wide enough for both. */
+export function paneLayout(pageW: number): PaneLayout {
+  const pageRightX = pageW
   const railLeft = pageRightX + GAPX
-  const cW = Math.max(containerW, railLeft + RAIL + PAD)
-  return { pageLeft, pageRightX, railLeft, cW }
+  const cW = railLeft + RAIL
+  return { pageRightX, railLeft, cW }
 }
 
 export interface StackItem {
