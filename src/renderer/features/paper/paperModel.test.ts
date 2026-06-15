@@ -732,9 +732,12 @@ describe('reclaimDroppedRows — extend a box to cover its dropped text rows', (
     width,
     height
   })
-  const row = (yTop: number, yBottom: number, xLeft: number, xRight: number): TextRow => ({
+  // baseline = the converted transform[5] (synctex `v` basis) = the row's
+  // yBottom in pdf.js geometry; reclaim partitions on it, not the taller yTop.
+  const row = (yTop: number, baseline: number, xLeft: number, xRight: number): TextRow => ({
+    baseline,
     yTop,
-    yBottom,
+    yBottom: baseline,
     xLeft,
     xRight
   })
@@ -760,6 +763,32 @@ describe('reclaimDroppedRows — extend a box to cover its dropped text rows', (
     const out = reclaimDroppedRows(boxes, rows)
     expect(bottom(out.get('par1#aaaaaa')![0]!)).toBeCloseTo(200.12, 2) // reclaimed
     expect(out.get('env2#bbbbbb')![0]).toEqual(box(1, 90, 205, 300, 50)) // untouched
+  })
+
+  it('does not swallow the next block whose row TOP clears nextTop but baseline does not (BUG-41)', () => {
+    // Live pdf.js, tightly-stacked {\large} abstract (page 2). para1's box bottoms
+    // at 294.50 with a dropped "emblem." row (baseline 306); para2's synctex box
+    // top (nextTop) is 311.52. para2's first row has yTop 307.99 — ABOVE the
+    // nextTop ceiling — but its BASELINE 319.94 is below it. Gating on yTop
+    // absorbed para2's first line into para1 (and cascaded); gating on baseline
+    // reclaims only "emblem." and leaves para2 put.
+    const boxes = new Map<string, PdfRect[]>([
+      ['par1#abc123', [box(2, 90, 250, 300, 44.5)]], // bottom 294.50
+      ['par2#def456', [box(2, 90, 311.52, 300, 40)]] // next block, synctex top 311.52
+    ])
+    const rows = new Map<number, TextRow[]>([
+      [
+        2,
+        [
+          row(294.04, 306.0, 90, 140), // "emblem." — para1's dropped tail
+          row(307.99, 319.94, 90, 360) // "The argument…" — para2's first line
+        ]
+      ]
+    ])
+    const out = reclaimDroppedRows(boxes, rows)
+    expect(bottom(out.get('par1#abc123')![0]!)).toBeCloseTo(306, 2) // reclaim "emblem." only
+    expect(bottom(out.get('par1#abc123')![0]!)).toBeLessThan(311.52) // NOT into para2
+    expect(out.get('par2#def456')![0]).toEqual(box(2, 90, 311.52, 300, 40)) // untouched
   })
 
   it('does not extend before a section heading (gap has no text rows)', () => {
