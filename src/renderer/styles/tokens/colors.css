@@ -41,6 +41,11 @@
   --blue-600: #2f587e;
   --blue-700: #244461;
 
+  /* ---- Drag-and-drop affordances. Blue, never clay: clay == selection/brand,
+         so a clay drop accent collides with the selected-row look. ---- */
+  --drop-fill:   var(--blue-50);    /* container-drop tint            */
+  --drop-accent: var(--blue-500);   /* drop ring + tab insertion bar  */
+
   /* ---- Diff semantics — muted printer's ink, paper-compatible ---- */
   --add-600: #3b7a55;  /* addition text / +count */
   --add-700: #2d5e41;
