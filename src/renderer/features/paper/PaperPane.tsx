@@ -151,30 +151,11 @@ export function PaperPane(props: Props): JSX.Element {
       pageBlocks.map(async (b) => ({ b, rects: await blockGeometryRects(b, forward) }))
     ).then(async (perBlock) => {
       if (!alive) return
-      // Body text-column left: the leftmost non-environment (paragraph/heading)
-      // rect. Display-math content sits at/right of it, while synctex's margin
-      // container rects for a numbered equation sit further left — they must not
-      // anchor the hugged math box (BUG-38). 0 when the page has no text block.
-      const bodyRects = perBlock.filter(({ b }) => b.kind !== 'environment').flatMap(({ rects }) => rects)
-      const bodyTextColLeft = bodyRects.length ? Math.min(...bodyRects.map((r) => r.x)) : 0
-      const entries = perBlock
-        .map(({ b, rects }) => {
-          // Drop page-break artifacts (the solid-rect filter) and keep one box
-          // per page, so a \chapter heading adds no 0-height box on the preceding
-          // page (BUG-5) and a block straddling a break is washed on both (BUG-16).
-          // Display-math envs additionally hug the box to the formula ink,
-          // dropping the container / number / margin rects (BUG-23/36/38).
-          const boxes = isMathEnvName(b.envName) ? mathBoxesByPage(rects, bodyTextColLeft) : blockBoxesByPage(rects)
-          return boxes.length ? ([b.id, boxes] as const) : null
-        })
-        .filter((e): e is NonNullable<typeof e> => e != null)
-      const built = new Map(entries)
-      // synctex collapses a paragraph's wrapped last line onto the previous
-      // baseline, so its box comes out a line short. The pdf.js text layer has
-      // every rendered row, so extend each box down to cover its own dropped
-      // rows — measured, not guessed from the inter-block gap (BUG-25/37/40 +
-      // list over-fire). Fetch the text rows for every page that has a box.
-      const pages = [...new Set([...built.values()].flat().map((box) => box.page))]
+      // The pdf.js text layer is the source of truth for box EXTENT — display-
+      // math width/height (Tier 1) and prose dropped-line reclaim both read it —
+      // so fetch the rows for every page any block's synctex rects touch BEFORE
+      // building boxes. synctex is used only to locate each block's region.
+      const pages = [...new Set(perBlock.flatMap(({ rects }) => rects.map((r) => r.page)))]
       const rowsByPage = new Map<number, TextRow[]>()
       await Promise.all(
         pages.map((p) =>
@@ -186,9 +167,23 @@ export function PaperPane(props: Props): JSX.Element {
         )
       )
       if (!alive) return
-      // Reclaim dropped rows, then trim raw-synctex overlaps (a float's box
-      // extends over the next paragraph's box) so overlays, allBoxes, selection
-      // and hover all consume non-overlapping extents (BUG-19).
+      const entries = perBlock
+        .map(({ b, rects }) => {
+          // Drop page-break artifacts (the solid-rect filter) and keep one box
+          // per page, so a \chapter heading adds no 0-height box on the preceding
+          // page (BUG-5) and a block straddling a break is washed on both (BUG-16).
+          // Display-math envs take their box from the rendered text rows in the
+          // block's synctex band — exact glyph extent, no \textwidth/number/margin
+          // container rects to hug around (Tier 1, retires BUG-23/35/36/38/39).
+          const boxes = isMathEnvName(b.envName) ? mathBoxesByPage(rects, rowsByPage) : blockBoxesByPage(rects)
+          return boxes.length ? ([b.id, boxes] as const) : null
+        })
+        .filter((e): e is NonNullable<typeof e> => e != null)
+      const built = new Map(entries)
+      // Reclaim each prose box's synctex-dropped last row from the text layer
+      // (BUG-25/37/40 + list over-fire), then trim raw-synctex overlaps (a
+      // float's box extends over the next paragraph's box) so overlays, allBoxes,
+      // selection and hover all consume non-overlapping extents (BUG-19).
       setBlockRects(resolveBoxOverlaps(reclaimDroppedRows(built, rowsByPage)))
     })
     return () => {
