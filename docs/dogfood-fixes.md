@@ -1704,3 +1704,58 @@ boxes before "Outline" / "2.2" / "2.3" end at their last line.
 `fix/math-box-content`). Different function, but to avoid a conflict give BUG-40
 to the **same sibling** (append to the BUG-39 branch) or branch after BUG-39
 merges. **Lane.** Renderer paper, `paperModel.ts` `resolveBoxOverlaps`.
+
+## BUG-41 — text-layer reclaim swallows the NEXT block's first line (coordinate-basis mismatch in #64)
+
+After the #64 text-layer rewrite, tightly-stacked blocks (e.g. the `{\large}`
+Abstract, no `\parskip`) each extend their box DOWN over the next block's first
+line — and it cascades: every block eats the next block's first row, so the
+deeper the stack the worse it looks.
+
+**Root cause (confirmed with live pdf.js on the demo).** `reclaimDroppedRows`
+bounds the reclaim with `nextTop` = the next block's **synctex** box top, but
+filters text rows by `TextRow.yTop`, which `pdfTextRows.textRows` computes as
+`baseline − pdf.js item.height`. Those two are different coordinate bases: for
+the same line, the synctex box top is `baseline − synctexH`, and synctex's box
+height (≈ cap height) is ~3.5pt smaller than pdf.js's font height. So a line's
+pdf.js `yTop` sits ~3.5pt ABOVE its synctex box top, and the next block's first
+row clears the `yTop < nextTop − EPS` ceiling and gets absorbed. Real numbers
+(abstract page 2, pdf.js + synctex):
+
+| line | pdf.js `yTop` | baseline (`yBottom`) | synctex box top |
+|------|--------------:|---------------------:|----------------:|
+| para1 last ("…emblem.", dropped) | 294.04 | 306.0 | — (box bottom 294.50) |
+| para2 first ("The argument…") | 307.99 | 319.94 | 311.52 (= `nextTop`) |
+
+`nextTop − EPS = 309.52`; para2's first row `yTop 307.99 < 309.52` → admitted →
+para1 box stretched to 319.94 (covers para2's first line). Cascades down the
+stack. (My earlier on-disk check missed it because it used `pdftotext` INK
+coords, where para2's row top is 310.31 > 309.52 — the same basis bug that hid
+it from the #64 unit tests.)
+
+**Fix (one coordinate basis — the baseline).** Gate the reclaim on the row
+**baseline** (the converted `transform[5]`, which equals synctex `v` — the same
+basis as `nextTop` and the synctex box bottom), not the font-height-inflated
+`yTop`:
+- "below the box": `row.baseline > boxBottom` (boxBottom is synctex `v`-basis).
+- "before the next block": `row.baseline < nextTop`.
+- contiguity: successive baselines within ~one line.
+- extend `newBottom` to the row baseline (optionally + a small descent so
+  descenders aren't clipped).
+
+Add `baseline` to `TextRow` in `pdfTextRows.ts` (= the converted `transform[5]`,
+before subtracting height). Verify: para2 first row baseline `319.94 ≥ 311.52`
+→ excluded; "emblem." baseline `306 < 311.52` → still reclaimed. Keep `yTop`/
+`yBottom` for the box's visual extent if needed, but the partition logic uses
+baseline.
+
+**Test (`paperModel.test.ts` + `pdfTextRows.test.ts`, REAL pdf.js basis).** The
+existing reclaim fixtures used pdftotext ink coords — re-express them in the
+pdf.js basis (baseline = converted `transform[5]`, row top = baseline − height)
+so they actually model what the app sees. New case: a next-block first row whose
+`yTop` is above `nextTop` but whose **baseline** is below it → NOT absorbed (the
+abstract case, numbers above). Keep: dropped-line reclaim still fires; section/
+float gaps still don't.
+
+**Lane.** Renderer paper, `pdfTextRows.ts` (add `baseline`) + `paperModel.ts`
+`reclaimDroppedRows`. Same owner as #64 (`quirky-bohr`). Branch off main.
