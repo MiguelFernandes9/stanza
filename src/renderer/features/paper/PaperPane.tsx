@@ -14,8 +14,10 @@ import type { PaneView, TaskPhase, TaskState } from '../tasks/taskStore'
 import { BlockOverlay } from './BlockOverlay'
 import { FillerPage } from './FillerPage'
 import { PaperToolbar } from './PaperToolbar'
-import { blockBoxesByPage, blockGeometryRects, cardAnchorTops, combinedSpanLabel, expandIds, isMathEnvName, isTightAbove, mathBoxesByPage, resolveBoxOverlaps, spanLabel, washBoxes } from './paperModel'
+import { blockBoxesByPage, blockGeometryRects, cardAnchorTops, combinedSpanLabel, expandIds, isMathEnvName, isTightAbove, mathBoxesByPage, reclaimDroppedRows, resolveBoxOverlaps, spanLabel, washBoxes } from './paperModel'
 import type { BlockMark, PageBlock } from './paperModel'
+import { pageTextRows } from './pdfTextRows'
+import type { TextRow } from './pdfTextRows'
 import { BADGE, PAD, RAIL, connectorPath, paneLayout, phaseTone, stackTops } from './paperPaneLayout'
 
 const FALLBACK_PAGE_WIDTH = 564
@@ -147,7 +149,7 @@ export function PaperPane(props: Props): JSX.Element {
       // lines carry no content and forward-map to stray galley rects (\end
       // lands on the paragraph below, BUG-21). Falls back to the full span.
       pageBlocks.map(async (b) => ({ b, rects: await blockGeometryRects(b, forward) }))
-    ).then((perBlock) => {
+    ).then(async (perBlock) => {
       if (!alive) return
       // Body text-column left: the leftmost non-environment (paragraph/heading)
       // rect. Display-math content sits at/right of it, while synctex's margin
@@ -166,11 +168,28 @@ export function PaperPane(props: Props): JSX.Element {
           return boxes.length ? ([b.id, boxes] as const) : null
         })
         .filter((e): e is NonNullable<typeof e> => e != null)
-      // Trim raw-synctex box overlaps (a float's box extends over the next
-      // paragraph's box) before storing, so overlays, allBoxes, selection and
-      // hover all consume non-overlapping extents — padding can't fix an
-      // overlap in the box itself (BUG-19 reopened).
-      setBlockRects(resolveBoxOverlaps(new Map(entries)))
+      const built = new Map(entries)
+      // synctex collapses a paragraph's wrapped last line onto the previous
+      // baseline, so its box comes out a line short. The pdf.js text layer has
+      // every rendered row, so extend each box down to cover its own dropped
+      // rows — measured, not guessed from the inter-block gap (BUG-25/37/40 +
+      // list over-fire). Fetch the text rows for every page that has a box.
+      const pages = [...new Set([...built.values()].flat().map((box) => box.page))]
+      const rowsByPage = new Map<number, TextRow[]>()
+      await Promise.all(
+        pages.map((p) =>
+          pdf
+            .getPage(p)
+            .then(pageTextRows)
+            .then((rows) => void rowsByPage.set(p, rows))
+            .catch(() => void rowsByPage.set(p, []))
+        )
+      )
+      if (!alive) return
+      // Reclaim dropped rows, then trim raw-synctex overlaps (a float's box
+      // extends over the next paragraph's box) so overlays, allBoxes, selection
+      // and hover all consume non-overlapping extents (BUG-19).
+      setBlockRects(resolveBoxOverlaps(reclaimDroppedRows(built, rowsByPage)))
     })
     return () => {
       alive = false

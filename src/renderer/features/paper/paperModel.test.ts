@@ -15,6 +15,7 @@ import {
   padBoxClamped,
   PILL_MARGIN_GAP,
   pillPlacement,
+  reclaimDroppedRows,
   resolveBoxOverlaps,
   selectionBounds,
   spanLabel,
@@ -22,6 +23,7 @@ import {
   washBoxes
 } from './paperModel'
 import type { PageBlock } from './paperModel'
+import type { TextRow } from './pdfTextRows'
 
 const span = (startLine: number, endLine: number): BlockNode['span'] => ({
   file: 'main.tex',
@@ -430,7 +432,7 @@ describe('washBoxes — one padded box per block, not a union (BUG-26)', () => {
   })
 })
 
-describe('resolveBoxOverlaps — settle overlaps and small gaps (BUG-19 / BUG-25)', () => {
+describe('resolveBoxOverlaps — meet overlapping boxes at the midpoint (BUG-19)', () => {
   it('splits a figure box overlapping the paragraph below at the overlap midpoint', () => {
     // real ch2.tex page-6 boxes: figure 364.7–595.4 sits over para-18 585.6–622.5
     const rects = new Map<string, PdfRect[]>([
@@ -449,36 +451,7 @@ describe('resolveBoxOverlaps — settle overlaps and small gaps (BUG-19 / BUG-25
     expect(para.y + para.height).toBeCloseTo(622.5, 6)
   })
 
-  it('extends the upper box by ~one line into a small gap, leaving b put (BUG-25)', () => {
-    // A paragraph whose synctex-dropped last wrapped line left its box bottom
-    // a line high (256), with the next block ~16pt below (272). lineHeight 16.
-    const rects = new Map<string, PdfRect[]>([
-      ['a', [{ page: 1, x: 72, y: 200, width: 300, height: 56 }]], // bottom 256
-      ['b', [{ page: 1, x: 72, y: 272, width: 300, height: 40 }]] // top 272, 16pt gap
-    ])
-    const out = resolveBoxOverlaps(rects)
-    const a = out.get('a')![0]!
-    // a extends to min(aBottom+lineHeight=272, bTop-MIN_GAP=270) = 270 — reclaims
-    // the dropped line; midpoint (264) would still clip it. b is untouched, so
-    // the 2pt of genuine whitespace stays clear.
-    expect(a.y + a.height).toBe(270)
-    expect(a.y).toBe(200)
-    expect(out.get('b')![0]).toEqual({ page: 1, x: 72, y: 272, width: 300, height: 40 })
-  })
-
-  it('settles a 1.83-line gap (29pt) thanks to the widened band K=2.5 (BUG-25 reopened)', () => {
-    // 29 > old 1.8×16 = 28.8 (the para→list case #42 missed) but ≤ 2.5×16 = 40.
-    const rects = new Map<string, PdfRect[]>([
-      ['a', [{ page: 1, x: 72, y: 200, width: 300, height: 56 }]], // bottom 256
-      ['b', [{ page: 1, x: 72, y: 285, width: 300, height: 40 }]] // top 285, 29pt gap
-    ])
-    const out = resolveBoxOverlaps(rects)
-    // extend by one line: min(256+16=272, 285-2=283) = 272
-    expect(out.get('a')![0]!.y + out.get('a')![0]!.height).toBe(272)
-    expect(out.get('b')![0]).toEqual({ page: 1, x: 72, y: 285, width: 300, height: 40 })
-  })
-
-  it('leaves a large structural gap untouched (e.g. before a float)', () => {
+  it('leaves a gap between non-overlapping boxes untouched (reclaim handles shortfall)', () => {
     const rects = new Map<string, PdfRect[]>([
       ['a', [{ page: 1, x: 72, y: 100, width: 100, height: 40 }]], // 100–140
       ['b', [{ page: 1, x: 72, y: 190, width: 100, height: 40 }]] // 190–230, 50pt gap
@@ -518,31 +491,6 @@ describe('resolveBoxOverlaps — settle overlaps and small gaps (BUG-19 / BUG-25
     expect(out.get('a')![0]!.height).toBe(80)
   })
 
-  it('does NOT extend a paragraph box into the gap before a figure float (BUG-37)', () => {
-    // Live synctex, demo ch2.tex:6-9 (page 8): the paragraph's last line bottoms
-    // at 352.72; the next block is the \begin{figure} env at 364.68 — an 11.96pt
-    // gap that is real \intextsep float spacing, not a synctex-dropped line. The
-    // small-gap settle (gap ≤ 2.5×16=40) must NOT fire across a float boundary.
-    const rects = new Map<string, PdfRect[]>([
-      ['par2#a1a1a1', [{ page: 8, x: 72, y: 320, width: 300, height: 32.72 }]], // bottom 352.72
-      ['env3#b2b2b2', [{ page: 8, x: 72, y: 364.68, width: 300, height: 200 }]] // figure top 364.68
-    ])
-    const out = resolveBoxOverlaps(rects)
-    expect(out.get('par2#a1a1a1')![0]!.y + out.get('par2#a1a1a1')![0]!.height).toBeCloseTo(352.72, 6)
-    expect(out.get('env3#b2b2b2')![0]!.y).toBeCloseTo(364.68, 6) // float untouched
-  })
-
-  it('still extends a paragraph into a small gap before another paragraph (BUG-25 kept)', () => {
-    // Same geometry, but the lower block is a paragraph — the dropped-line
-    // reclaim must still fire; only float/env boundaries are exempt.
-    const rects = new Map<string, PdfRect[]>([
-      ['par2#a1a1a1', [{ page: 8, x: 72, y: 320, width: 300, height: 32.72 }]], // bottom 352.72
-      ['par3#c3c3c3', [{ page: 8, x: 72, y: 364.68, width: 300, height: 40 }]] // para top 364.68
-    ])
-    const out = resolveBoxOverlaps(rects)
-    // extend by one line: min(352.72+16=368.72, 364.68-2=362.68) = 362.68
-    expect(out.get('par2#a1a1a1')![0]!.y + out.get('par2#a1a1a1')![0]!.height).toBeCloseTo(362.68, 6)
-  })
 })
 
 describe('blockBoxesByPage — per-page boxes for a straddling block (BUG-16)', () => {
@@ -773,5 +721,83 @@ describe('pillPlacement (BUG-35)', () => {
     expect(pillPlacement({ math: true, tight: false })).toEqual(
       pillPlacement({ math: true, tight: true })
     )
+  })
+})
+
+describe('reclaimDroppedRows — extend a box to cover its dropped text rows', () => {
+  const box = (page: number, x: number, y: number, width: number, height: number): PdfRect => ({
+    page,
+    x,
+    y,
+    width,
+    height
+  })
+  const row = (yTop: number, yBottom: number, xLeft: number, xRight: number): TextRow => ({
+    yTop,
+    yBottom,
+    xLeft,
+    xRight
+  })
+  const bottom = (b: PdfRect): number => b.y + b.height
+
+  it('extends a paragraph to cover its synctex-dropped last row (ch1:205-215 "follows:")', () => {
+    // synctex stops the box at 186.57, dropping the wrapped "follows:" row; the
+    // text layer has it at y[189.21, 200.12], above the itemize that starts ~205.
+    const boxes = new Map<string, PdfRect[]>([
+      ['par1#aaaaaa', [box(1, 90, 150, 300, 36.57)]], // bottom 186.57
+      ['env2#bbbbbb', [box(1, 90, 205, 300, 50)]] // itemize, top 205
+    ])
+    const rows = new Map<number, TextRow[]>([
+      [
+        1,
+        [
+          row(160, 171, 90, 380), // a body line already inside the box
+          row(189.21, 200.12, 90, 131), // the DROPPED "follows:" row
+          row(206, 217, 110, 360) // first itemize row — belongs to env2
+        ]
+      ]
+    ])
+    const out = reclaimDroppedRows(boxes, rows)
+    expect(bottom(out.get('par1#aaaaaa')![0]!)).toBeCloseTo(200.12, 2) // reclaimed
+    expect(out.get('env2#bbbbbb')![0]).toEqual(box(1, 90, 205, 300, 50)) // untouched
+  })
+
+  it('does not extend before a section heading (gap has no text rows)', () => {
+    // ch1:97-102 → \section{Outline}: box bottom 638.08, heading row at 658.79,
+    // nothing between — synctex did NOT drop a line here.
+    const boxes = new Map<string, PdfRect[]>([
+      ['par3#cccccc', [box(1, 90, 600, 300, 38.08)]], // bottom 638.08
+      ['sec1#dddddd', [box(1, 90, 658.79, 300, 14)]] // "Outline" heading top 658.79
+    ])
+    const rows = new Map<number, TextRow[]>([
+      [1, [row(627, 638.08, 90, 380), row(658.79, 669.7, 90, 200)]]
+    ])
+    const out = reclaimDroppedRows(boxes, rows)
+    expect(out.get('par3#cccccc')![0]).toEqual(box(1, 90, 600, 300, 38.08)) // unchanged
+  })
+
+  it('does not extend before a figure float (no text rows in the gap)', () => {
+    // ch2:6-9 → figure: box bottom 352.72, figure top 364.68, image has no rows.
+    const boxes = new Map<string, PdfRect[]>([
+      ['par4#eeeeee', [box(1, 90, 320, 300, 32.72)]], // bottom 352.72
+      ['env5#ffffff', [box(1, 90, 364.68, 400, 200)]] // figure top 364.68
+    ])
+    const rows = new Map<number, TextRow[]>([[1, [row(341, 352.72, 90, 380)]]])
+    const out = reclaimDroppedRows(boxes, rows)
+    expect(out.get('par4#eeeeee')![0]).toEqual(box(1, 90, 320, 300, 32.72)) // unchanged
+  })
+
+  it('does not absorb a lone row a full line-height below (real next block)', () => {
+    const boxes = new Map<string, PdfRect[]>([['par6#999999', [box(1, 90, 100, 300, 30)]]]) // bottom 130
+    const rows = new Map<number, TextRow[]>([[1, [row(152, 163, 90, 200)]]]) // gap 22 ≫ one row
+    const out = reclaimDroppedRows(boxes, rows)
+    expect(out.get('par6#999999')![0]).toEqual(box(1, 90, 100, 300, 30)) // unchanged
+  })
+
+  it('ignores a row below the box but in a different column (no x-overlap)', () => {
+    const boxes = new Map<string, PdfRect[]>([['par7#888888', [box(1, 90, 100, 100, 30)]]]) // x[90,190], bottom 130
+    const rows = new Map<number, TextRow[]>([[1, [row(132, 143, 300, 400)]]]) // far-right column
+    const out = reclaimDroppedRows(boxes, rows)
+    expect(out.get('par7#888888')![0]).toEqual(box(1, 90, 100, 100, 30)) // unchanged
   })
 })
