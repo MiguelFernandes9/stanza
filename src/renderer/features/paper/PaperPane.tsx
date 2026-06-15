@@ -378,18 +378,24 @@ export function PaperPane(props: Props): JSX.Element {
         style={{ flex: 1, overflow: 'auto', scrollbarGutter: 'stable', background: 'var(--surface-canvas)' }}
       >
         {pdf ? (
-          // Fixed-width page+rail track, centred by margin-inline:auto. The page
-          // sits at the track origin (left:0); centring is pure CSS, so a
-          // container resize never re-derives pageLeft → no sideways jitter
-          // (M2-5). margin-inline:auto never goes negative, so a narrow pane
-          // scrolls from the left edge instead of clipping it.
+          // Centre the PAGE, not the page+rail track. A flex row (justify-content:
+          // safe center) holds one item whose width is EXACTLY the page; the rail,
+          // badges and connector svg are absolute children that hang off the page's
+          // right edge (overflow:visible), so they never widen the centred unit nor
+          // pull the page left of centre — #68 centred the 1274pt cW track and so
+          // landed the 918pt page ~178pt left (M2-5). Centring is pure CSS off
+          // pageWidth (no measured width), so a pane toggle can't re-derive a stale
+          // offset → no sideways jitter; `safe center` degrades to start when the
+          // page is wider than the pane, so a narrow pane scrolls from the page's
+          // left edge instead of clipping it.
+          <div style={{ display: 'flex', justifyContent: 'safe center', minHeight: '100%' }}>
           <div
             style={{
               position: 'relative',
-              width: cW,
+              width: pageWidth,
               height: contentH,
-              minHeight: '100%',
-              marginInline: 'auto'
+              flex: '0 0 auto',
+              overflow: 'visible'
             }}
           >
             {/* connector lines: one bezier per open bubble */}
@@ -515,6 +521,7 @@ export function PaperPane(props: Props): JSX.Element {
               </div>
               )
             })}
+          </div>
           </div>
         ) : (
           <div style={{ display: 'flex', justifyContent: 'center', padding: '28px 24px 40px' }}>
