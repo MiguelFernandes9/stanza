@@ -131,4 +131,54 @@ switchBack revert; guard true while op in flight. TDD.
 `ipc-registry.ts` (`runClaudeOp`); possibly `externalEditWatcher.ts` /
 `FileWatcher.ts` for the settle-tail. Disjoint from `features/*` sibling lanes.
 
-**Status.** Diagnosed (workflow-verified). Not yet implemented.
+**Status.** Diagnosed (workflow-verified); fix shipped as PR #55, pending merge.
+
+---
+
+## M2-3 — Paragraph block span overshoots (comment lines don't split paragraphs)
+
+**Symptom.** A paragraph badge reads e.g. `¶ ch1.tex:113-133 · INTRODUCTION`,
+but the ~20-line span covers several visually separate body paragraphs — block
+spans don't match the prose under them.
+
+**Root cause** (workflow-verified, reproduced on the REAL parser). In
+`walkBody`, a `comment` node is skipped with a bare `continue`
+([parse.ts:128](src/shared/blocks/parse.ts#L128)), exactly like whitespace —
+it does NOT flush the open paragraph. unified-latex emits a `parbreak` (the
+only paragraph delimiter, [parse.ts:129-132](src/shared/blocks/parse.ts#L129))
+ONLY for a genuine blank line. So prose paragraphs separated by a `%` comment
+line **with no blank line** FUSE into one paragraph block whose `endLine`
+overshoots into the later paragraphs. Reproduced: a 20-line region with prose
+interleaved with `% note` lines parses to a single `paragraph 3-21`; the
+blank-line-separated control yields three distinct paragraphs. The displayed
+span is the block's OWN parsed span (`spanLabel`,
+[paperModel.ts:393](src/renderer/features/paper/paperModel.ts#L393)) — synctex
+only positions the rect, never feeds the label, so geometry is not the cause.
+
+**Secondary (label).** `\paragraph` / `\subparagraph` are not in
+`SECTION_LEVELS` ([parse.ts:5-10](src/shared/blocks/parse.ts#L5)), so a
+`\paragraph{...}` subheading never becomes a section: the body beneath inherits
+the enclosing CHAPTER's title (e.g. INTRODUCTION) and the subheading line fuses
+into the body span. Explains a wrong enclosing-section label; only a +1-line
+drift, not the large-span symptom.
+
+**Fix.** In `walkBody`
+([parse.ts:123-174](src/shared/blocks/parse.ts#L123)), treat an OWN-LINE comment
+following prose as a soft paragraph delimiter: when a `comment` node has
+`!node.sameline` (own-line, not a trailing inline `code % note`) and a paragraph
+is open, `flushParagraph()` before `continue`. Inline trailing comments
+(`sameline`) must STILL absorb into the current paragraph. Secondary: add
+`paragraph`/`subparagraph` to `SECTION_LEVELS`.
+
+**Test.** parse.test.ts — the 20 existing tests cover neither case. Add: (a)
+comment-between-prose-no-blank-line SPLITS; (b) trailing inline comment does NOT
+split. TDD.
+
+**Lane.** `src/shared/blocks/parse.ts` + `__tests__/parse.test.ts`. Disjoint
+from live siblings (BUG-35 = BlockOverlay/PaperPane; M2-2 = src/main).
+Downstream consumers (paperModel/BlockOverlay) unedited.
+
+**Status.** Diagnosed (workflow-verified; high confidence on mechanism).
+Caveat: the user's `ch1.tex` isn't in the repo, so confirm the real 113-133
+region uses `%` comment lines (or `\paragraph`) between prose — the fix is a
+genuine parser defect regardless.
