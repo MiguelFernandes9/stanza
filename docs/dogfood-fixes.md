@@ -1475,3 +1475,54 @@ margin beside the formula, never on the glyphs; prose pills unchanged.
 **Lane.** Renderer paper — `BlockOverlay.tsx` (+ one `math` prop wired from
 `PaperPane.tsx`; a placement helper in `paperModel.ts` if it keeps BlockOverlay
 lean). Branch off main. Disjoint from everything currently in flight.
+
+## BUG-36 — math pill STILL over the formula (BUG-35 reopened): the hugged box left is wrong for `\frac` equations
+
+BUG-35's fix (PR #56) parks a display-math pill in the **left margin** at
+`box.x - PILL_MARGIN_GAP` with `translateX(-100%)` (`paperModel.ts` `pillPlacement`).
+That logic is correct — but `box.x` is wrong for an equation containing a
+`\frac` (or any tall sub-structure), so the pill is parked *into* the formula.
+Repro is the demo `\[...\]` at `chapters/ch1.tex:197-203`
+(`⟨φ(x₁)…⟩ = (1/Z)(…δⁿZ[J])/(δJ(x₁)…) |_{J=0}`).
+
+**Root cause (verified against live synctex on the demo).** `mathBoxesByPage`
+(`paperModel.ts:312`) hugs the box width to "glyph" rects = those with
+`H < 0.7 × (block height)`, to drop synctex's full-width container rects
+(BUG-23). The real deduped rects for this equation (page 6, after the
+`x=h, y=v−H` transform in `shared/latex/synctex.ts:27`) are:
+
+| rect | what            |  x (h) | width  | height |
+|------|-----------------|-------:|-------:|-------:|
+| A    | formula line box| 198.54 | 214.92 |  26.68 |
+| B    | frac denominator| 308.01 |  80.89 |  10.91 |
+| C    | frac numerator  | 306.82 |  83.28 |  25.77 |
+| D    | `\bigg|` rule   | 390.10 |   3.64 |  26.18 |
+
+Block height = 26.68, so the filter `H < 0.7×26.68 = 18.68` keeps **only B**
+(the short denominator). `widthRects = [B]` → `x = 308.01, right = 388.90`. The
+box collapses onto the denominator, **mid-formula**, and the true formula left
+(`min(h) = 198.54`, rect A) is discarded. The pill then parks at
+`308.01 − gap`, i.e. on top of `⟨φ…⟩ = 1/Z`. A tall fraction is what triggers
+it: it makes only the short sub-fraction rect pass the height filter, so the hug
+has nothing representative to hug to.
+
+**Fix (anchor the box LEFT to the real formula left, keep the right-trim).** The
+left edge must come from **all** rects, not just sub-height ones —
+`x = min(h)` over every rect (= 198.54 here, the formula's true left). The
+height filter should only ever *trim the right overshoot* (BUG-23's
+`\textwidth`/number container sits to the right), never move the left onto an
+inner fragment. After the fix the box left is the formula left, so PR #56's
+margin pill lands clear. (This also fixes the wash, which today tints only the
+denominator.) Guard the original BUG-23 case so a numbered `equation`'s box
+doesn't grow back to full `\textwidth`.
+
+**Test (`paperModel.test.ts`, real fixture).** Feed `mathBoxesByPage` the four
+rects above → assert `box.x ≈ 198.5` (formula left), NOT `308` (denominator),
+and the box spans the formula. Add/keep a numbered-`equation` style fixture
+(a wide full-`\textwidth` container rect + narrow glyph rows) → assert the box
+still hugs the glyphs, not the container (BUG-23 unregressed). Live gate
+(Miguel): hover the `\[...\]` fraction at `ch1.tex:197-203` → the pill sits in
+the left margin, never on the equation.
+
+**Lane.** Renderer paper, `paperModel.ts` `mathBoxesByPage` (1 function). Branch
+off main. Disjoint from the in-flight parser work (`shared/blocks/parse.ts`).
