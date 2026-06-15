@@ -269,6 +269,7 @@ export function PaperPane(props: Props): JSX.Element {
             hovered={state.view === 'select' && hover === b.id}
             selectMode={state.view === 'select'}
             tight={isTightAbove(rect, allBoxes, TIGHT_GAP)}
+            math={isMathEnvName(b.envName)}
             onEnter={() => setHover(b.id)}
             onLeave={() => setHover((h) => (h === b.id ? null : h))}
             onClick={(e) => props.onToggleBlock(b.id, state.adding || e.shiftKey || e.metaKey || e.ctrlKey)}

@@ -13,6 +13,8 @@ import {
   isTightAbove,
   mathBoxesByPage,
   padBoxClamped,
+  PILL_MARGIN_GAP,
+  pillPlacement,
   resolveBoxOverlaps,
   selectionBounds,
   spanLabel,
@@ -679,5 +681,30 @@ describe('blockGeometryRects — query interior, exclude \\end phantom (BUG-21)'
       return [rect(0, 10)]
     })
     expect(calls).toEqual([{ file: 'a.tex', startLine: 18, endLine: 20 }])
+  })
+})
+
+describe('pillPlacement (BUG-35)', () => {
+  it('tucks a flush prose pill inside the box (tight → top 2), no transform', () => {
+    expect(pillPlacement({ math: false, tight: true })).toEqual({ top: 2, left: -1 })
+  })
+
+  it('lifts a non-flush prose pill above the box (top -9)', () => {
+    expect(pillPlacement({ math: false, tight: false })).toEqual({ top: -9, left: -1 })
+  })
+
+  it('parks a math pill in the left margin, never on the glyphs (top 2)', () => {
+    const p = pillPlacement({ math: true, tight: true })
+    expect(p.transform).toBe('translateX(-100%)') // shifted fully out of the box
+    expect(p.left).toBe(-PILL_MARGIN_GAP)
+    expect(p.left).toBeLessThan(0)
+    expect(p.top).not.toBe(2) // not tucked inside, over the formula
+    expect(p.top).toBe(0) // beside the box top
+  })
+
+  it('uses the margin for math regardless of tight (hugged box ⇒ no in-box room)', () => {
+    expect(pillPlacement({ math: true, tight: false })).toEqual(
+      pillPlacement({ math: true, tight: true })
+    )
   })
 })

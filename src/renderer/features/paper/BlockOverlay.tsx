@@ -1,6 +1,6 @@
 import type { JSX } from 'react'
 import { Lock } from 'lucide-react'
-import { spanLabel } from './paperModel'
+import { pillPlacement, spanLabel } from './paperModel'
 import type { BlockMark, PageBlock } from './paperModel'
 import { phaseTone } from './paperPaneLayout'
 
@@ -22,6 +22,9 @@ interface Props {
   /** Block sits flush under another — render the hover pill inside the box so
    *  its label doesn't land on the line above (BUG-19). */
   tight: boolean
+  /** Display-math block — its box hugs the formula, so the pill goes in the
+   *  left margin instead of over the glyphs (BUG-35). */
+  math: boolean
   onEnter: () => void
   onLeave: () => void
   onClick: (e: React.MouseEvent) => void
@@ -52,6 +55,7 @@ export function BlockOverlay({
   hovered,
   selectMode,
   tight,
+  math,
   onEnter,
   onLeave,
   onClick
@@ -60,6 +64,7 @@ export function BlockOverlay({
   // Owned → the task's phase color (busy reads as a neutral lock, matching the
   // mock); unselected → the neutral ink pill with the block's span.
   const pillBg = mark ? (mark.phase === 'busy' ? 'var(--ink-500)' : phaseTone(mark.phase).accent) : 'var(--ink-700)'
+  const pill = pillPlacement({ math, tight })
 
   return (
     <div
@@ -87,11 +92,13 @@ export function BlockOverlay({
       {hovered && (
         <span
           style={{
-            // Flush float → keep the pill inside the box (top 2) so its label
-            // never sits on the prose line above; otherwise the usual -9 lift.
+            // Placement depends on block kind: prose tucks inside (tight) or
+            // lifts above the box; display math parks in the left margin so the
+            // pill never lands on the formula glyphs (BUG-19 / BUG-35).
             position: 'absolute',
-            top: tight ? 2 : -9,
-            left: -1,
+            top: pill.top,
+            left: pill.left,
+            transform: pill.transform,
             zIndex: 2,
             display: 'inline-flex',
             alignItems: 'center',
