@@ -228,7 +228,7 @@ describe('mathBoxesByPage — hug the formula ink (BUG-23)', () => {
       { page: 6, x: 72, y: 264.2, width: 283, height: 26.1 }, // line 1 glyphs
       { page: 6, x: 72, y: 294.3, width: 325, height: 26.2 } // line 2 glyphs
     ]
-    const [box] = mathBoxesByPage(rects)
+    const [box] = mathBoxesByPage(rects, 72)
     expect(box!.y).toBeCloseTo(264.2, 5) // top from all rects
     expect(box!.y + box!.height).toBeCloseTo(320.5, 5) // bottom from all rects
     expect(box!.x).toBe(72)
@@ -246,7 +246,7 @@ describe('mathBoxesByPage — hug the formula ink (BUG-23)', () => {
       { page: 6, x: 306.82, y: 100.91, width: 83.28, height: 25.77 }, // C frac numerator
       { page: 6, x: 390.1, y: 100.5, width: 3.64, height: 26.18 } // D \bigg| rule
     ]
-    const [box] = mathBoxesByPage(rects)
+    const [box] = mathBoxesByPage(rects, 90)
     expect(box!.x).toBeCloseTo(198.54, 2) // formula left (rect A), NOT 308 (denominator)
     expect(box!.x).toBeLessThan(300) // never collapsed onto the inner fragment
     // Right still trimmed to the glyph extent (denominator B) — the height
@@ -256,18 +256,36 @@ describe('mathBoxesByPage — hug the formula ink (BUG-23)', () => {
     expect(box!.y + box!.height).toBeCloseTo(126.68, 5)
   })
 
+  it('drops the page-margin container so a numbered/split eq hugs the formula (BUG-38)', () => {
+    // Live synctex, numbered split eq at ch1.tex:144-161. synctex emits
+    // full-height CONTAINER rects out in the page margin (x≈36.46), left of the
+    // body text column (≈90); the equation's content sits at x≈143.54. min(x)
+    // over ALL rects (BUG-36) grabbed the margin container → box left in the
+    // margin. Dropping rects left of the text column fixes it.
+    const rects: PdfRect[] = [
+      { page: 5, x: 36.46, y: 100, width: 485.54, height: 73.88 }, // margin container
+      { page: 5, x: 143.54, y: 100, width: 280, height: 25.77 }, // content line 1
+      { page: 5, x: 160, y: 140, width: 250, height: 25.77 } // content line 2
+    ]
+    const [box] = mathBoxesByPage(rects, 90)
+    expect(box!.x).toBeCloseTo(143.54, 2) // formula left, NOT 36.46 (margin)
+    expect(box!.x).toBeGreaterThan(90) // never in the page margin
+    // right still trimmed to the glyph rows (BUG-23 right-trim intact)
+    expect(box!.x + box!.width).toBeCloseTo(423.54, 2)
+  })
+
   it('keeps full width for a single-line equation (all rects same height)', () => {
     const rects: PdfRect[] = [
       { page: 2, x: 72, y: 100, width: 400, height: 20 }, // container
       { page: 2, x: 72, y: 100, width: 250, height: 20 } // single glyph line, same height
     ]
     // no rect is < 0.7×blockHeight → no glyph signal → keep full width
-    expect(mathBoxesByPage(rects)[0]!.width).toBe(400)
+    expect(mathBoxesByPage(rects, 72)[0]!.width).toBe(400)
   })
 
   it('drops degenerate rects and returns nothing when none remain', () => {
-    expect(mathBoxesByPage([{ page: 1, x: 0, y: 0, width: 0, height: 0 }])).toEqual([])
-    expect(mathBoxesByPage([])).toEqual([])
+    expect(mathBoxesByPage([{ page: 1, x: 0, y: 0, width: 0, height: 0 }], 72)).toEqual([])
+    expect(mathBoxesByPage([], 72)).toEqual([])
   })
 })
 
