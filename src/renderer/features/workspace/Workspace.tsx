@@ -21,10 +21,13 @@ import { EMPTY_CONTEXT, loadProjectContext } from '../editor/completion/projectC
 import type { ProjectContext } from '../editor/completion/projectContext'
 import {
   closeTab,
+  cycleTab,
   decideCloseActive,
   deleteTabs,
   openTab,
   renameTabs,
+  reorderTabs,
+  tabForIndex,
   type TabState
 } from '../editor/openFilesModel'
 import { PaperPane } from '../paper/PaperPane'
@@ -131,6 +134,18 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
   const openFile = useCallback((relPath: string) => applyTabs(openTab(tab.current, relPath)), [applyTabs])
   const closeFile = useCallback(
     (relPath: string) => applyTabs(closeTab(tab.current, relPath)),
+    [applyTabs]
+  )
+  // Drag-reorder: a tab (draggedFile) dropped onto another (targetFile) moves to
+  // the target's slot; activeFile is unchanged.
+  const reorderFiles = useCallback(
+    (draggedFile: string, targetFile: string) => {
+      const t = tab.current
+      const from = t.openFiles.indexOf(draggedFile)
+      const to = t.openFiles.indexOf(targetFile)
+      if (from === -1 || to === -1) return
+      applyTabs(reorderTabs(t, from, to))
+    },
     [applyTabs]
   )
   // ⌘E / TitleBar toggle. Revealing the pane with no file open shows the
@@ -303,12 +318,43 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
       if (key === 'r' || key === 'enter') {
         e.preventDefault()
         debounce.flush()
-      } else if (key === 'e') {
+        return
+      }
+      if (key === 'e') {
         e.preventDefault()
         toggleSource()
-      } else if (key === 'j') {
+        return
+      }
+      if (key === 'j') {
         e.preventDefault()
         setChatOpen((v) => !v)
+        return
+      }
+
+      // Tab navigation — only when the editor pane is open. Sets the active tab
+      // through the live ref; no-op when there's no matching tab.
+      const t = tab.current
+      if (!t.sourceOpen) return
+      const focus = (target: string | null): void => {
+        if (!target) return
+        e.preventDefault()
+        setActiveFile(target)
+      }
+      // Cmd+1..8 → that tab; Cmd+9 → the last tab (browser convention).
+      if (e.metaKey && /^[1-9]$/.test(e.key)) {
+        focus(tabForIndex(t.openFiles, Number(e.key)))
+        return
+      }
+      // Ctrl+Tab / Ctrl+Shift+Tab → next / previous, wrapping. (Cmd+Tab is the
+      // macOS app switcher — the app can never receive it; Ctrl+Tab is the
+      // cross-platform convention.)
+      if (e.ctrlKey && key === 'tab') {
+        focus(cycleTab(t.openFiles, t.activeFile, e.shiftKey ? -1 : 1))
+        return
+      }
+      // Cmd+Shift+] → next, Cmd+Shift+[ → previous (mac-native).
+      if (e.metaKey && e.shiftKey && (e.key === ']' || e.key === '[')) {
+        focus(cycleTab(t.openFiles, t.activeFile, e.key === ']' ? 1 : -1))
       }
     }
     window.addEventListener('keydown', onKey)
@@ -601,6 +647,7 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
             projectContext={editorContext}
             onSelectFile={openFile}
             onCloseFile={closeFile}
+            onReorder={reorderFiles}
             onDocChanged={() => debounce.trigger()}
             errors={editorErrors}
             onForwardSearch={forwardSearch}
