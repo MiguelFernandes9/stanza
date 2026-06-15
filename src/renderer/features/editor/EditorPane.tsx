@@ -13,6 +13,12 @@ export interface EditorApi {
   saveDirty: () => Promise<string[]>
   /** Jump to file:line (synctex inverse target). */
   jumpTo: (file: string, line: number) => void
+  /** Whether `file` has unsaved edits — the dirty-state seam for ⌘W's prompt. */
+  isDirty: (file: string) => boolean
+  /** Write one buffer to disk (⌘W "Save"). */
+  saveFile: (file: string) => Promise<void>
+  /** Drop a buffer's unsaved edits so a reopen re-reads disk (⌘W "Discard"). */
+  discard: (file: string) => void
 }
 
 interface Props {
@@ -209,6 +215,12 @@ export function EditorPane({
           pendingJump.current = { file, line }
           onSelectFile(file)
         }
+      },
+      isDirty: (file) => dirtyRef.current.has(file),
+      saveFile,
+      discard: (file) => {
+        buffers.current.delete(file)
+        markDirty(file, false)
       }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps

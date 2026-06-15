@@ -40,6 +40,20 @@ export function renameTabs(state: TabState, from: string, to: string): TabState 
   return { ...state, openFiles: state.openFiles.map(remap), activeFile: remap(state.activeFile) }
 }
 
+/** What ⌘W should do, decided from the tab set + the active buffer's dirtiness.
+ *  Pure so the keybinding behaviour is one testable place: with no tab open the
+ *  window closes (old ⌘W); a clean active tab closes; a dirty one prompts. */
+export type CloseIntent =
+  | { kind: 'window' }
+  | { kind: 'close'; file: string }
+  | { kind: 'prompt'; file: string }
+
+export function decideCloseActive(state: TabState, isDirty: (file: string) => boolean): CloseIntent {
+  if (state.openFiles.length === 0) return { kind: 'window' }
+  if (isDirty(state.activeFile)) return { kind: 'prompt', file: state.activeFile }
+  return { kind: 'close', file: state.activeFile }
+}
+
 /** True when `f` is `path` itself or a descendant of the folder `path`. */
 function isUnder(f: string, path: string): boolean {
   return f === path || f.startsWith(`${path}/`)

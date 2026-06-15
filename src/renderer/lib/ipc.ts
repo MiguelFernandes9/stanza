@@ -72,6 +72,8 @@ export const api = {
   documentCurrent: () => invoke<DocumentInfo | null>(IpcChannels.documentCurrent),
   /** Pick a parent directory for New document (no project opened). Null = cancelled. */
   dialogPickDirectory: () => invoke<string | null>(IpcChannels.dialogPickDirectory),
+  /** Close the focused window — ⌘W's fallback when no editor tab is open. */
+  windowClose: () => invoke<void>(IpcChannels.windowClose),
   compileRun: (req: CompileRequest) => invoke<CompileResult>(IpcChannels.compileRun, req),
   synctexInverse: (p: InversePoint) =>
     invoke<SourceLocation | null>(IpcChannels.synctexInverse, p),
@@ -88,7 +90,10 @@ export const api = {
   onCompileStatus: on<CompileStatus>(IpcChannels.compileStatus),
   onClaudeStatus: on<ClaudeStatus>(IpcChannels.claudeStatus),
   onReviewProposal: on<ReviewProposal>(IpcChannels.reviewProposal),
-  onPrimeStatus: on<PrimeStep>(IpcChannels.primeStatus)
+  onPrimeStatus: on<PrimeStep>(IpcChannels.primeStatus),
+  /** ⌘W fired from the app menu — the renderer closes the active tab (or
+   *  invokes windowClose when none is open). */
+  onEditorCloseActiveTab: on<void>(IpcChannels.editorCloseActiveTab)
 }
 
 export type StanzaClient = typeof api

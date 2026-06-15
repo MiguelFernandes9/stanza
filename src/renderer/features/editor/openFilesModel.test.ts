@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { closeTab, deleteTabs, openTab, renameTabs, type TabState } from './openFilesModel'
+import {
+  closeTab,
+  decideCloseActive,
+  deleteTabs,
+  openTab,
+  renameTabs,
+  type TabState
+} from './openFilesModel'
 
 const state = (openFiles: string[], activeFile: string, sourceOpen = true): TabState => ({
   openFiles,
@@ -108,5 +115,28 @@ describe('deleteTabs', () => {
     expect(next.openFiles).toEqual(['a.tex'])
     expect(next.activeFile).toBe('a.tex')
     expect(next.sourceOpen).toBe(false)
+  })
+})
+
+describe('decideCloseActive (⌘W)', () => {
+  const clean = (): boolean => false
+
+  it('closes the window when no tab is open', () => {
+    expect(decideCloseActive(state([], ''), clean)).toEqual({ kind: 'window' })
+  })
+
+  it('closes the active tab when it is clean', () => {
+    expect(decideCloseActive(state(['a.tex', 'b.tex'], 'b.tex'), clean)).toEqual({
+      kind: 'close',
+      file: 'b.tex'
+    })
+  })
+
+  it('prompts before closing when the active tab is dirty', () => {
+    const isDirty = (f: string): boolean => f === 'b.tex'
+    expect(decideCloseActive(state(['a.tex', 'b.tex'], 'b.tex'), isDirty)).toEqual({
+      kind: 'prompt',
+      file: 'b.tex'
+    })
   })
 })
