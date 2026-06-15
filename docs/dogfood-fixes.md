@@ -1430,3 +1430,48 @@ readable through a faint tint, never a solid box.
 **Lane.** Renderer paper, `paperPaneLayout.ts` only (1 function) — tiny. Branch
 off main. Disjoint from BUG-33 (`taskStore`/`Workspace`) and the PDF-blur lane
 (`features/pdf`).
+
+## BUG-35 — the block pill is drawn ON TOP of a display equation
+
+Hovering (or owning, via a task) a display-math block paints its label pill —
+`∑ ch1.tex:197-203`, or "Claude editing — locked" — directly over the formula
+glyphs instead of clear of them.
+
+**Root cause.** The pill is positioned relative to the block's own box at
+`left:-1, top: tight ? 2 : -9` (`BlockOverlay.tsx:87-93`). `tight` comes from
+`isTightAbove(rect, allBoxes, TIGHT_GAP=18)` (`PaperPane.tsx:271`,
+`paperModel.ts:144`): when a block's top is within ~18pt of the box above, the
+pill is tucked **inside** the box (`top:2`) so its label doesn't land on the
+prose line above — a fix for flush *prose* floats (BUG-19). But for a display
+equation the box top **is** the formula: its box comes from `mathBoxesByPage`
+(`paperModel.ts:312`), whose `y` is the topmost glyph rect, hugged tight to the
+ink (BUG-23). A display equation almost always sits flush (<18pt) under its
+lead-in paragraph ("In symbols, Z is…" → the equation), so `tight` is true and
+the pill is drawn at `top:2` — i.e. on the equation's top glyphs. (The hug also
+means there's no in-box whitespace to absorb it, unlike prose line-leading.)
+Hits both the hover pill (`spanLabel`) and the owned/lock pill.
+
+**Fix (recommended — math/env pill goes in the side margin).** A display
+equation is centered, so there's whitespace to the **left** of its hugged box.
+Pass a `math` flag to `BlockOverlay` (PaperPane already computes
+`isMathEnvName(b.envName)` at `PaperPane.tsx:156` for box selection — reuse it,
+or check `block.kind === 'environment'`), and when set, render the pill in that
+left margin instead of inside/above the box: e.g. `left:-1` +
+`transform:'translateX(-100%)'` with a small gap, vertically at the box top.
+That clears the formula (it's beside, not over) and the paragraph above (it's
+not lifted up onto it). **Alternatives:** (2) for math, force the non-tight
+`top:-9` lift — simplest, but with a <18pt gap the pill then overlaps the
+*paragraph above* (the exact case `tight` exists to prevent); (3) drop the pill
+**below** the formula for math (`top: box.height + 2`) — clears glyphs, but can
+collide with the next block. Recommend (1).
+
+**Test.** `BlockOverlay` render test (or a pure pill-placement helper): a math
+block (envName ∈ math set / kind environment) with `tight` true → pill offset
+is the margin placement (negative/translated left), NOT `top:2` over the box; a
+prose block stays on the existing tight/lift behavior. Live gate (Miguel): hover
+a display equation that sits right under a paragraph → its pill sits in the left
+margin beside the formula, never on the glyphs; prose pills unchanged.
+
+**Lane.** Renderer paper — `BlockOverlay.tsx` (+ one `math` prop wired from
+`PaperPane.tsx`; a placement helper in `paperModel.ts` if it keeps BlockOverlay
+lean). Branch off main. Disjoint from everything currently in flight.
