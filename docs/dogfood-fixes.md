@@ -1665,6 +1665,13 @@ owner as BUG-36/38). Branch off main.
 
 ## BUG-40 — paragraph box extends into the whitespace before a SECTION heading (BUG-37, finished)
 
+> **Superseded — do not implement the kind-gating patch below.** Miguel chose
+> the durable fix: derive block vertical extent from the pdf.js text layer.
+> See `docs/text-layer-block-geometry.md`, which replaces the whole BUG-25 /
+> BUG-37 / BUG-40 settle + neighbour-kind gating. The entry below is kept for
+> the diagnosis/evidence only.
+
+
 Same shape as BUG-37, but the block below is a `\section` heading, not a float:
 paragraph boxes hang ~16pt below their last line into the heading's space-above
 (seen before "2.2 A citation", "2.3 Discussion", "Outline").
