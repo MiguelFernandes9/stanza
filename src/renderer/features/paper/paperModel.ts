@@ -2,6 +2,7 @@ import type { BlockNode } from '../../../shared/blocks/types'
 import type { BlockSpan, PdfRect } from '../../../shared/ipc'
 import type { TaskPhase } from '../tasks/taskStore'
 import type { TextRow } from './pdfTextRows'
+import type { GraphicBox } from './pdfGraphics'
 
 /** Selection state a task stamps on a block — drives the edge bar, the
  *  selection wash and the hover/lock pill on both the PDF overlay and the
@@ -146,50 +147,10 @@ export function isTightAbove(box: PdfRect, neighbors: PdfRect[], threshold: numb
   return gapAbove(box, neighbors) < threshold
 }
 
-/** Resolve genuine OVERLAPS between page-adjacent block boxes: when a box's top
- *  falls inside the box above (a float's `\end` strut over the next paragraph),
- *  the two meet at the midpoint of the overlapping band so neither bleeds into
- *  the other (BUG-19). Text boxes now come from a disjoint row partition
- *  (binContentToBlocks) so they can't overlap each other; this only touches a
- *  graphic env's coarse synctex box overlapping a text box, until 2b removes it.
- *  Per page, boxes are sorted top-to-bottom and only overlapping pairs are
- *  touched. Returns a new map; inputs aren't mutated. */
-export function resolveBoxOverlaps(rects: Map<string, PdfRect[]>): Map<string, PdfRect[]> {
-  const out = new Map<string, PdfRect[]>()
-  const byPage = new Map<number, PdfRect[]>()
-  for (const [id, boxes] of rects) {
-    const clones = boxes.map((b) => ({ ...b }))
-    out.set(id, clones)
-    for (const box of clones) {
-      const arr = byPage.get(box.page)
-      if (arr) arr.push(box)
-      else byPage.set(box.page, [box])
-    }
-  }
-  for (const boxes of byPage.values()) {
-    boxes.sort((a, b) => a.y - b.y)
-    for (let i = 0; i < boxes.length - 1; i++) {
-      const a = boxes[i]!
-      const b = boxes[i + 1]!
-      const aBottom = a.y + a.height
-      if (b.y < aBottom) {
-        // overlap → meet at the midpoint of the overlapping band (BUG-19)
-        const bBottom = b.y + b.height
-        const m = (aBottom + b.y) / 2
-        a.height = m - a.y
-        b.y = m
-        b.height = Math.max(0, bBottom - m)
-      }
-    }
-  }
-  return out
-}
-
 /** Union a set of rects into one box per page, dropping degenerate rects
  *  (height ≤ 0 || width ≤ 0 — e.g. the 0-height artifact a \chapter leaves on
- *  the preceding page, BUG-5). Pages ascending. Shared per-page-envelope core
- *  of selectionBounds (a selection's wash) and blockBoxesByPage (one block's
- *  overlay boxes). */
+ *  the preceding page, BUG-5). Pages ascending. The per-page-envelope core of
+ *  selectionBounds (a selection's wash). */
 function unionRectsByPage(rects: PdfRect[]): PdfRect[] {
   const byPage = new Map<number, PdfRect[]>()
   for (const r of rects) {
@@ -217,28 +178,6 @@ function unionRectsByPage(rects: PdfRect[]): PdfRect[] {
  *  rect. Pages are returned in ascending order. */
 export function selectionBounds(boxes: PdfRect[]): PdfRect[] {
   return unionRectsByPage(boxes)
-}
-
-/** A page box shorter than this fraction of the block's tallest page box is a
- *  phantom forward-map fragment, not real content (BUG-30). */
-const PHANTOM_SHARE = 0.15
-
-/** Per-page boxes for one block, from its synctex:forward rects. Solid rects
- *  are unioned per page, so a paragraph/section that straddles a page break
- *  gets a box on BOTH pages instead of only its higher-coverage one — the
- *  un-washed leftover lines on the other page are gone (BUG-16). The same
- *  solid-rect filter preserves the BUG-5 dodge: a \chapter's 0-height artifact
- *  on the preceding page adds no box. When the block spans multiple pages, a
- *  page box that's a negligible fraction of the tallest one is dropped — a
- *  paragraph-start `\ref` at a page break forward-maps a stray ~8pt fragment
- *  onto the previous page's header band, which otherwise puts the block's
- *  box/pill/badge on the chapter heading (BUG-30). One box per page the block
- *  occupies, ascending; [] when nothing solid remains. */
-export function blockBoxesByPage(rects: PdfRect[]): PdfRect[] {
-  const boxes = unionRectsByPage(rects)
-  if (boxes.length <= 1) return boxes
-  const maxHeight = Math.max(...boxes.map((b) => b.height))
-  return boxes.filter((b) => b.height >= PHANTOM_SHARE * maxHeight)
 }
 
 /** One padded box per block — NOT a union envelope. Each selected block's
@@ -274,17 +213,6 @@ const MATH_ENV_NAMES = new Set([
  *  BUG-35); the box itself comes from the text-row union like any text block. */
 export function isMathEnvName(name: string | undefined): boolean {
   return name !== undefined && MATH_ENV_NAMES.has(name.replace(/\*$/, ''))
-}
-
-const GRAPHIC_ENV_NAMES = new Set(['figure', 'table'])
-
-/** Float/graphic environments whose box needs rendered GRAPHIC content (an
- *  image, a rule, a tikz canvas), not just glyph rows. 2a keeps these on the
- *  coarse synctex union (blockBoxesByPage) until 2b folds op-list graphic bboxes
- *  into binContentToBlocks; every other block (paragraph, heading, math, list)
- *  is pure text and routes through binContentToBlocks. */
-export function isGraphicEnvName(name: string | undefined): boolean {
-  return name !== undefined && GRAPHIC_ENV_NAMES.has(name.replace(/\*$/, ''))
 }
 
 /** Vertical gap (pt) above which two stacked text baselines belong to separate
@@ -342,30 +270,36 @@ export interface BinnedContent {
   contentTopByPage: Map<number, number>
 }
 
-/** Build EVERY text block's box as the union of the rendered text rows in the
- *  region synctex locates it to — one rule for paragraphs, headings, math and
- *  lists. Generalises Tier 1's `mathBoxesByPage` and replaces both
- *  `blockBoxesByPage`'s union and the separate `reclaimDroppedRows` pass for
- *  text blocks (graphic envs — figure/table — keep `blockBoxesByPage` until 2b).
+/** Build EVERY block's box as the union of everything it RENDERED — glyph rows
+ *  AND graphic/image bboxes — within the region synctex locates it to. One rule
+ *  for paragraphs, headings, math, lists, and figures/tables: synctex only says
+ *  WHERE the block landed (page, x-band, top); the box extent comes from the
+ *  rendered content. Replaces `mathBoxesByPage` (Tier 1), `blockBoxesByPage` +
+ *  the reclaim pass (2a), and the figure crux (2b).
  *
  *  Per page: each block's solid synctex rects, filtered to the content band,
  *  union to a region `{top, x-band}`. Regions sort by `top` and each takes a
  *  ceiling at the NEXT region's top (page bottom for the last) — so a block's
  *  box runs down to the next block and includes the wrapped last line synctex
- *  drops, with no reclaim pass. A row joins the region whose `[top-ε, ceiling)`
- *  holds its BASELINE (synctex `v` basis, never the font-inflated `yTop` — a
- *  yTop ceiling leaks the next block's first row in, BUG-41) and whose x-band it
- *  overlaps; the box is the union of that region's rows.
+ *  drops, with no reclaim pass. Each rendered item joins the region whose
+ *  `[top-ε, ceiling)` holds its partition y — a row's BASELINE (synctex `v`
+ *  basis, never the font-inflated `yTop` — a yTop ceiling leaks the next block's
+ *  first row in, BUG-41), a graphic's TOP (where the float is anchored) — and
+ *  whose x-band it overlaps; the box is the union of that region's items. A
+ *  `figure`'s box thus covers `caption rows ∪ image bbox`, not the caption alone
+ *  (the plot.pdf Form XObject has no text rows).
  *
  *  The content band first drops non-content rows (running head / folio / footer)
  *  and header-margin stray rects (a phantom \ref fragment that else binds the
  *  running head — BUG-30), so no furniture lands in a block and the bottom
- *  block's page-bottom ceiling can't swallow a footer folio (M2-6). A page with
- *  rects but no rows falls back to the coarse synctex union (text layer
- *  unavailable) so a box is never lost. Pure; inputs untouched. */
+ *  block's page-bottom ceiling can't swallow a footer folio (M2-6). Graphics are
+ *  never furniture (folios/heads are text), so they bin by region alone. A page
+ *  with rects but no rendered content falls back to the coarse synctex union
+ *  (text layer unavailable) so a box is never lost. Pure; inputs untouched. */
 export function binContentToBlocks(
   rectsById: Map<string, PdfRect[]>,
-  rowsByPage: Map<number, TextRow[]>
+  rowsByPage: Map<number, TextRow[]>,
+  graphicsByPage: Map<number, GraphicBox[]> = new Map()
 ): BinnedContent {
   const band = contentBand(rowsByPage)
   const inBand = (yTop: number, yBottom: number): boolean =>
@@ -412,37 +346,44 @@ export function binContentToBlocks(
   for (const [page, regions] of regionsByPage) {
     regions.sort((a, b) => a.top - b.top)
     const rows = (rowsByPage.get(page) ?? []).filter((r) => inBand(r.baseline, r.baseline))
-    if (!rows.length) {
-      // Text layer unavailable for this page → coarse synctex union, never lost.
+    const graphics = graphicsByPage.get(page) ?? []
+    if (!rows.length && !graphics.length) {
+      // No rendered content measured for this page → coarse synctex union, never lost.
       for (const reg of regions)
         pushBox(reg.id, { page, x: reg.xLeft, y: reg.top, width: reg.xRight - reg.xLeft, height: reg.bottom - reg.top })
       continue
     }
-    const rowsByRegion = new Map<number, TextRow[]>()
-    for (const row of rows) {
+    // One renderable item = an x-extent at a partition y; rows partition on the
+    // baseline (BUG-41), graphics on their top (the float anchor).
+    interface Item {
+      key: number
+      xLeft: number
+      xRight: number
+      yTop: number
+      yBottom: number
+    }
+    const itemsByRegion = new Map<number, Item[]>()
+    const bin = (item: Item): void => {
       for (let i = 0; i < regions.length; i++) {
         const reg = regions[i]!
         const ceiling = i + 1 < regions.length ? regions[i + 1]!.top : Infinity
-        if (
-          row.baseline >= reg.top - BAND_EPS &&
-          row.baseline < ceiling &&
-          row.xRight > reg.xLeft &&
-          row.xLeft < reg.xRight
-        ) {
-          const arr = rowsByRegion.get(i)
-          if (arr) arr.push(row)
-          else rowsByRegion.set(i, [row])
+        if (item.key >= reg.top - BAND_EPS && item.key < ceiling && item.xRight > reg.xLeft && item.xLeft < reg.xRight) {
+          const arr = itemsByRegion.get(i)
+          if (arr) arr.push(item)
+          else itemsByRegion.set(i, [item])
           break
         }
       }
     }
+    for (const r of rows) bin({ key: r.baseline, xLeft: r.xLeft, xRight: r.xRight, yTop: r.yTop, yBottom: r.yBottom })
+    for (const g of graphics) bin({ key: g.yTop, xLeft: g.xLeft, xRight: g.xRight, yTop: g.yTop, yBottom: g.yBottom })
     regions.forEach((reg, i) => {
-      const rs = rowsByRegion.get(i)
-      if (!rs) return // a phantom region bins no rows → no box (BUG-30)
-      const x = Math.min(...rs.map((r) => r.xLeft))
-      const right = Math.max(...rs.map((r) => r.xRight))
-      const top = Math.min(...rs.map((r) => r.yTop))
-      const bottom = Math.max(...rs.map((r) => r.yBottom))
+      const its = itemsByRegion.get(i)
+      if (!its) return // a phantom region bins nothing → no box (BUG-30)
+      const x = Math.min(...its.map((t) => t.xLeft))
+      const right = Math.max(...its.map((t) => t.xRight))
+      const top = Math.min(...its.map((t) => t.yTop))
+      const bottom = Math.max(...its.map((t) => t.yBottom))
       pushBox(reg.id, { page, x, y: top, width: right - x, height: bottom - top })
     })
   }

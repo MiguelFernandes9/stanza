@@ -3,7 +3,6 @@ import type { BlockNode } from '../../../shared/blocks/types'
 import type { BlockSpan, PdfRect } from '../../../shared/ipc'
 import {
   binContentToBlocks,
-  blockBoxesByPage,
   blockGeometryRects,
   cardAnchorTops,
   combinedSpanLabel,
@@ -16,7 +15,6 @@ import {
   padBoxClamped,
   PILL_MARGIN_GAP,
   pillPlacement,
-  resolveBoxOverlaps,
   selectionBounds,
   spanLabel,
   taskSpans,
@@ -24,6 +22,7 @@ import {
 } from './paperModel'
 import type { PageBlock } from './paperModel'
 import type { TextRow } from './pdfTextRows'
+import type { GraphicBox } from './pdfGraphics'
 
 const span = (startLine: number, endLine: number): BlockNode['span'] => ({
   file: 'main.tex',
@@ -391,6 +390,39 @@ describe('binContentToBlocks — one row-union builder for every text block', ()
     const { boxesById } = binContentToBlocks(rects, new Map()) // text layer unavailable
     expect(boxesById.get('p#1')).toEqual([{ page: 3, x: 100, y: 50, width: 200, height: 40 }])
   })
+
+  it('folds a figure image bbox into the box — covers image + caption, not caption alone (2b)', () => {
+    // ch2:11-16 figure, page 9: the synctex region locates the figure; the plot.pdf
+    // image is a Form XObject with NO text rows, the caption renders below it. The
+    // box = caption rows ∪ image bbox, so it reaches the image top, not just the
+    // caption. (A text-only union would start at the caption and miss the image.)
+    const rects = new Map<string, PdfRect[]>([
+      ['fig#1', [prect(9, 90, 364.7, 432, 205.2)]], // figure synctex region, top 364.7
+      ['par#2', [prect(9, 90, 582, 432, 50)]] // the paragraph below the float
+    ])
+    const rows = new Map<number, TextRow[]>([
+      [9, [trow(556.7, 567.7, 232.2, 379.8), ...bodyRun(593.2, 620.2)]] // caption + para-below body
+    ])
+    const graphics = new Map<number, GraphicBox[]>([
+      [9, [{ yTop: 364.7, yBottom: 544.1, xLeft: 176.4, xRight: 435.6 }]] // plot.pdf form bbox
+    ])
+    const { boxesById } = binContentToBlocks(rects, rows, graphics)
+    const fig = boxesById.get('fig#1')![0]!
+    expect(fig.y).toBeCloseTo(364.7, 1) // image top, NOT the caption top 556.7
+    expect(boxBottom(fig)).toBeCloseTo(567.7, 1) // caption bottom
+    expect(fig.x).toBeCloseTo(176.4, 1) // image left, not the full-width container 90
+    expect(fig.x + fig.width).toBeCloseTo(435.6, 1)
+    // the image bbox lands in the figure, not the paragraph below it
+    expect(boxesById.get('par#2')![0]!.y).toBeGreaterThan(580)
+  })
+
+  it('ignores a graphic whose top sits above every region (a header-band stray)', () => {
+    const rects = new Map<string, PdfRect[]>([['p#1', [prect(1, 90, 100, 300, 60)]]]) // region top 100
+    const rows = new Map<number, TextRow[]>([[1, bodyRun(108, 158)]]) // rows yTop from ~97
+    const graphics = new Map<number, GraphicBox[]>([[1, [{ yTop: 40, yBottom: 80, xLeft: 90, xRight: 390 }]]])
+    const { boxesById } = binContentToBlocks(rects, rows, graphics)
+    expect(boxesById.get('p#1')![0]!.y).toBeGreaterThan(90) // box from rows (~97), graphic at y40 excluded
+  })
 })
 
 describe('cardAnchorTops — geometry-anchored rail cards (BUG-17)', () => {
@@ -531,149 +563,12 @@ describe('washBoxes — one padded box per block, not a union (BUG-26)', () => {
     expect(washBoxes(['s'], straddle, 0, [])).toHaveLength(2) // one per page
   })
 })
-
-describe('resolveBoxOverlaps — meet overlapping boxes at the midpoint (BUG-19)', () => {
-  it('splits a figure box overlapping the paragraph below at the overlap midpoint', () => {
-    // real ch2.tex page-6 boxes: figure 364.7–595.4 sits over para-18 585.6–622.5
-    const rects = new Map<string, PdfRect[]>([
-      ['fig', [{ page: 6, x: 72, y: 364.7, width: 200, height: 230.7 }]],
-      ['para', [{ page: 6, x: 72, y: 585.6, width: 200, height: 36.9 }]]
-    ])
-    const out = resolveBoxOverlaps(rects)
-    const fig = out.get('fig')![0]!
-    const para = out.get('para')![0]!
-    // shared edge at the overlap midpoint 590.5 — they meet, no overlap
-    expect(fig.y + fig.height).toBeCloseTo(590.5, 6)
-    expect(para.y).toBeCloseTo(590.5, 6)
-    expect(fig.y + fig.height).toBeLessThanOrEqual(para.y + 1e-9)
-    // outer edges preserved
-    expect(fig.y).toBe(364.7)
-    expect(para.y + para.height).toBeCloseTo(622.5, 6)
-  })
-
-  it('leaves a gap between non-overlapping boxes untouched (reclaim handles shortfall)', () => {
-    const rects = new Map<string, PdfRect[]>([
-      ['a', [{ page: 1, x: 72, y: 100, width: 100, height: 40 }]], // 100–140
-      ['b', [{ page: 1, x: 72, y: 190, width: 100, height: 40 }]] // 190–230, 50pt gap
-    ])
-    const out = resolveBoxOverlaps(rects)
-    expect(out.get('a')![0]).toEqual({ page: 1, x: 72, y: 100, width: 100, height: 40 })
-    expect(out.get('b')![0]).toEqual({ page: 1, x: 72, y: 190, width: 100, height: 40 })
-  })
-
-  it('leaves a single box (no neighbour / last-on-page) unchanged', () => {
-    const rects = new Map<string, PdfRect[]>([
-      ['only', [{ page: 1, x: 72, y: 100, width: 100, height: 40 }]]
-    ])
-    expect(resolveBoxOverlaps(rects).get('only')![0]).toEqual({
-      page: 1,
-      x: 72,
-      y: 100,
-      width: 100,
-      height: 40
-    })
-  })
-
-  it('returns a new map without mutating the input boxes', () => {
-    const a = { page: 1, x: 72, y: 100, width: 100, height: 80 } // 100–180
-    const b = { page: 1, x: 72, y: 150, width: 100, height: 40 } // 150–190, overlaps a
-    resolveBoxOverlaps(new Map([['a', [a]], ['b', [b]]]))
-    expect(a.height).toBe(80) // original untouched
-    expect(b.y).toBe(150)
-  })
-
-  it('only resolves boxes on the same page', () => {
-    const rects = new Map<string, PdfRect[]>([
-      ['a', [{ page: 1, x: 72, y: 100, width: 100, height: 80 }]], // p1 100–180
-      ['b', [{ page: 2, x: 72, y: 150, width: 100, height: 40 }]] // p2 — would overlap if same page
-    ])
-    const out = resolveBoxOverlaps(rects)
-    expect(out.get('a')![0]!.height).toBe(80)
-  })
-
-})
-
-describe('blockBoxesByPage — per-page boxes for a straddling block (BUG-16)', () => {
-  it('returns one box per page a block actually occupies', () => {
-    const rects: PdfRect[] = [
-      { page: 2, x: 72, y: 700, width: 300, height: 12 }, // last line, bottom of page 2
-      { page: 3, x: 72, y: 60, width: 280, height: 12 }, // continues at top of page 3
-      { page: 3, x: 72, y: 74, width: 260, height: 12 }
-    ]
-    const boxes = blockBoxesByPage(rects)
-    expect(boxes.map((b) => b.page)).toEqual([2, 3])
-    expect(boxes[0]).toEqual({ page: 2, x: 72, y: 700, width: 300, height: 12 })
-    // page-3 rects unioned: y 60..86, x 72..352
-    expect(boxes[1]).toEqual({ page: 3, x: 72, y: 60, width: 280, height: 26 })
-  })
-
-  it('unions multiple rects on the same page into a single box', () => {
-    expect(
-      blockBoxesByPage([
-        { page: 1, x: 80, y: 100, width: 100, height: 10 },
-        { page: 1, x: 70, y: 120, width: 90, height: 10 }
-      ])
-    ).toEqual([{ page: 1, x: 70, y: 100, width: 110, height: 30 }])
-  })
-
-  it('drops a degenerate rect so a \\chapter page-break artifact adds no box', () => {
-    const rects: PdfRect[] = [
-      { page: 4, x: 10, y: 720, width: 300, height: 0 }, // 0-height artifact on the prev page
-      { page: 5, x: 72, y: 90, width: 200, height: 14 },
-      { page: 5, x: 72, y: 104, width: 180, height: 14 }
-    ]
-    const boxes = blockBoxesByPage(rects)
-    expect(boxes.map((b) => b.page)).toEqual([5]) // page-4 artifact dropped (BUG-5 dodge)
-    expect(boxes[0]).toMatchObject({ page: 5, x: 72, y: 90, height: 28 })
-  })
-
-  it('returns no boxes when every rect is degenerate or there are none', () => {
-    expect(blockBoxesByPage([{ page: 3, x: 0, y: 0, width: 0, height: 0 }])).toEqual([])
-    expect(blockBoxesByPage([])).toEqual([])
-  })
-})
-
-describe('blockBoxesByPage — drop a phantom page box (BUG-30)', () => {
-  it('drops a tiny stray page box when the block really lives on another page', () => {
-    // L109 forward-maps an ~8pt fragment onto page 5's header band; the block's
-    // real 24 lines are all on page 6.
-    const page6 = Array.from({ length: 24 }, (_, i) => ({
-      page: 6,
-      x: 72,
-      y: 123 + i * 10,
-      width: 300,
-      height: 10
-    })) // union → page-6 box of height 240
-    const stray = { page: 5, x: 72, y: 78, width: 120, height: 8 }
-    const boxes = blockBoxesByPage([stray, ...page6])
-    expect(boxes).toHaveLength(1) // 8 < 0.15×240 = 36 → phantom dropped
-    expect(boxes[0]!.page).toBe(6)
-  })
-
-  it('keeps both pages of a genuine cross-page straddle', () => {
-    const boxes = blockBoxesByPage([
-      { page: 2, x: 72, y: 700, width: 300, height: 50 }, // 5 lines, bottom of page 2
-      { page: 3, x: 72, y: 60, width: 300, height: 190 } // 19 lines, top of page 3
-    ])
-    expect(boxes.map((b) => b.page)).toEqual([2, 3]) // 50 ≥ 0.15×190 = 28.5 → kept
-  })
-
-  it('leaves a single-page block unchanged', () => {
-    expect(
-      blockBoxesByPage([
-        { page: 1, x: 72, y: 100, width: 300, height: 12 },
-        { page: 1, x: 72, y: 114, width: 300, height: 12 }
-      ])
-    ).toEqual([{ page: 1, x: 72, y: 100, width: 300, height: 26 }])
-  })
-})
-
 describe('selectionBounds — straddling block reaches both pages (BUG-16)', () => {
   it('a block spanning pages 2 and 3 contributes to each page union, not just one', () => {
-    const straddle = blockBoxesByPage([
+    const straddle: PdfRect[] = [
       { page: 2, x: 72, y: 690, width: 300, height: 12 }, // bottom of page 2
       { page: 3, x: 72, y: 60, width: 280, height: 12 } // top of page 3
-    ])
+    ]
     const heading: PdfRect = { page: 2, x: 72, y: 100, width: 350, height: 14 }
     const out = selectionBounds([heading, ...straddle])
     expect(out.map((b) => b.page)).toEqual([2, 3])
