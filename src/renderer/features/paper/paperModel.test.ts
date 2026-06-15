@@ -235,11 +235,12 @@ describe('mathBoxesByPage — hug the formula ink (BUG-23)', () => {
     expect(box!.width).toBeCloseTo(325, 5) // glyph width, not 485.5 (the number container)
   })
 
-  it('anchors the left to the formula, not a tall frac inner fragment (BUG-36)', () => {
+  it('hugs both edges of a frac to the formula line box, not an inner fragment (BUG-36/39)', () => {
     // Live synctex for the demo \[…\] at ch1.tex:197-203 (page 6, post y=v−H
     // transform). A tall \frac leaves only the short DENOMINATOR (B) under the
-    // 0.7×height glyph filter, so hugging the left to glyph rects collapsed
-    // box.x onto mid-formula (308) instead of the true formula left (198.54).
+    // 0.7×height glyph filter; taking either edge from glyph rects collapses the
+    // box onto B — left to mid-formula (308, BUG-36), right short of \bigg|_{J=0}
+    // (388.9, BUG-39). Both edges must come from the full-height line box A.
     const rects: PdfRect[] = [
       { page: 6, x: 198.54, y: 100, width: 214.92, height: 26.68 }, // A formula line box
       { page: 6, x: 308.01, y: 115.77, width: 80.89, height: 10.91 }, // B frac denominator
@@ -249,29 +250,30 @@ describe('mathBoxesByPage — hug the formula ink (BUG-23)', () => {
     const [box] = mathBoxesByPage(rects, 90)
     expect(box!.x).toBeCloseTo(198.54, 2) // formula left (rect A), NOT 308 (denominator)
     expect(box!.x).toBeLessThan(300) // never collapsed onto the inner fragment
-    // Right still trimmed to the glyph extent (denominator B) — the height
-    // filter only ever removes the RIGHT overshoot, never moves the left.
-    expect(box!.x + box!.width).toBeCloseTo(388.9, 2)
+    // Right reaches the full line box A (incl. \bigg|_{J=0}), not the denominator
+    // B (388.9) — one content set drives both edges now (BUG-39).
+    expect(box!.x + box!.width).toBeCloseTo(413.46, 2)
     expect(box!.y).toBeCloseTo(100, 5)
     expect(box!.y + box!.height).toBeCloseTo(126.68, 5)
   })
 
-  it('drops the page-margin container so a numbered/split eq hugs the formula (BUG-38)', () => {
-    // Live synctex, numbered split eq at ch1.tex:144-161. synctex emits
-    // full-height CONTAINER rects out in the page margin (x≈36.46), left of the
-    // body text column (≈90); the equation's content sits at x≈143.54. min(x)
-    // over ALL rects (BUG-36) grabbed the margin container → box left in the
-    // margin. Dropping rects left of the text column fixes it.
+  it('drops the margin container AND the disjoint number for a numbered/split eq (BUG-38/39)', () => {
+    // Live synctex, numbered split eq at ch1.tex:144-161. synctex emits a
+    // full-height CONTAINER out in the page margin (x≈36.5, left of the text
+    // column ≈90) and a full-height (1.1) NUMBER far to the right (x≈499.6),
+    // disjoint from the formula. The box must hug only the content [143.5, 468]:
+    // not the margin (BUG-38 left) and not the number (BUG-39 right).
     const rects: PdfRect[] = [
-      { page: 5, x: 36.46, y: 100, width: 485.54, height: 73.88 }, // margin container
-      { page: 5, x: 143.54, y: 100, width: 280, height: 25.77 }, // content line 1
-      { page: 5, x: 160, y: 140, width: 250, height: 25.77 } // content line 2
+      { page: 5, x: 36.46, y: 100, width: 485.54, height: 73.88 }, // margin container (out of column)
+      { page: 5, x: 143.54, y: 100, width: 324.46, height: 73.88 }, // formula line box → right 468
+      { page: 5, x: 143.54, y: 100, width: 200, height: 25.77 }, // glyph row 1
+      { page: 5, x: 160, y: 140, width: 180, height: 25.77 }, // glyph row 2
+      { page: 5, x: 499.6, y: 100, width: 22.4, height: 73.88 } // (1.1) number, disjoint far right
     ]
     const [box] = mathBoxesByPage(rects, 90)
-    expect(box!.x).toBeCloseTo(143.54, 2) // formula left, NOT 36.46 (margin)
-    expect(box!.x).toBeGreaterThan(90) // never in the page margin
-    // right still trimmed to the glyph rows (BUG-23 right-trim intact)
-    expect(box!.x + box!.width).toBeCloseTo(423.54, 2)
+    expect(box!.x).toBeCloseTo(143.54, 2) // formula left, NOT the margin (36.5)
+    expect(box!.x + box!.width).toBeCloseTo(468, 2) // formula right, NOT the number (522)
+    expect(box!.x + box!.width).toBeLessThan(490) // number excluded
   })
 
   it('keeps full width for a single-line equation (all rects same height)', () => {
