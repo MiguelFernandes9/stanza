@@ -1614,3 +1614,51 @@ file as BUG-37 (`resolveBoxOverlaps`). Branch off current main; if BUG-37 is
 in flight, one sibling should own all `paperModel.ts` geometry to avoid
 conflicts. **Lane.** Renderer paper, `paperModel.ts` `mathBoxesByPage`
 (+ `bodyTextColLeft` wired from `PaperPane.tsx`).
+
+## BUG-39 — math box RIGHT edge cuts off `\bigg|_{J=0}` (mirror of BUG-36; consolidate the geometry)
+
+After PR #61, the `\[...\]` frac at `ch1.tex:197-203` has its left fixed but the
+**right** edge stops short — `\bigg|_{J=0}.` sits outside the box on the right.
+
+**Root cause.** `mathBoxesByPage` now takes the left from in-column rects
+(BUG-38) but still takes the **right** from `widthRects` = the glyph-height
+filter (`H < 0.7×total`). For this frac the only short rect is the denominator
+(B, right=388.9), so the right collapses onto it — exactly the BUG-36 bug,
+mirrored to the right edge. The formula's true right is the full-height line box
+A (right=413.5), which the glyph filter discards. Real frac rects:
+A `x198.5 w214.9 H26.7` (right 413.5), B `x308.0 w80.9 H10.9` (right 388.9),
+C `x306.8 w83.3 H25.8` (right 390.1), D `x390.1 w3.6 H26.2` (right 393.7).
+`right = max over glyphs([B]) = 388.9` → drops A/C/D → `|_{J=0}` clipped.
+
+**This is the 4th iteration on this function (BUG-23 → 35/36 → 38 → 39).** The
+height-only glyph filter is the recurring culprit: it can't tell a legit
+full-height *line box* (frac's A — keep) from a full-height *container/number*
+(numbered eq — drop). Stop patching one edge at a time — derive BOTH edges from
+one rule.
+
+**Fix (consolidate left+right with one in-column content rule).** Build a single
+`content` rect set per page and take left=`min(x)`, right=`max(x+W)`, with
+top/bottom unchanged:
+
+1. `inColumn` = rects with `x ≥ bodyTextColLeft` (drops left-margin containers, BUG-38).
+2. `glyphs` = inColumn rects with `H < 0.7×total` (the per-line content).
+3. `content` = `glyphs` ∪ {inColumn full-height rects that horizontally **overlap**
+   the glyph x-cluster} — keeps the frac's line box A (overlaps the content) and
+   drops the equation **number** (full-height but horizontally **disjoint**, in
+   its own far-right cluster) and any margin container.
+4. Fallback to `inColumn` (then all rects) if `content` is empty.
+
+Verified on real rects: frac → `[198.5, 413.5]` (includes `\bigg|_{J=0}`);
+numbered/`split` `ch1:144-161` → `[143.5, ~468]` (excludes the `(1.1)` number and
+the `h=36.5` margin container); BUG-23 full-`\textwidth` container still trimmed.
+
+**Test (`paperModel.test.ts`, real fixtures — a suite so this stops recurring).**
+Assert the full box `{x,width}` for: (a) the 4-rect frac → x≈198.5, right≈413.5;
+(b) numbered/`split` with a margin container (`x36.5,H73.9`) + a disjoint number
+rect (`x499.6,w22.4,H73.9`) + content at `x143.5` → x≈143.5, right≈468, number
+excluded; (c) BUG-23 container → glyph-hugged. Live gate (Miguel): hover
+`ch1:197-203` (right reaches `|_{J=0}`) and `ch1:144-161` (no margin/number
+overhang).
+
+**Lane.** Renderer paper, `paperModel.ts` `mathBoxesByPage` (1 function — same
+owner as BUG-36/38). Branch off main.
