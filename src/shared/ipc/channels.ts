@@ -27,6 +27,8 @@ export const IpcChannels = {
   documentDelete: 'document:delete',       // invoke {relPath: string} → FileMutationResult
   documentCreateFile: 'document:createFile',     // invoke {dir: string; name: string} → FileMutationResult
   documentCreateFolder: 'document:createFolder', // invoke {dir: string; name: string} → FileMutationResult
-  documentUpload: 'document:upload'              // invoke {dir: string} → FileMutationResult (main shows OS picker)
+  documentUpload: 'document:upload',             // invoke {dir: string} → FileMutationResult (main shows OS picker)
+  editorCloseActiveTab: 'editor:closeActiveTab', // main→renderer event: ⌘W from the menu (renderer closes the active tab)
+  windowClose: 'window:close'                    // invoke → void — close the focused window (⌘W with no tabs open)
 } as const
 export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels]

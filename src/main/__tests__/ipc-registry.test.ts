@@ -10,6 +10,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { IpcChannels } from '../../shared/ipc'
 import type { ClaudeResult } from '../../shared/ipc/claude'
 import type { FileMutationResult, PrimeStep } from '../../shared/ipc/document'
 import { DefaultProcessRunner } from '../infra/ProcessRunner'
@@ -20,6 +21,7 @@ const h = vi.hoisted(() => ({
   sent: [] as { channel: string; payload: unknown }[],
   userData: '',
   openDialog: { canceled: true, filePaths: [] as string[] },
+  closed: false,
 }))
 
 vi.mock('electron', () => ({
@@ -36,6 +38,7 @@ vi.mock('electron', () => ({
         },
       },
     ],
+    getFocusedWindow: () => ({ close: () => { h.closed = true } }),
   },
   dialog: { showOpenDialog: async () => h.openDialog },
 }))
@@ -81,6 +84,7 @@ beforeEach(() => {
   h.handlers.clear()
   h.sent = []
   h.openDialog = { canceled: true, filePaths: [] }
+  h.closed = false
   registerIpcHandlers()
 })
 
@@ -282,6 +286,18 @@ describe('file management channels (v0.2)', () => {
     await git.switchBack()
 
     await expect(invoke('document:delete', { relPath: 'main.tex' })).rejects.toThrow('FILE_LOCKED')
+  })
+})
+
+describe('editor ⌘W channels (Part B)', () => {
+  test('window:close is bound and closes the focused window', async () => {
+    expect(h.handlers.has('window:close')).toBe(true)
+    await invoke('window:close')
+    expect(h.closed).toBe(true)
+  })
+
+  test('editor:closeActiveTab is a registered channel (menu→renderer event)', () => {
+    expect(Object.values(IpcChannels)).toContain('editor:closeActiveTab')
   })
 })
 

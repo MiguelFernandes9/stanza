@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import type { JSX } from 'react'
-import { Toast } from '@renderer/components'
+import { ConfirmDialog, Toast } from '@renderer/components'
 import { client } from '@renderer/lib/client'
 import type { BlockNode } from '@shared/blocks/types'
 import type {
@@ -17,7 +17,16 @@ import type { ChatMessage, ComposeChip } from '../chat/ChatPane'
 import { AUTO_COMPILE_MS, createDebounce } from '../editor/autoCompile'
 import { EditorPane } from '../editor/EditorPane'
 import type { EditorApi } from '../editor/EditorPane'
-import { closeTab, deleteTabs, openTab, renameTabs, type TabState } from '../editor/openFilesModel'
+import { EMPTY_CONTEXT, loadProjectContext } from '../editor/completion/projectContext'
+import type { ProjectContext } from '../editor/completion/projectContext'
+import {
+  closeTab,
+  decideCloseActive,
+  deleteTabs,
+  openTab,
+  renameTabs,
+  type TabState
+} from '../editor/openFilesModel'
 import { PaperPane } from '../paper/PaperPane'
 import type { PdfFlash } from '../paper/PaperPane'
 import { expandIds, flattenBlocks, spanLabel, taskSpans } from '../paper/paperModel'
@@ -62,6 +71,10 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
   blocksRef.current = blocks
   const tasksRef = useRef(state.tasks)
   tasksRef.current = state.tasks
+  // Latest file list, read inside the (stable) project-context loader without
+  // re-creating it on every file change.
+  const filesRef = useRef(files)
+  filesRef.current = files
 
   useEffect(() => {
     if (!toast) return
@@ -75,7 +88,9 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
   }, [chatOpen])
 
   const [opRecords, setOpRecords] = useState<OpRecord[]>([])
-  const [activeFile, setActiveFile] = useState(doc.mainFile)
+  // Nothing is open at first — the editor shows its placeholder until the user
+  // opens a file (sidebar click or PDF inverse search).
+  const [activeFile, setActiveFile] = useState('')
   const [compileErrors, setCompileErrors] = useState<CompileError[]>([])
   const [pdfState, setPdfState] = useState<{ rel: string; nonce: number } | null>(null)
   const [pdfFlash, setPdfFlash] = useState<PdfFlash | null>(null)
@@ -83,9 +98,12 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
   const [renameOnAppear, setRenameOnAppear] = useState<string | null>(null)
   const clearRenameOnAppear = useCallback(() => setRenameOnAppear(null), [])
   const editorApi = useRef<EditorApi | null>(null)
-  // Editor tab set (source of truth; EditorPane renders it). Starts with the
-  // main file; reset alongside activeFile when the document changes.
-  const [openFiles, setOpenFiles] = useState<string[]>([doc.mainFile])
+  // Editor tab set (source of truth; EditorPane renders it). Starts empty;
+  // reset alongside activeFile when the document changes.
+  const [openFiles, setOpenFiles] = useState<string[]>([])
+  // Project facts for autocomplete (file tree + \label index + .bib keys),
+  // rebuilt on file-tree change and after each successful compile.
+  const [editorContext, setEditorContext] = useState<ProjectContext>(EMPTY_CONTEXT)
 
   // Reset the editor on a document SWITCH (root changes), not on every in-place
   // file mutation. A rename/delete returns a fresh DocumentInfo (new object,
@@ -93,9 +111,9 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
   // just applied; keying on `doc.root` only resets when a different project
   // opens.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => setActiveFile(doc.mainFile), [doc.root])
+  useEffect(() => setActiveFile(''), [doc.root])
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => setOpenFiles([doc.mainFile]), [doc.root])
+  useEffect(() => setOpenFiles([]), [doc.root])
 
   // Live tab snapshot for the stable open/close callbacks: EditorPane captures
   // onSelectFile once (its register effect), so the handlers must read the
@@ -112,16 +130,30 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
   // reveals the pane.
   const openFile = useCallback((relPath: string) => applyTabs(openTab(tab.current, relPath)), [applyTabs])
   const closeFile = useCallback(
-    (relPath: string) => applyTabs(closeTab(tab.current, relPath, doc.mainFile)),
-    [applyTabs, doc.mainFile]
+    (relPath: string) => applyTabs(closeTab(tab.current, relPath)),
+    [applyTabs]
   )
-  // ⌘E / TitleBar toggle. Reopening after the last tab was closed (openFiles
-  // empty) re-seeds the active file so the revealed pane is never tab-less.
-  const toggleSource = useCallback(() => {
-    const t = tab.current
-    if (!t.sourceOpen && t.openFiles.length === 0) setOpenFiles([t.activeFile])
-    setSourceOpen((v) => !v)
-  }, [])
+  // ⌘E / TitleBar toggle. Revealing the pane with no file open shows the
+  // placeholder (no main-file re-seed) — opening a file is an explicit action.
+  const toggleSource = useCallback(() => setSourceOpen((v) => !v), [])
+
+  // The file ⌘W is asking to close when its buffer is dirty — drives the
+  // save/discard/cancel prompt. null when no prompt is up.
+  const [pendingClose, setPendingClose] = useState<string | null>(null)
+
+  // ⌘W (from the app menu, not a DOM keydown): close the active tab; when none
+  // is open, close the window; when the active buffer is dirty, prompt first.
+  useEffect(
+    () =>
+      client.onEditorCloseActiveTab(() => {
+        const api = editorApi.current
+        const intent = decideCloseActive(tab.current, (f) => api?.isDirty(f) ?? false)
+        if (intent.kind === 'window') void client.windowClose()
+        else if (intent.kind === 'close') closeFile(intent.file)
+        else setPendingClose(intent.file)
+      }),
+    [closeFile]
+  )
 
   // FR4 stale-PDF rule: a failed compile keeps the last good render — the
   // nonce only bumps on ok, which busts the stanza-doc:// cache.
@@ -157,6 +189,16 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
     void client.documentFiles().then(setFiles, () => setFiles([]))
   }, [])
 
+  // Rebuild the autocomplete project context: scan every .tex for \label and
+  // parse .bib keys (reads files via IPC). Cheap and debounced by its callers —
+  // file-tree changes and post-compile, never per keystroke.
+  const loadProjectCtx = useCallback(() => {
+    void loadProjectContext(filesRef.current, doc.mainFile, client.documentRead).then(
+      setEditorContext,
+      () => undefined
+    )
+  }, [doc.mainFile])
+
   useEffect(() => {
     loadFiles()
     // Blocks for the whole project (all \include'd files), not just main —
@@ -165,6 +207,10 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
     loadHistory()
     loadOps()
   }, [doc, loadFiles, loadBlocks, loadHistory, loadOps])
+
+  // Refresh autocomplete data when the file tree changes (new/renamed/deleted
+  // files, and the initial listing).
+  useEffect(() => loadProjectCtx(), [files, loadProjectCtx])
 
   // Pending proposals re-emitted on open (crash recovery, FR7).
   useEffect(
@@ -184,9 +230,11 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
           // Re-map block overlays against the recompiled source — without this
           // they keep the previous PDF's spans until a window reopen (BUG-15).
           loadBlocks()
+          // Refresh \label/\cite completion data against the just-saved source.
+          loadProjectCtx()
         }
       }),
-    [loadBlocks]
+    [loadBlocks, loadProjectCtx]
   )
 
   const runCompile = useCallback(() => {
@@ -224,6 +272,7 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
 
   // F7 — synctex both directions.
   const forwardSearch = (line: number): void => {
+    if (!activeFile) return // no active file → no forward search
     void client.synctexForward({ file: activeFile, startLine: line, endLine: line }).then(
       (rects) => {
         const r = rects[0]
@@ -341,7 +390,7 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
       () => client.documentDelete({ relPath }),
       // Drop the tab(s) under the deleted path, then reactivate a neighbour
       // (or hide the pane when nothing is left open).
-      (res) => applyTabs(deleteTabs(tab.current, relPath, res.doc?.mainFile ?? doc.mainFile))
+      () => applyTabs(deleteTabs(tab.current, relPath))
     )
 
   const onDuplicateFile = (relPath: string): void =>
@@ -549,6 +598,7 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
             width={panes.editor}
             activeFile={activeFile}
             openFiles={openFiles}
+            projectContext={editorContext}
             onSelectFile={openFile}
             onCloseFile={closeFile}
             onDocChanged={() => debounce.trigger()}
@@ -598,6 +648,33 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
         <div style={{ position: 'fixed', top: 50, right: 16, zIndex: 120 }}>
           <Toast title={toast.title} message={toast.message} tone={toast.tone} onDismiss={() => setToast(null)} />
         </div>
+      )}
+      {pendingClose && (
+        <ConfirmDialog
+          title="Unsaved changes"
+          message={`Save changes to ${pendingClose.split('/').pop()} before closing?`}
+          actions={[
+            { label: 'Cancel', variant: 'secondary', onClick: () => setPendingClose(null) },
+            {
+              label: 'Discard',
+              variant: 'danger',
+              onClick: () => {
+                editorApi.current?.discard(pendingClose)
+                closeFile(pendingClose)
+                setPendingClose(null)
+              }
+            },
+            {
+              label: 'Save',
+              variant: 'primary',
+              onClick: () => {
+                void editorApi.current?.saveFile(pendingClose).then(() => closeFile(pendingClose))
+                setPendingClose(null)
+              }
+            }
+          ]}
+          onCancel={() => setPendingClose(null)}
+        />
       )}
     </div>
   )

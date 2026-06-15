@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { DocumentInfo } from '@shared/ipc'
 import { EditorPane } from './EditorPane'
+import { EMPTY_CONTEXT } from './completion/projectContext'
 
 const doc: DocumentInfo = {
   root: '/proj',
@@ -18,6 +19,7 @@ function markup(openFiles: string[], activeFile = 'main.tex'): string {
       width={320}
       activeFile={activeFile}
       openFiles={openFiles}
+      projectContext={EMPTY_CONTEXT}
       onSelectFile={noop}
       onCloseFile={noop}
       onDocChanged={noop}
@@ -41,5 +43,12 @@ describe('EditorPane tab bar', () => {
     const html = markup(['main.tex', 'ch1.tex'])
     expect(html).toContain('Close main.tex')
     expect(html).toContain('Close ch1.tex')
+  })
+
+  it('shows a placeholder and no tabs when no file is open', () => {
+    const html = markup([], '')
+    expect(html).toContain('No file open')
+    // No tab chips, no close affordances.
+    expect(html).not.toContain('Close main.tex')
   })
 })

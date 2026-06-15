@@ -77,6 +77,12 @@ export function registerIpcHandlers(): void {
   // as a project (document:open's picker would open it).
   ipcMain.handle(IpcChannels.dialogPickDirectory, () => pickFolder())
 
+  // ⌘W with no editor tab open falls back to the old close-window behaviour
+  // (the renderer decides tab-vs-window and only invokes this for the latter).
+  ipcMain.handle(IpcChannels.windowClose, () => {
+    BrowserWindow.getFocusedWindow()?.close()
+  })
+
   ipcMain.handle(IpcChannels.documentRecents, (): RecentProject[] =>
     store
       .listProjects()

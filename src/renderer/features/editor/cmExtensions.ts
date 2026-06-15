@@ -1,9 +1,15 @@
+import { autocompletion, completionKeymap } from '@codemirror/autocomplete'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
 import { bracketMatching, defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { lintGutter } from '@codemirror/lint'
 import { EditorView, drawSelection, highlightActiveLine, keymap, lineNumbers } from '@codemirror/view'
-import { latex } from 'codemirror-lang-latex'
+import { latex, latexCompletionSource } from 'codemirror-lang-latex'
 import type { Extension } from '@codemirror/state'
+import { citeSource } from './completion/citeSource'
+import { projectContextField } from './completion/contextFacet'
+import { filePathSource } from './completion/filePathSource'
+import { AUTO_CLOSE_TAGS, latexConfig } from './completion/latexConfig'
+import { refSource } from './completion/refSource'
 
 /** Editor chrome per design §2 SourceEditor: JetBrains Mono 13px/1.75,
  *  46px right-aligned gutter in ink-300, paper surfaces. */
@@ -35,7 +41,14 @@ const stanzaTheme = EditorView.theme({
 })
 
 /** Static extension set; per-instance pieces (updateListener, keymaps that
- *  close over component state) are appended by EditorPane. */
+ *  close over component state) are appended by EditorPane.
+ *
+ *  Completion (Part C): the lib is turned fully on via `latexConfig` (commands,
+ *  snippets, env auto-close, hover tooltips) and we add ONE `autocompletion`
+ *  with an override that runs the lib's `latexCompletionSource` alongside our
+ *  project-aware sources (file paths, `\ref` labels, `\cite` keys). The sources
+ *  read the project context from `projectContextField`, which Workspace keeps
+ *  fresh. Lint stays off — the compile-error gutter owns diagnostics. */
 export function baseExtensions(): Extension[] {
   return [
     lineNumbers(),
@@ -44,9 +57,16 @@ export function baseExtensions(): Extension[] {
     highlightActiveLine(),
     bracketMatching(),
     syntaxHighlighting(defaultHighlightStyle),
-    latex({ autoCloseTags: false, enableLinting: false, enableTooltips: false }),
+    latex(latexConfig()),
+    projectContextField,
+    autocompletion({
+      override: [filePathSource, refSource, citeSource, latexCompletionSource(AUTO_CLOSE_TAGS)],
+      defaultKeymap: false,
+      activateOnTyping: true,
+      icons: true
+    }),
     lintGutter(),
-    keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
+    keymap.of([...completionKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
     stanzaTheme,
     EditorView.lineWrapping
   ]

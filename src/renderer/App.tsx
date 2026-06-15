@@ -20,6 +20,14 @@ export default function App(): JSX.Element {
     )
   }, [])
 
+  // Before a document opens there are no tabs, so ⌘W keeps its old meaning:
+  // close the window. Once a doc is open the Workspace owns the channel and
+  // decides tab-vs-window, so this listener stands down.
+  useEffect(() => {
+    if (doc) return
+    return client.onEditorCloseActiveTab(() => void client.windowClose())
+  }, [doc])
+
   if (!doc) return <OpenScreen onOpened={setDoc} />
   return <Workspace doc={doc} onDocChanged={setDoc} />
 }
