@@ -37,8 +37,9 @@ interface Props {
   onCloseFile: (file: string) => void
   /** Drag-reorder tabs — Workspace reorders the open-files set. */
   onReorder: (draggedFile: string, dropTargetFile: string) => void
-  /** Any buffer edit — F6 debounce hook. */
-  onDocChanged: () => void
+  /** ⌘S — save the active file to disk, then compile (trigger 1). Editing a
+   *  buffer no longer compiles; the PDF refreshes only on this explicit save. */
+  onSaveActiveAndCompile: () => void
   errors: CompileError[]
   /** ⌘-click in the editor — synctex forward (F7). */
   onForwardSearch: (line: number) => void
@@ -59,7 +60,7 @@ export function EditorPane({
   onSelectFile,
   onCloseFile,
   onReorder,
-  onDocChanged,
+  onSaveActiveAndCompile,
   errors,
   onForwardSearch,
   register
@@ -68,6 +69,10 @@ export function EditorPane({
   const viewRef = useRef<EditorView | null>(null)
   const buffers = useRef(new Map<string, string>())
   const activeFileRef = useRef(activeFile)
+  // The Mod-s keymap is built once; route it through a ref so ⌘S always invokes
+  // the latest handler (it closes over Workspace's current active file).
+  const saveAndCompileRef = useRef(onSaveActiveAndCompile)
+  saveAndCompileRef.current = onSaveActiveAndCompile
   const pendingJump = useRef<{ file: string; line: number } | null>(null)
   const [dirty, setDirty] = useState<Set<string>>(new Set())
   const [cursor, setCursor] = useState({ line: 1, col: 1 })
@@ -132,16 +137,17 @@ export function EditorPane({
             {
               key: 'Mod-s',
               run: () => {
-                void saveDirty()
+                saveAndCompileRef.current() // save active file → compile (trigger 1)
                 return true
               }
             }
           ]),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) {
+              // Stage the edit in the buffer + mark the tab dirty; typing never
+              // compiles now — the PDF refreshes only on ⌘S / ⌘R / accept.
               buffers.current.set(activeFileRef.current, update.state.doc.toString())
               markDirty(activeFileRef.current, true)
-              onDocChanged()
             }
             if (update.selectionSet || update.docChanged) {
               const head = update.state.selection.main.head

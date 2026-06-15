@@ -14,7 +14,7 @@ import type {
 } from '@shared/ipc'
 import { ChatPane } from '../chat/ChatPane'
 import type { ChatMessage, ComposeChip } from '../chat/ChatPane'
-import { AUTO_COMPILE_MS, createDebounce } from '../editor/autoCompile'
+import { saveActiveAndCompile, saveAllAndCompile } from './compileTriggers'
 import { EditorPane } from '../editor/EditorPane'
 import type { EditorApi } from '../editor/EditorPane'
 import { EMPTY_CONTEXT, loadProjectContext } from '../editor/completion/projectContext'
@@ -187,8 +187,8 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
 
   // Re-fetch the whole-project block tree. Called on open AND after every
   // successful compile, so overlays map against the recompiled source's spans
-  // instead of the pre-edit ones (BUG-15). Accept→recompile and debounced
-  // save both surface through onCompileStatus('ok').
+  // instead of the pre-edit ones (BUG-15). Every compile trigger (⌘S, ⌘R,
+  // accept) surfaces through onCompileStatus('ok').
   const loadBlocks = useCallback(() => {
     void client.documentProjectBlocks().then((fresh) => {
       // A reparse can renumber a pending block's positional id while its hash
@@ -272,12 +272,24 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
     )
   }, [])
 
-  // F6.1: edits debounce into save → compile; ⌘R / ⌘⏎ flush immediately.
-  const saveAndCompile = useCallback(() => {
-    void (editorApi.current?.saveDirty() ?? Promise.resolve([])).then(runCompile)
-  }, [runCompile])
-  const debounce = useMemo(() => createDebounce(AUTO_COMPILE_MS, saveAndCompile), [saveAndCompile])
-  useEffect(() => () => debounce.cancel(), [debounce])
+  // Compile fires only on explicit actions (docs/compile-triggers.md): editing
+  // a buffer never compiles — disk is the source of truth and the PDF holds the
+  // last good compile until one of these writes-and-rebuilds.
+  // ⌘R / recompile button (trigger 3): save ALL dirty buffers, then compile.
+  const saveAndCompile = useCallback(
+    () => void saveAllAndCompile(() => editorApi.current?.saveDirty() ?? Promise.resolve([]), runCompile),
+    [runCompile]
+  )
+  // ⌘S (trigger 1): save the ACTIVE file only, then compile.
+  const onSaveActiveAndCompile = useCallback(
+    () =>
+      void saveActiveAndCompile(
+        activeFile,
+        (file) => editorApi.current?.saveFile(file) ?? Promise.resolve(),
+        runCompile
+      ),
+    [activeFile, runCompile]
+  )
 
   // First compile on open, so the real PDF replaces the filler page (F5).
   useEffect(() => {
@@ -317,7 +329,7 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
       const key = e.key.toLowerCase()
       if (key === 'r' || key === 'enter') {
         e.preventDefault()
-        debounce.flush()
+        saveAndCompile()
         return
       }
       if (key === 'e') {
@@ -359,7 +371,7 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [debounce, toggleSource])
+  }, [saveAndCompile, toggleSource])
 
   const pageBlocks = flattenBlocks(blocks)
 
@@ -613,7 +625,7 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
         title={projectName}
         mainFile={doc.mainFile}
         compile={compile}
-        onCompile={() => debounce.flush()}
+        onCompile={saveAndCompile}
         sourceOpen={sourceOpen}
         onToggleSource={toggleSource}
         chatOpen={chatOpen}
@@ -655,7 +667,7 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
             onSelectFile={openFile}
             onCloseFile={closeFile}
             onReorder={reorderFiles}
-            onDocChanged={() => debounce.trigger()}
+            onSaveActiveAndCompile={onSaveActiveAndCompile}
             errors={editorErrors}
             onForwardSearch={forwardSearch}
             register={(api) => {
