@@ -25,6 +25,9 @@ interface Props {
   /** Display-math block — its box hugs the formula, so the pill goes in the
    *  left margin instead of over the glyphs (BUG-35). */
   math: boolean
+  /** Block sits at the page's content-band top — tuck the pill inside so it
+   *  doesn't lift into the running head (M2-6). */
+  atBandTop: boolean
   onEnter: () => void
   onLeave: () => void
   onClick: (e: React.MouseEvent) => void
@@ -56,6 +59,7 @@ export function BlockOverlay({
   selectMode,
   tight,
   math,
+  atBandTop,
   onEnter,
   onLeave,
   onClick
@@ -64,7 +68,7 @@ export function BlockOverlay({
   // Owned → the task's phase color (busy reads as a neutral lock, matching the
   // mock); unselected → the neutral ink pill with the block's span.
   const pillBg = mark ? (mark.phase === 'busy' ? 'var(--ink-500)' : phaseTone(mark.phase).accent) : 'var(--ink-700)'
-  const pill = pillPlacement({ math, tight })
+  const pill = pillPlacement({ math, tight, atBandTop })
 
   return (
     <div
