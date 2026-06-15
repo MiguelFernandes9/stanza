@@ -31,24 +31,38 @@ interface ViewportLike {
  *  fraction of a line height — absorbs sub/superscripts without merging lines. */
 const BASELINE_TOL = 0.5
 
+/** Glyph descent below the baseline as a fraction of the font height (pdf.js
+ *  `height` ≈ the em). The row box runs [baseline − (height − descent),
+ *  baseline + descent], so it encloses descenders and sits no higher than the
+ *  ascent — without this the baseline-relative box clipped p/g/y/q tails and
+ *  left headroom above the first line (M2-8). ~0.2 is the standard descent;
+ *  tune against the live demo if a descender still pokes out. */
+const DESCENT_FRACTION = 0.2
+
 /** Convert pdf.js text items to top-left rows and cluster them by baseline.
  *  pdf.js item geometry is bottom-up: `transform[4,5]` is the baseline origin
  *  (e, f) in user space, `height` ≈ the font size. `convertToViewportPoint`
- *  flips to top-left, so the baseline maps to the row BOTTOM and the row top is
- *  one font-height above it. Pure; the viewport is injectable for testing. */
+ *  flips to top-left, so the baseline maps near the row BOTTOM. The box is made
+ *  descent-aware — [baseline − ascent, baseline + descent] — so it encloses the
+ *  descenders and leaves no headroom above (M2-8). Pure; viewport injectable. */
 export function textRows(items: TextItemLike[], viewport: ViewportLike): TextRow[] {
   const cells = items
     .filter((it) => typeof it.str === 'string' && it.str.trim() !== '' && it.height > 0 && it.width > 0)
     .map((it) => {
       const [bx, by] = viewport.convertToViewportPoint(it.transform[4]!, it.transform[5]!)
-      return { xLeft: bx!, xRight: bx! + it.width, baseline: by!, yBottom: by!, yTop: by! - it.height }
+      const descent = it.height * DESCENT_FRACTION
+      // baseline stays the partition key (BUG-41); only the box EXTENT moves —
+      // bottom drops to baseline+descent, top rises only to the ascent line.
+      return { xLeft: bx!, xRight: bx! + it.width, baseline: by!, yBottom: by! + descent, yTop: by! - (it.height - descent) }
     })
     .sort((a, b) => a.baseline - b.baseline)
 
   const rows: TextRow[] = []
   for (const c of cells) {
     const last = rows[rows.length - 1]
-    const tol = (c.baseline - c.yTop) * BASELINE_TOL
+    // Full row height = yBottom − yTop (the em), so the merge tolerance is the
+    // same ~0.5·height as before the descent change — partitioning unchanged.
+    const tol = (c.yBottom - c.yTop) * BASELINE_TOL
     if (last && Math.abs(c.baseline - last.baseline) <= tol) {
       last.baseline = Math.max(last.baseline, c.baseline)
       last.yTop = Math.min(last.yTop, c.yTop)
