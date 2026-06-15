@@ -388,140 +388,159 @@ export function PaperPane(props: Props): JSX.Element {
           // offset → no sideways jitter; `safe center` degrades to start when the
           // page is wider than the pane, so a narrow pane scrolls from the page's
           // left edge instead of clipping it.
-          <div style={{ display: 'flex', justifyContent: 'safe center', minHeight: '100%' }}>
-          <div
-            style={{
-              position: 'relative',
-              width: pageWidth,
-              height: contentH,
-              flex: '0 0 auto',
-              overflow: 'visible'
-            }}
-          >
-            {/* connector lines: one bezier per open bubble */}
-            <svg
-              width={cW}
-              height={contentH}
-              style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', overflow: 'visible' }}
-            >
-              {openTasks.map((t) => {
-                const anchor = anchorTops[t.id]
-                if (anchor == null) return null // geometry not ready (BUG-32)
-                const by = PAD + anchor + 12
-                const cy = PAD + (tops[t.id] ?? 0) + 22
-                return (
-                  <path
-                    key={t.id}
-                    d={connectorPath(pageRightX, railLeft, by, cy)}
-                    fill="none"
-                    stroke={phaseTone(t.phase).accent}
-                    strokeWidth={2}
-                    opacity={0.7}
-                  />
-                )
-              })}
-            </svg>
-
-            {/* the page, at the track origin (the track itself is centred) */}
-            <div style={{ position: 'absolute', left: 0, top: PAD, width: pageWidth }}>
-              <PdfPageStack
-                pdf={pdf}
-                scale={zoom}
-                scrollRef={scrollRef}
-                onGeometry={(g, n) => {
-                  setGeo(g)
-                  setNumPages(n)
-                }}
-                overlay={overlaysFor}
-                onPageClick={(pageNo, x, y) => {
-                  if (state.view === 'read') onInverseSearch(pageNo, x, y)
-                }}
-              />
-            </div>
-
-            {/* state badges at the page's right edge — click to open the bubble */}
-            {state.tasks.map((t) => {
-              const anchor = anchorTops[t.id]
-              if (anchor == null) return null // hide until geometry resolves (BUG-32)
-              const tone = phaseTone(t.phase)
-              const Icon = t.phase === 'review' ? Check : t.phase === 'busy' ? Sparkles : t.phase === 'noop' ? CircleSlash : PenLine
-              const isOpen = openIds.includes(t.id)
-              const label = badgeLabel(t.phase)
-              return (
-                <button
-                  key={t.id}
-                  onClick={() => toggleOpen(t.id)}
-                  aria-label={label}
-                  title={`${label}${t.instruction ? ` — ${t.instruction}` : ''}`}
-                  style={{
-                    position: 'absolute',
-                    left: pageRightX - 13,
-                    top: PAD + anchor,
-                    width: BADGE,
-                    height: BADGE,
-                    borderRadius: '50%',
-                    border: '2px solid var(--paper-2)',
-                    padding: 0,
-                    background: tone.accent,
-                    color: '#fff',
-                    boxShadow: isOpen ? `0 0 0 3px ${tone.edge}, var(--shadow-md)` : 'var(--shadow-md)',
-                    cursor: 'pointer',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    transform: isOpen ? 'scale(1.08)' : 'none',
-                    transition: 'top var(--dur-base, 200ms) var(--ease-out)',
-                    zIndex: 6,
-                    animation: t.phase === 'busy' ? 'stz-pulse 1.1s var(--ease-in-out) infinite' : 'none'
+          <div style={{ position: 'relative', display: 'flex', justifyContent: 'safe center', minHeight: '100%' }}>
+            {/* The PAGE is the only flow child, so it alone sets the scroll
+                container's width: centred when it fits the pane, scrolled from
+                its own left edge when the pane is narrower (#69). */}
+            <div style={{ position: 'relative', width: pageWidth, height: contentH, flex: '0 0 auto' }}>
+              <div style={{ position: 'absolute', left: 0, top: PAD, width: pageWidth }}>
+                <PdfPageStack
+                  pdf={pdf}
+                  scale={zoom}
+                  scrollRef={scrollRef}
+                  onGeometry={(g, n) => {
+                    setGeo(g)
+                    setNumPages(n)
                   }}
-                >
-                  <Icon size={14} />
-                </button>
-              )
-            })}
-
-            {/* open bubbles, each a TaskCard in the right rail (collision-stacked) */}
-            {openTasks.map((t) => {
-              // No bubble until its block geometry resolves (BUG-32); a
-              // null-anchor task isn't stacked, so it has no real top yet.
-              if (anchorTops[t.id] == null) return null
-              return (
-              <div
-                key={t.id}
-                style={{
-                  position: 'absolute',
-                  left: railLeft,
-                  top: PAD + (tops[t.id] ?? 0),
-                  width: RAIL,
-                  zIndex: 7,
-                  transition: 'top var(--dur-base, 200ms) var(--ease-out)'
-                }}
-              >
-                <TaskCard
-                  task={t}
-                  blocks={blocksOf(t.blockIds)}
-                  expanded
-                  side="right"
-                  adding={state.adding}
-                  onToggleAdding={props.onToggleAdding}
-                  onRemoveBlock={(bid) => props.onRemoveBlock(t.id, bid)}
-                  onActivate={() => props.onActivateTask(t.id)}
-                  refCb={(el) => {
-                    cardEls.current[t.id] = el
+                  overlay={overlaysFor}
+                  onPageClick={(pageNo, x, y) => {
+                    if (state.view === 'read') onInverseSearch(pageNo, x, y)
                   }}
-                  onUpdate={(instruction) => props.onUpdateInstruction(t.id, instruction)}
-                  onSubmit={() => props.onSubmitTask(t.id)}
-                  onDismiss={() => {
-                    props.onDismissTask(t.id)
-                    setOpenIds((s) => s.filter((x) => x !== t.id))
-                  }}
-                  onResolve={(accept) => props.onResolveTask(t.id, accept)}
-                  onOpenReview={() => setReviewId(t.id)}
                 />
               </div>
-              )
-            })}
-          </div>
+            </div>
+
+            {/* Rail + connector OVERLAY — absolute and clipped to the PANE (not
+                the page). The badges/bubbles/svg hang off the page's right edge
+                and render whenever there's room, but because the clip box is the
+                pane they never extend the scroll container's horizontal
+                scrollWidth — so a hover / ⌘E / ⌘J reflow can't tip a borderline
+                cW-wide overlay into spawning an h-scrollbar (#69 caveat). The
+                inner pageWidth box is centred exactly like the page, so its
+                page-relative offsets (pageRightX, railLeft) still land on the
+                page's right edge. pointer-events:none lets clicks fall through to
+                the page; the interactive badges/bubbles opt back in. */}
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                overflow: 'clip',
+                display: 'flex',
+                justifyContent: 'safe center',
+                pointerEvents: 'none'
+              }}
+            >
+              <div style={{ position: 'relative', width: pageWidth, height: contentH, flex: '0 0 auto' }}>
+                {/* connector lines: one bezier per open bubble */}
+                <svg
+                  width={cW}
+                  height={contentH}
+                  style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', overflow: 'visible' }}
+                >
+                  {openTasks.map((t) => {
+                    const anchor = anchorTops[t.id]
+                    if (anchor == null) return null // geometry not ready (BUG-32)
+                    const by = PAD + anchor + 12
+                    const cy = PAD + (tops[t.id] ?? 0) + 22
+                    return (
+                      <path
+                        key={t.id}
+                        d={connectorPath(pageRightX, railLeft, by, cy)}
+                        fill="none"
+                        stroke={phaseTone(t.phase).accent}
+                        strokeWidth={2}
+                        opacity={0.7}
+                      />
+                    )
+                  })}
+                </svg>
+
+                {/* state badges at the page's right edge — click to open the bubble */}
+                {state.tasks.map((t) => {
+                  const anchor = anchorTops[t.id]
+                  if (anchor == null) return null // hide until geometry resolves (BUG-32)
+                  const tone = phaseTone(t.phase)
+                  const Icon = t.phase === 'review' ? Check : t.phase === 'busy' ? Sparkles : t.phase === 'noop' ? CircleSlash : PenLine
+                  const isOpen = openIds.includes(t.id)
+                  const label = badgeLabel(t.phase)
+                  return (
+                    <button
+                      key={t.id}
+                      onClick={() => toggleOpen(t.id)}
+                      aria-label={label}
+                      title={`${label}${t.instruction ? ` — ${t.instruction}` : ''}`}
+                      style={{
+                        position: 'absolute',
+                        left: pageRightX - 13,
+                        top: PAD + anchor,
+                        width: BADGE,
+                        height: BADGE,
+                        borderRadius: '50%',
+                        border: '2px solid var(--paper-2)',
+                        padding: 0,
+                        background: tone.accent,
+                        color: '#fff',
+                        boxShadow: isOpen ? `0 0 0 3px ${tone.edge}, var(--shadow-md)` : 'var(--shadow-md)',
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        transform: isOpen ? 'scale(1.08)' : 'none',
+                        transition: 'top var(--dur-base, 200ms) var(--ease-out)',
+                        zIndex: 6,
+                        pointerEvents: 'auto',
+                        animation: t.phase === 'busy' ? 'stz-pulse 1.1s var(--ease-in-out) infinite' : 'none'
+                      }}
+                    >
+                      <Icon size={14} />
+                    </button>
+                  )
+                })}
+
+                {/* open bubbles, each a TaskCard in the right rail (collision-stacked) */}
+                {openTasks.map((t) => {
+                  // No bubble until its block geometry resolves (BUG-32); a
+                  // null-anchor task isn't stacked, so it has no real top yet.
+                  if (anchorTops[t.id] == null) return null
+                  return (
+                    <div
+                      key={t.id}
+                      style={{
+                        position: 'absolute',
+                        left: railLeft,
+                        top: PAD + (tops[t.id] ?? 0),
+                        width: RAIL,
+                        zIndex: 7,
+                        pointerEvents: 'auto',
+                        transition: 'top var(--dur-base, 200ms) var(--ease-out)'
+                      }}
+                    >
+                      <TaskCard
+                        task={t}
+                        blocks={blocksOf(t.blockIds)}
+                        expanded
+                        side="right"
+                        adding={state.adding}
+                        onToggleAdding={props.onToggleAdding}
+                        onRemoveBlock={(bid) => props.onRemoveBlock(t.id, bid)}
+                        onActivate={() => props.onActivateTask(t.id)}
+                        refCb={(el) => {
+                          cardEls.current[t.id] = el
+                        }}
+                        onUpdate={(instruction) => props.onUpdateInstruction(t.id, instruction)}
+                        onSubmit={() => props.onSubmitTask(t.id)}
+                        onDismiss={() => {
+                          props.onDismissTask(t.id)
+                          setOpenIds((s) => s.filter((x) => x !== t.id))
+                        }}
+                        onResolve={(accept) => props.onResolveTask(t.id, accept)}
+                        onOpenReview={() => setReviewId(t.id)}
+                      />
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
           </div>
         ) : (
           <div style={{ display: 'flex', justifyContent: 'center', padding: '28px 24px 40px' }}>
