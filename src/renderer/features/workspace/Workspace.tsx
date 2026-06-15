@@ -17,6 +17,7 @@ import type { ChatMessage, ComposeChip } from '../chat/ChatPane'
 import { AUTO_COMPILE_MS, createDebounce } from '../editor/autoCompile'
 import { EditorPane } from '../editor/EditorPane'
 import type { EditorApi } from '../editor/EditorPane'
+import { closeTab, deleteTabs, openTab, renameTabs, type TabState } from '../editor/openFilesModel'
 import { PaperPane } from '../paper/PaperPane'
 import type { PdfFlash } from '../paper/PaperPane'
 import { expandIds, flattenBlocks, spanLabel, taskSpans } from '../paper/paperModel'
@@ -82,8 +83,45 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
   const [renameOnAppear, setRenameOnAppear] = useState<string | null>(null)
   const clearRenameOnAppear = useCallback(() => setRenameOnAppear(null), [])
   const editorApi = useRef<EditorApi | null>(null)
+  // Editor tab set (source of truth; EditorPane renders it). Starts with the
+  // main file; reset alongside activeFile when the document changes.
+  const [openFiles, setOpenFiles] = useState<string[]>([doc.mainFile])
 
-  useEffect(() => setActiveFile(doc.mainFile), [doc])
+  // Reset the editor on a document SWITCH (root changes), not on every in-place
+  // file mutation. A rename/delete returns a fresh DocumentInfo (new object,
+  // same root) — keying on `doc` would clobber the tab remap those handlers
+  // just applied; keying on `doc.root` only resets when a different project
+  // opens.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => setActiveFile(doc.mainFile), [doc.root])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => setOpenFiles([doc.mainFile]), [doc.root])
+
+  // Live tab snapshot for the stable open/close callbacks: EditorPane captures
+  // onSelectFile once (its register effect), so the handlers must read the
+  // current set through a ref, not a stale closure.
+  const tab = useRef<TabState>({ openFiles, activeFile, sourceOpen })
+  tab.current = { openFiles, activeFile, sourceOpen }
+  const applyTabs = useCallback((next: TabState): void => {
+    setOpenFiles(next.openFiles)
+    setActiveFile(next.activeFile)
+    setSourceOpen(next.sourceOpen)
+  }, [])
+  // Every "show this file in the editor" path routes through openFile: sidebar
+  // open, synctex jumps, create/duplicate. Adds a tab if absent, focuses it,
+  // reveals the pane.
+  const openFile = useCallback((relPath: string) => applyTabs(openTab(tab.current, relPath)), [applyTabs])
+  const closeFile = useCallback(
+    (relPath: string) => applyTabs(closeTab(tab.current, relPath, doc.mainFile)),
+    [applyTabs, doc.mainFile]
+  )
+  // ⌘E / TitleBar toggle. Reopening after the last tab was closed (openFiles
+  // empty) re-seeds the active file so the revealed pane is never tab-less.
+  const toggleSource = useCallback(() => {
+    const t = tab.current
+    if (!t.sourceOpen && t.openFiles.length === 0) setOpenFiles([t.activeFile])
+    setSourceOpen((v) => !v)
+  }, [])
 
   // FR4 stale-PDF rule: a failed compile keeps the last good render — the
   // nonce only bumps on ok, which busts the stanza-doc:// cache.
@@ -199,10 +237,11 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
     void client.synctexInverse({ page, x, y }).then(
       (loc) => {
         if (!loc) return
-        setSourceOpen(true)
         // Defensive: synctex once returned absolute realpaths — resolve to a
         // known project file so a regression still jumps instead of no-op'ing.
-        editorApi.current?.jumpTo(resolveToKnownFile(loc.file, doc.texFiles), loc.line)
+        const file = resolveToKnownFile(loc.file, doc.texFiles)
+        openFile(file) // add the tab + reveal the pane before scrolling to it
+        editorApi.current?.jumpTo(file, loc.line)
       },
       () => undefined
     )
@@ -217,7 +256,7 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
         debounce.flush()
       } else if (key === 'e') {
         e.preventDefault()
-        setSourceOpen((v) => !v)
+        toggleSource()
       } else if (key === 'j') {
         e.preventDefault()
         setChatOpen((v) => !v)
@@ -225,7 +264,7 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [debounce])
+  }, [debounce, toggleSource])
 
   const pageBlocks = flattenBlocks(blocks)
 
@@ -292,32 +331,24 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
   const onRenameFile = (from: string, to: string): void =>
     runFileOp(
       () => client.documentRename({ from, to }),
-      () => {
-        // Keep the open tab on the renamed path — a file, or a file carried by
-        // a folder rename (prefix rewrite).
-        if (activeFile === from) setActiveFile(to)
-        else if (activeFile.startsWith(`${from}/`)) setActiveFile(to + activeFile.slice(from.length))
-      }
+      // Carry the open tabs (and the active one) onto the renamed path — a
+      // file, or files swept by a folder rename (prefix rewrite).
+      () => applyTabs(renameTabs(tab.current, from, to))
     )
 
   const onDeleteFile = (relPath: string): void =>
     runFileOp(
       () => client.documentDelete({ relPath }),
-      (res) => {
-        if (activeFile === relPath || activeFile.startsWith(`${relPath}/`)) {
-          setActiveFile(res.doc?.mainFile ?? doc.mainFile)
-        }
-      }
+      // Drop the tab(s) under the deleted path, then reactivate a neighbour
+      // (or hide the pane when nothing is left open).
+      (res) => applyTabs(deleteTabs(tab.current, relPath, res.doc?.mainFile ?? doc.mainFile))
     )
 
   const onDuplicateFile = (relPath: string): void =>
     runFileOp(
       () => client.documentDuplicate({ relPath }),
       (res) => {
-        if (res.newRelPath) {
-          setActiveFile(res.newRelPath)
-          setSourceOpen(true)
-        }
+        if (res.newRelPath) openFile(res.newRelPath)
       }
     )
 
@@ -327,8 +358,7 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
       () => client.documentCreateFile({ dir, name }),
       (res) => {
         if (res.newRelPath) {
-          setActiveFile(res.newRelPath)
-          setSourceOpen(true)
+          openFile(res.newRelPath)
           setRenameOnAppear(res.newRelPath) // drop the user straight into renaming
         }
       }
@@ -483,7 +513,7 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
         compile={compile}
         onCompile={() => debounce.flush()}
         sourceOpen={sourceOpen}
-        onToggleSource={() => setSourceOpen((v) => !v)}
+        onToggleSource={toggleSource}
         chatOpen={chatOpen}
         chatUnread={unreadNotes > 0}
         onToggleChat={() => setChatOpen((v) => !v)}
@@ -500,10 +530,7 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
             dispatch({ type: 'set-view', view: 'select' })
             dispatch({ type: 'toggle-block', ids: expandIds(blocks, id), additive: false })
           }}
-          onOpenFile={(relPath) => {
-            setActiveFile(relPath)
-            setSourceOpen(true)
-          }}
+          onOpenFile={openFile}
           onRename={onRenameFile}
           onDuplicate={onDuplicateFile}
           onDelete={onDeleteFile}
@@ -521,7 +548,9 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
             doc={doc}
             width={panes.editor}
             activeFile={activeFile}
-            onSelectFile={setActiveFile}
+            openFiles={openFiles}
+            onSelectFile={openFile}
+            onCloseFile={closeFile}
             onDocChanged={() => debounce.trigger()}
             errors={editorErrors}
             onForwardSearch={forwardSearch}
