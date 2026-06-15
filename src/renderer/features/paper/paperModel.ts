@@ -390,6 +390,29 @@ export function cardAnchorTops(
 
 const basename = (path: string): string => path.split('/').pop() ?? path
 
+export interface PillPlacement {
+  top: number
+  left: number
+  /** CSS transform, set only for the margin placement. */
+  transform?: string
+}
+
+/** Gap between a math block's left edge and the pill parked in its margin. */
+export const PILL_MARGIN_GAP = 6
+
+/** Where a block's hover/lock pill sits relative to its overlay box.
+ *  - Prose: a flush float (`tight`) tucks the pill INSIDE the box (top 2) so
+ *    its label doesn't land on the line above (BUG-19); otherwise the usual
+ *    -9 lift above the box.
+ *  - Display math: the box hugs the top glyph (mathBoxesByPage) and is
+ *    centered, so `top:2` would print the pill ON the formula and the -9 lift
+ *    would print it on the paragraph above. Park it in the left margin instead
+ *    — beside the formula, at the box top — clear of both (BUG-35). */
+export function pillPlacement(opts: { math: boolean; tight: boolean }): PillPlacement {
+  if (opts.math) return { top: 0, left: -PILL_MARGIN_GAP, transform: 'translateX(-100%)' }
+  return { top: opts.tight ? 2 : -9, left: -1 }
+}
+
 export function spanLabel(span: BlockSpan): string {
   return `${basename(span.file)}:${span.startLine}–${span.endLine}`
 }
