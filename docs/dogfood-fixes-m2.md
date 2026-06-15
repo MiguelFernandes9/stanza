@@ -240,5 +240,51 @@ paragraph early. TDD.
 already merged; no live sibling on parse.ts. Disjoint from BUG-36
 (`paperModel.ts`).
 
-**Status.** Diagnosed + fix empirically verified on the real doc. Not yet
-dispatched.
+**Status.** Shipped PR #60; confirmed live by Miguel.
+
+---
+
+## M2-5 — Toolbar buttons jitter the centered PDF sideways
+
+**Symptom.** Pressing toolbar buttons (top row: Compiled / recompile / source
+`<>` / sparkles / gear; preview row: Read·Select, zoom ±) makes the page
+visibly jitter/jump.
+
+**Root cause** (read-only investigation; Electron drag-region decisively ruled
+out — the `no-drag` opt-out on the titlebar buttons is correct
+([TitleBar.tsx:83](src/renderer/features/workspace/TitleBar.tsx#L83)) AND the
+preview toolbar isn't in the drag region yet still jitters). The PDF scroll
+container is `overflow:auto` with **no `scrollbar-gutter:stable`**
+([PaperPane.tsx:372](src/renderer/features/paper/PaperPane.tsx#L372)).
+`containerW` is read from `clientWidth`
+([PaperPane.tsx:186](src/renderer/features/paper/PaperPane.tsx#L186)) and feeds
+the page-centering math `pageLeft = (containerW - pageW) / 2`
+([paperPaneLayout.ts:28](src/renderer/features/paper/paperPaneLayout.ts#L28)).
+Any button that changes content height (zoom rescale, recompile → new page
+count, source/chat pane mount-unmount → pane width) toggles the vertical
+scrollbar → `clientWidth` jumps by the scrollbar width → ResizeObserver fires →
+`pageLeft` shifts ~7.5px → the centered page slides sideways = the jitter.
+
+**Caveat — confirm live.** Visible only with macOS "Show scroll bars: Always"
+(or a mouse). With overlay scrollbars ("When scrolling", zero width) there's no
+shift; if jitter persists there, the cause is different. Confirm tell: press
+zoom and watch whether the vertical scrollbar toggles and the page slides
+horizontally in lockstep. The fix is correct regardless.
+
+**Fix.** Reserve the gutter — one prop on the scroll container
+([PaperPane.tsx:372](src/renderer/features/paper/PaperPane.tsx#L372)):
+`scrollbarGutter: 'stable'`. Pins `clientWidth` so scrollbar toggling no longer
+re-centers the page. (Optional, separate micro-shift: `SegmentedControl` active
+tab is `semibold` vs inactive `medium` — a sub-pixel tab-width change; give tabs
+a fixed width if noticed.)
+
+**Test.** Layout is hard to unit-test; tsc + manual confirm (jitter gone on
+zoom). If wanted, assert the scroll-container style carries
+`scrollbarGutter:'stable'`.
+
+**Lane.** `src/renderer/features/paper/PaperPane.tsx:372` — a single style prop,
+orthogonal to the geometry logic (`paperModel.ts` / the geometry effects) other
+sessions edit, but the SAME hot file → rebase immediately before pushing.
+
+**Status.** Diagnosed (read-only; high confidence on mechanism, live-confirm
+pending re: OS scrollbar setting). Not yet dispatched.
