@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
   closeTab,
+  cycleTab,
   decideCloseActive,
   deleteTabs,
   openTab,
   renameTabs,
+  reorderTabs,
+  tabForIndex,
   type TabState
 } from './openFilesModel'
 
@@ -138,5 +141,67 @@ describe('decideCloseActive (⌘W)', () => {
       kind: 'prompt',
       file: 'b.tex'
     })
+  })
+})
+
+describe('reorderTabs', () => {
+  it('moves a tab forward, preserving the active tab and the rest of the order', () => {
+    const next = reorderTabs(state(['a.tex', 'b.tex', 'c.tex', 'd.tex'], 'b.tex'), 0, 2)
+    expect(next.openFiles).toEqual(['b.tex', 'c.tex', 'a.tex', 'd.tex'])
+    expect(next.activeFile).toBe('b.tex')
+    expect(next.sourceOpen).toBe(true)
+  })
+
+  it('moves a tab backward', () => {
+    const next = reorderTabs(state(['a.tex', 'b.tex', 'c.tex', 'd.tex'], 'a.tex'), 3, 1)
+    expect(next.openFiles).toEqual(['a.tex', 'd.tex', 'b.tex', 'c.tex'])
+    expect(next.activeFile).toBe('a.tex')
+  })
+
+  it('is a no-op for an unchanged or out-of-range index', () => {
+    const s = state(['a.tex', 'b.tex'], 'a.tex')
+    expect(reorderTabs(s, 1, 1).openFiles).toEqual(['a.tex', 'b.tex'])
+    expect(reorderTabs(s, -1, 0)).toBe(s)
+    expect(reorderTabs(s, 0, 5)).toBe(s)
+  })
+})
+
+describe('tabForIndex (Cmd+1..9)', () => {
+  const files = ['a.tex', 'b.tex', 'c.tex']
+
+  it('maps 1..8 to that 1-based tab', () => {
+    expect(tabForIndex(files, 1)).toBe('a.tex')
+    expect(tabForIndex(files, 2)).toBe('b.tex')
+  })
+
+  it('maps 9 to the LAST tab (browser convention)', () => {
+    expect(tabForIndex(files, 9)).toBe('c.tex')
+    expect(tabForIndex(['only.tex'], 9)).toBe('only.tex')
+  })
+
+  it('is null when there are fewer tabs', () => {
+    expect(tabForIndex(files, 4)).toBeNull()
+    expect(tabForIndex([], 1)).toBeNull()
+  })
+})
+
+describe('cycleTab (Ctrl+Tab / Cmd+Shift+[ ])', () => {
+  const files = ['a.tex', 'b.tex', 'c.tex']
+
+  it('moves to the next tab', () => {
+    expect(cycleTab(files, 'a.tex', 1)).toBe('b.tex')
+  })
+
+  it('moves to the previous tab', () => {
+    expect(cycleTab(files, 'b.tex', -1)).toBe('a.tex')
+  })
+
+  it('wraps around both ends', () => {
+    expect(cycleTab(files, 'c.tex', 1)).toBe('a.tex')
+    expect(cycleTab(files, 'a.tex', -1)).toBe('c.tex')
+  })
+
+  it('is null with no tabs', () => {
+    expect(cycleTab([], '', 1)).toBeNull()
   })
 })

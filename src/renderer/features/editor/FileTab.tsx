@@ -1,4 +1,6 @@
-import type { JSX, MouseEvent } from 'react'
+import type { DragEvent, JSX, MouseEvent } from 'react'
+
+const DRAG_MIME = 'application/x-stanza-tab'
 
 interface Props {
   /** Root-relative path of the open file — keys the tab and is passed back to
@@ -9,16 +11,31 @@ interface Props {
   dirty: boolean
   onSelect: (file: string) => void
   onClose: (file: string) => void
+  /** Drag this tab onto another → reorder: (draggedFile, dropTargetFile). */
+  onReorder: (draggedFile: string, dropTargetFile: string) => void
 }
 
 /** One editor tab: a click-to-focus body (basename + dirty dot) and a trailing
- *  ✕ close button. Presentational — `EditorPane` maps `openFiles` to these and
- *  owns the dirty/active state. Split out so the chip and its interactions are
- *  unit-testable without CodeMirror. */
-export function FileTab({ file, active, dirty, onSelect, onClose }: Props): JSX.Element {
+ *  ✕ close button. Draggable — drop one tab onto another to reorder. Presen-
+ *  tational — `EditorPane` maps `openFiles` to these and owns the dirty/active
+ *  state. Split out so the chip and its interactions are unit-testable without
+ *  CodeMirror. */
+export function FileTab({ file, active, dirty, onSelect, onClose, onReorder }: Props): JSX.Element {
   const name = file.split('/').pop() ?? file
   return (
     <div
+      data-testid="file-tab"
+      draggable
+      onDragStart={(e: DragEvent) => {
+        e.dataTransfer.setData(DRAG_MIME, file)
+        e.dataTransfer.effectAllowed = 'move'
+      }}
+      onDragOver={(e: DragEvent) => e.preventDefault()}
+      onDrop={(e: DragEvent) => {
+        e.preventDefault()
+        const dragged = e.dataTransfer.getData(DRAG_MIME)
+        if (dragged && dragged !== file) onReorder(dragged, file)
+      }}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -27,7 +44,8 @@ export function FileTab({ file, active, dirty, onSelect, onClose }: Props): JSX.
         borderRadius: 'var(--radius-sm)',
         border: `1px solid ${active ? 'var(--border-default)' : 'transparent'}`,
         background: active ? 'var(--surface-card)' : 'transparent',
-        whiteSpace: 'nowrap'
+        whiteSpace: 'nowrap',
+        cursor: 'grab'
       }}
     >
       <button

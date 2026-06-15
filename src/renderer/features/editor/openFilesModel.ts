@@ -54,6 +54,35 @@ export function decideCloseActive(state: TabState, isDirty: (file: string) => bo
   return { kind: 'close', file: state.activeFile }
 }
 
+/** Move the tab at index `from` to index `to`; `activeFile` and the rest of the
+ *  order are preserved. Out-of-range or unchanged indices return `state` as-is.
+ *  Drives drag-to-reorder. */
+export function reorderTabs(state: TabState, from: number, to: number): TabState {
+  const n = state.openFiles.length
+  if (from < 0 || from >= n || to < 0 || to >= n || from === to) return state
+  const openFiles = [...state.openFiles]
+  const [moved] = openFiles.splice(from, 1)
+  openFiles.splice(to, 0, moved)
+  return { ...state, openFiles }
+}
+
+/** The tab to focus for Cmd+<n> (1..9): 1..8 → that 1-based tab; 9 → the LAST
+ *  tab (browser convention). null when there are fewer tabs (no-op). */
+export function tabForIndex(openFiles: string[], n: number): string | null {
+  if (openFiles.length === 0) return null
+  if (n === 9) return openFiles[openFiles.length - 1]
+  return openFiles[n - 1] ?? null
+}
+
+/** The next (`dir: 1`) or previous (`dir: -1`) tab from `activeFile`, wrapping
+ *  around. Drives Ctrl+Tab / Cmd+Shift+[ ]. null when there are no tabs. */
+export function cycleTab(openFiles: string[], activeFile: string, dir: 1 | -1): string | null {
+  if (openFiles.length === 0) return null
+  const i = openFiles.indexOf(activeFile)
+  if (i === -1) return dir === 1 ? openFiles[0] : openFiles[openFiles.length - 1]
+  return openFiles[(i + dir + openFiles.length) % openFiles.length]
+}
+
 /** True when `f` is `path` itself or a descendant of the folder `path`. */
 function isUnder(f: string, path: string): boolean {
   return f === path || f.startsWith(`${path}/`)

@@ -22,6 +22,7 @@ function markup(openFiles: string[], activeFile = 'main.tex'): string {
       projectContext={EMPTY_CONTEXT}
       onSelectFile={noop}
       onCloseFile={noop}
+      onReorder={noop}
       onDocChanged={noop}
       errors={[]}
       onForwardSearch={noop}
@@ -43,6 +44,10 @@ describe('EditorPane tab bar', () => {
     const html = markup(['main.tex', 'ch1.tex'])
     expect(html).toContain('Close main.tex')
     expect(html).toContain('Close ch1.tex')
+  })
+
+  it('has no "Source" label in the bar (tabs carry the meaning)', () => {
+    expect(markup(['main.tex'])).not.toContain('Source')
   })
 
   it('shows a placeholder and no tabs when no file is open', () => {
