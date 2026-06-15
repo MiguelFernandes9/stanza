@@ -16,8 +16,12 @@ const ENVIRONMENT_TYPES = new Set(['environment', 'mathenv', 'displaymath', 'ver
 /** Structural macros that carry no prose: they end the current paragraph
  *  and are skipped (like whitespace/comments), never becoming a selectable
  *  block. Otherwise \maketitle/\tableofcontents/\include et al. fall into
- *  the paragraph bucket and forge a bogus prose block over the title page. */
+ *  the paragraph bucket and forge a bogus prose block over the title page.
+ *  `\par` is an explicit paragraph terminator (same role as a blank-line
+ *  parbreak); without it, prose split by `\par` inside a font-declaration
+ *  group fuses into one over-reaching block (M2-4). */
 const STANDALONE_MACROS = new Set([
+  'par',
   'maketitle',
   'tableofcontents',
   'listoffigures',
@@ -52,6 +56,32 @@ const TRANSPARENT_MACROS = new Set([
   'phantomsection',
   'addcontentsline',
   'addtocontents',
+  // Argument-less font-size/family/series/shape DECLARATIONS. They carry no
+  // prose, so an opening `{\small …}` / `{\footnotesize …}` must not start a
+  // paragraph on its own line — that made the block span eat the group open
+  // (M2-4). Inline use inside prose still absorbs, so it doesn't split. (Note:
+  // \emph and \textbf take an argument and stay inline content — not listed.)
+  'small',
+  'footnotesize',
+  'scriptsize',
+  'normalsize',
+  'large',
+  'Large',
+  'LARGE',
+  'huge',
+  'Huge',
+  'tiny',
+  'rmfamily',
+  'sffamily',
+  'ttfamily',
+  'bfseries',
+  'mdseries',
+  'itshape',
+  'slshape',
+  'scshape',
+  'upshape',
+  'em',
+  'normalfont',
 ])
 
 /** Parse .tex source into the block tree: preamble, nested sections,
