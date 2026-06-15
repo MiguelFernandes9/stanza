@@ -101,6 +101,9 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
   // Outline reveal: which block PaperPane should scroll the PDF to (nonce
   // re-fires a repeat click on the same row). Mode-aware navigation (BUG-48).
   const [revealSignal, setRevealSignal] = useState<{ id: string; nonce: number } | null>(null)
+  // Rendered figure/equation numbers (block id → "Figure 1"), computed in the
+  // paper layer from the text layer and shown in the outline (BUG-48 Part B).
+  const [outlineNumbers, setOutlineNumbers] = useState<Map<string, string>>(new Map())
   // A just-created file the sidebar should drop into inline rename (type-name).
   const [renameOnAppear, setRenameOnAppear] = useState<string | null>(null)
   const clearRenameOnAppear = useCallback(() => setRenameOnAppear(null), [])
@@ -643,6 +646,7 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
           files={files}
           blocks={blocks}
           history={history}
+          outlineNumbers={outlineNumbers}
           activeBlock={activeTask?.blockIds[0] ?? null}
           onPickBlock={(id) => {
             const block = pageById.get(id)
@@ -705,6 +709,7 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
           flash={pdfFlash}
           revealBlock={revealSignal}
           onForwardSearch={forwardSearch}
+          onNumbers={setOutlineNumbers}
           onToggleBlock={(id, additive) =>
             dispatch({ type: 'toggle-block', ids: expandIds(blocks, id), additive })
           }

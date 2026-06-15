@@ -57,4 +57,21 @@ describe('outlineLabel', () => {
   it('falls back for an unnamed section', () => {
     expect(outlineLabel(node({ id: 's', kind: 'section' }))).toBe('Untitled section')
   })
+
+  it('prefers the rendered number from the map when present', () => {
+    const numbers = new Map([['fig1', 'Figure 1']])
+    expect(outlineLabel(node({ id: 'fig1', kind: 'environment', name: 'figure' }), numbers)).toBe('Figure 1')
+  })
+
+  it('uses the env name when the map has no number for the block', () => {
+    const numbers = new Map([['other', 'Figure 1']])
+    expect(outlineLabel(node({ id: 'eqn', kind: 'environment', name: 'equation' }), numbers)).toBe('equation')
+  })
+})
+
+describe('buildOutline with numbers', () => {
+  it('labels a numbered environment by its rendered number', () => {
+    const out = buildOutline(tree, new Map([['fig1', 'Figure 1']]))
+    expect(out[0]!.children[0]!.label).toBe('Figure 1')
+  })
 })
