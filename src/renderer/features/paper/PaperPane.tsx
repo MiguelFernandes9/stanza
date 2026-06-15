@@ -383,7 +383,13 @@ export function PaperPane(props: Props): JSX.Element {
         onZoom={setZoom}
       />
 
-      <div ref={scrollRef} style={{ flex: 1, overflow: 'auto', background: 'var(--surface-canvas)' }}>
+      {/* scrollbar-gutter:stable reserves the scrollbar's width whether or not
+          it's showing, so toggling it (e.g. a toolbar action) never changes
+          clientWidth — the centered page no longer jitters sideways (M2-5). */}
+      <div
+        ref={scrollRef}
+        style={{ flex: 1, overflow: 'auto', scrollbarGutter: 'stable', background: 'var(--surface-canvas)' }}
+      >
         {pdf ? (
           <div style={{ position: 'relative', width: cW, height: contentH, minHeight: '100%' }}>
             {/* connector lines: one bezier per open bubble */}
