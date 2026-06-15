@@ -7,4 +7,9 @@ export interface BlockNode {
   name?: string              // section title or environment name
   span: BlockSpan
   children: BlockNode[]
+  /** First interior line of an environment that carries visible content, set
+   *  only when leading invisible macros (\label/\phantomsection/…) push it past
+   *  span.startLine+1. Geometry queries start here so a leading \label — which
+   *  forward-maps to the prose line ABOVE — doesn't drag the box up (M2-7). */
+  contentStartLine?: number
 }

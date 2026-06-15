@@ -22,6 +22,10 @@ export interface PageBlock {
   span: BlockSpan
   /** Owning section id (a heading row points at its own section). */
   sectionId: string | null
+  /** First content line of an environment when leading invisible macros
+   *  (\label/…) push it past span.startLine+1 — environmentInteriorSpan starts
+   *  the geometry query here so the box doesn't merge upward (M2-7). */
+  contentStartLine?: number
 }
 
 /** Flatten the whole block tree to one row per selectable unit, in reading
@@ -51,7 +55,8 @@ export function flattenBlocks(roots: BlockNode[]): PageBlock[] {
           kind: node.kind === 'environment' ? 'environment' : 'paragraph',
           envName: node.kind === 'environment' ? node.name : undefined,
           span: node.span,
-          sectionId
+          sectionId,
+          contentStartLine: node.contentStartLine
         })
       }
     }
@@ -409,7 +414,9 @@ export function binContentToBlocks(
  *  unchanged, so taskSpans/Claude still see \begin..\end. */
 export function environmentInteriorSpan(block: PageBlock): BlockSpan | null {
   if (block.kind !== 'environment') return null
-  const startLine = block.span.startLine + 1
+  // Skip leading invisible-macro lines (a \label maps onto the prose line above,
+  // M2-7); fall back to the line after \begin when the parser recorded none.
+  const startLine = block.contentStartLine ?? block.span.startLine + 1
   const endLine = block.span.endLine - 1
   return endLine >= startLine ? { ...block.span, startLine, endLine } : null
 }

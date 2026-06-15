@@ -597,6 +597,22 @@ describe('environmentInteriorSpan — exclude \\begin/\\end delimiter lines (BUG
     })
   })
 
+  it('starts the interior at contentStartLine, skipping a leading \\label (M2-7)', () => {
+    // equation \begin 239 … \end 244, but line 240 is \label, which synctex-maps
+    // onto the prose line above. The parser recorded contentStartLine 241, so the
+    // geometry query starts at the math, not the label — the box no longer merges
+    // into the paragraph above.
+    const eqn: PageBlock = {
+      id: 'eqn#1',
+      kind: 'environment',
+      envName: 'equation',
+      span: { file: 'ch1.tex', startLine: 239, endLine: 244 },
+      contentStartLine: 241,
+      sectionId: null
+    }
+    expect(environmentInteriorSpan(eqn)).toEqual({ file: 'ch1.tex', startLine: 241, endLine: 243 })
+  })
+
   it('returns null for a non-environment block (full span is used)', () => {
     const para: PageBlock = {
       id: 'p#1',
