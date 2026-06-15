@@ -237,42 +237,36 @@ async function runClaudeOp(req: ClaudeRequest): Promise<ClaudeResult> {
   doc.review.assertSpansFree(req.spans)
   await doc.review.prepare()
 
-  // Suppress the external-edit watcher for the WHOLE op — Claude's writes AND
-  // capture()'s switchBack revert below — so neither fires an unsolicited
-  // recompile that strands the task bubble mid-op (M2-2). endOp lingers past
-  // the watcher's settle window (ClaudeService.OP_SETTLE_GRACE_MS), since the
-  // revert's debounced fire lands after this function returns.
-  doc.claude.beginOp()
+  // Arm the settle watcher BEFORE the op so an edit that flushes after claude
+  // exits is still awaited (a fixed grace lost that race, B11.2). It only waits
+  // for the op's writes to land — it never recompiles; compile fires on accept
+  // (docs/compile-triggers.md).
+  const watcher = armSettleWatcher(doc.info.root, { quietMs: 400, capMs: 3000 })
+  let op: { opId: string; note: string }
   try {
-    const watcher = armSettleWatcher(doc.info.root, { quietMs: 400, capMs: 3000 })
-    let op: { opId: string; note: string }
-    try {
-      op = await doc.claude.runOp(req, (status) => sendToAll(IpcChannels.claudeStatus, status))
-      await watcher.settled() // wait for claude's writes to land (and stop)
-    } catch (err) {
-      await doc.git.restoreAll() // failed/timed-out op never leaves edits behind
-      throw err
-    } finally {
-      watcher.dispose()
-    }
-
-    const proposal = await doc.review.capture(op.opId, req.instruction, req.spans)
-    appendOpRecord(doc.info.root, {
-      opId: op.opId,
-      ts: new Date().toISOString(),
-      instruction: req.instruction,
-      note: op.note,
-      accepted: null,
-    })
-    // The proposal travels back on this return — the initiating renderer wires
-    // it into the busy task. Do NOT also broadcast review:proposal here: that
-    // duplicate raced op-started's opId and spawned a twin review card whose
-    // second accept hit an already-merged branch (BUG-18). The broadcast path
-    // is reserved for reEmitPendingProposals (open-time crash recovery).
-    return { opId: op.opId, note: op.note, proposal }
+    op = await doc.claude.runOp(req, (status) => sendToAll(IpcChannels.claudeStatus, status))
+    await watcher.settled() // wait for claude's writes to land (and stop)
+  } catch (err) {
+    await doc.git.restoreAll() // failed/timed-out op never leaves edits behind
+    throw err
   } finally {
-    doc.claude.endOp()
+    watcher.dispose()
   }
+
+  const proposal = await doc.review.capture(op.opId, req.instruction, req.spans)
+  appendOpRecord(doc.info.root, {
+    opId: op.opId,
+    ts: new Date().toISOString(),
+    instruction: req.instruction,
+    note: op.note,
+    accepted: null,
+  })
+  // The proposal travels back on this return — the initiating renderer wires it
+  // into the busy task. Do NOT also broadcast review:proposal here: that
+  // duplicate raced op-started's opId and spawned a twin review card whose
+  // second accept hit an already-merged branch (BUG-18). The broadcast path is
+  // reserved for reEmitPendingProposals (open-time crash recovery).
+  return { opId: op.opId, note: op.note, proposal }
 }
 
 /** Run the priming pipeline with prime:status events and prime:cancel

@@ -1,7 +1,6 @@
 import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'node:path'
 import { currentDocRoot, registerIpcHandlers } from './ipc-registry'
-import { setExternalEditWatchingEnabled, stopExternalEditWatcher } from './externalEditWatcher'
 import { buildAppMenu } from './menu'
 import { handleDocProtocol, registerDocScheme } from './protocol'
 
@@ -54,9 +53,6 @@ function createWindow(): void {
 
 void app.whenReady().then(() => {
   buildAppMenu() // frees ⌘R from the default reload accelerator
-  // Live the doc-root watcher only in the real app — sessions created in unit
-  // tests stay inert (BUG-24). Set before any document:open creates a session.
-  setExternalEditWatchingEnabled(true)
   registerIpcHandlers()
   handleDocProtocol(currentDocRoot)
   createWindow()
@@ -67,6 +63,5 @@ void app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
-  stopExternalEditWatcher() // release the chokidar handle on shutdown
   if (process.platform !== 'darwin') app.quit()
 })
