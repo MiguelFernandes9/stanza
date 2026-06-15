@@ -71,6 +71,33 @@ Why this dissolves stages 2-3:
 - **overlaps** (BUG-19) — boxes are unions of a disjoint row partition, so they
   can't overlap. `resolveBoxOverlaps` becomes a no-op (verify before deleting).
 
+### Non-content rows — running heads, folios, footers (Stage 2a)
+
+`pageTextRows` (`pdfTextRows.ts:69`) returns **every** glyph row on the page,
+including LaTeX's running head ("CHAPTER 1. INTRODUCTION"), the page-number folio
+and any footer — none of which belong to a source block. The binning rule has no
+defence against them:
+- the **bottom** block's ceiling is the page bottom (Core pass step 2), so a
+  footer folio (chapter-opening `plain` pages put the page number in the footer)
+  bins straight **into the last block** — and a centred folio x-overlaps the
+  block's full-width band, so the x-test doesn't save it;
+- the **top** block is spared only because its region `top` happens to sit below
+  the head — by luck of synctex, not by construction.
+
+So Stage 2a must **classify and drop non-content rows before binning**. A page's
+content band is the run of rows inside the body text area; head/folio/footer sit
+in the top and bottom margins, outside it. Detect them by margin position (a row
+whose baseline is above the first / below the last body-block region on the page,
+in the head/foot margin) and exclude them from `rowsByPage`. Binning then sees
+only content; no folio leaks into a block.
+
+This also fixes **M2-6** (the "Editing block" pill lands on the running head):
+once the content-band **top** is known, `pillPlacement` / its caller clamps the
+pill so it never lifts above the topmost content row (`top:-9` → tuck `top:2` at
+the page top). The pill fix is a **consumer of the same content band**, not a
+separate first-block special-case — build the band once, here. See
+[`dogfood-fixes-m2.md`](dogfood-fixes-m2.md) M2-6.
+
 ### The non-text crux (figures/images) — why rows alone are not enough
 
 Measured on the demo, `chapters/ch2.tex:11-16`:
@@ -114,7 +141,9 @@ Keep (presentation / location, not box derivation):
 - `blockGeometryRects` — still the synctex region source (now used for region
   `top`/x-band only, not extent).
 - `isMathEnvName`, `pillPlacement` math branch — UI placement; an exact centered
-  formula box still wants its pill in the left margin (BUG-35).
+  formula box still wants its pill in the left margin (BUG-35). **2a adds** a
+  content-band-top clamp so the prose pill never lifts into the running head
+  (M2-6).
 - `padBoxClamped`, `gapAbove`/`gapBelow`, `isTightAbove` — padding & pill tuck.
 - `unionRectsByPage`, `selectionBounds`, `washBoxes`, `flattenBlocks`,
   `expandIds`, `taskSpans`, `cardAnchorTops` — selection/task model, unaffected.
@@ -133,6 +162,11 @@ Keep (presentation / location, not box derivation):
 - **Phantom regions stealing rows.** A stray phantom region with a low `top` could
   bin a real row. Mitigate with the x-overlap test + measure BUG-30 under binning
   before deleting `PHANTOM_SHARE`.
+- **Running heads / folios / footers (M2-6).** `pageTextRows` returns these as
+  ordinary rows; the bottom block's page-bottom ceiling would bin a footer folio
+  into the last block. Classify and drop non-content rows before binning (see
+  "Non-content rows" above); the same content band lets `pillPlacement` clamp the
+  pill out of the running head.
 - **Multi-column** — out of scope until the app supports it; note and defer.
 
 ## Measurement tasks (do first — measure, don't guess)
@@ -150,6 +184,10 @@ record real numbers before writing code:
    the visible figure extent.
 3. **Phantom (BUG-30)** — does any phantom region bin a stray row? If not,
    `PHANTOM_SHARE` is safe to drop.
+3b. **Non-content rows (M2-6)** — dump the head/folio/footer rows on a `headings`
+   page (folio in header) and a chapter-opening `plain` page (folio in footer);
+   confirm the margin-position test separates them from body rows, and that
+   without the filter the footer folio bins into the last block.
 4. **Overlap-free** — assert no two block boxes overlap after binning, so
    `resolveBoxOverlaps` is provably a no-op.
 
@@ -166,7 +204,10 @@ is the measurement harness; reuse it.
   captures a prose block's dropped last line, which the own-band filter misses),
   and route par/heading/math through it. Keep `blockBoxesByPage` for non-text envs
   and `resolveBoxOverlaps` for now. Prove parity on prose/math/lists/abstract.
-  Delete `reclaimDroppedRows`. Ships a real simplification on its own.
+  Delete `reclaimDroppedRows`. **Also in 2a:** classify and exclude non-content
+  rows (running head / folio / footer) before binning, expose the per-page
+  content-band top, and clamp `pillPlacement` to it (M2-6). Ships a real
+  simplification on its own.
 - **2b — graphic content + full deletion.** Add op-list graphic/image bbox
   extraction (`pdfGraphics.ts`, sibling of `pdfTextRows.ts`); fold into
   `binContentToBlocks` (rows ∪ graphic bboxes); route environments through it.
@@ -186,6 +227,8 @@ is the measurement harness; reuse it.
 | section gap | para before `\section{Outline}` `ch1:104` | box ends at last line, no extend into heading whitespace |
 | **figure** | `ch2:11-16` | box covers **image + caption**, not caption alone (2b) |
 | page straddle | any para crossing a break | one box per page |
+| first block on page | page 2 continuation para | no folio/head row binned; "Editing block" pill clears the running head (M2-6) |
+| footer folio | chapter-opening `plain` page | bottom block's box excludes the footer page number (M2-6) |
 
 A 2a/2b stage lands only when its slice of this matrix is green on the live demo;
 unit fixtures alone are insufficient (the PR#57 lesson — green suite ≠ live fix).
