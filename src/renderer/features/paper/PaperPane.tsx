@@ -385,6 +385,7 @@ export function PaperPane(props: Props): JSX.Element {
           clientWidth — the centered page no longer jitters sideways (M2-5). */}
       <div
         ref={scrollRef}
+        data-testid="paper-scroll"
         style={{ flex: 1, overflow: 'auto', scrollbarGutter: 'stable', background: 'var(--surface-canvas)' }}
       >
         {pdf ? (
@@ -402,7 +403,7 @@ export function PaperPane(props: Props): JSX.Element {
             {/* The PAGE is the only flow child, so it alone sets the scroll
                 container's width: centred when it fits the pane, scrolled from
                 its own left edge when the pane is narrower (#69). */}
-            <div style={{ position: 'relative', width: pageWidth, height: contentH, flex: '0 0 auto' }}>
+            <div data-testid="paper-page" style={{ position: 'relative', width: pageWidth, height: contentH, flex: '0 0 auto' }}>
               <div style={{ position: 'absolute', left: 0, top: PAD, width: pageWidth }}>
                 <PdfPageStack
                   pdf={pdf}
@@ -434,7 +435,14 @@ export function PaperPane(props: Props): JSX.Element {
               style={{
                 position: 'absolute',
                 inset: 0,
-                overflow: 'clip',
+                // Clip the rail to the pane while no bubble is open, so the
+                // always-cW-wide connector svg can't spawn a spurious h-scrollbar
+                // (#70). When a bubble IS open, switch to visible so the rail
+                // extends the scroll container's scrollWidth and the bubble — which
+                // hangs off the page's right edge — becomes reachable by scrolling
+                // (BUG-46). The page is a separate flow child, so its centring is
+                // unaffected either way.
+                overflow: openTasks.length > 0 ? 'visible' : 'clip',
                 display: 'flex',
                 justifyContent: 'safe center',
                 pointerEvents: 'none'
@@ -515,6 +523,7 @@ export function PaperPane(props: Props): JSX.Element {
                   return (
                     <div
                       key={t.id}
+                      data-testid="rail-bubble"
                       style={{
                         position: 'absolute',
                         left: railLeft,
