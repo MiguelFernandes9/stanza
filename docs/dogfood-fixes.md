@@ -1950,3 +1950,50 @@ Plus the #70 guard: no spurious scrollbar on hover / ⌘E / ⌘J when the page f
 
 **Lane.** `PaperPane.tsx` (the centring row / scroll structure) only. Owner: bohr
 (built #69/#70 — owns the centre-vs-clip tradeoff).
+
+## BUG-47 — "New folder" errors NAME_EXISTS; empty folders are invisible (the file model has no directory)
+
+**Symptom.** Clicking **New folder** throws `Error: NAME_EXISTS`
+(`FileService.createFolder`). Even when it doesn't error, a newly-created folder
+never appears in the sidebar.
+
+**Root cause.** The file model has no directory representation. `FileEntry.kind` is
+`'tex'|'bib'|'image'|'style'|'text'|'other'` — no `'dir'`
+(`shared/ipc/document.ts:16`). `listFiles` (`ipc-registry.ts:387-407`) recurses into
+directories but pushes ONLY file entries (`:403`) — an EMPTY directory contributes
+nothing, so it's invisible (the renderer builds the tree from file relPaths).
+`createFolder`'s own comment says it (`FileService.ts:103`: "An empty dir is
+invisible to git … surfaces in document:files once it holds a file"). So the new
+`untitled` folder is created but invisible → the renderer's `namesInDir`
+(`Workspace.tsx:371`, built from `files`) can't see it → `uniqueName` returns
+`untitled` again → the next New folder hits `createFolder("untitled")` →
+NAME_EXISTS (the dir already exists on disk). It also means you never SEE the folder
+you made.
+
+**Fix (durable — model directories).**
+1. `FileEntry.kind`: add `'dir'`.
+2. `listFiles`: also emit a `{ relPath, kind:'dir' }` entry for every directory,
+   INCLUDING empty ones (still recurse for children).
+3. Sidebar: render directory entries (incl. empty) — expandable, rename/drop targets.
+4. `namesInDir` then includes dir entries → `uniqueName` no longer collides.
+5. Defence in depth: `createFolder`/`createFile` uniquify the default name against
+   the real fs (existsSync bump, like `freeDupPath`) and RETURN the created rel path,
+   so no invisible-state race can error; `onCreateFolder` uses the returned path +
+   `setRenameOnAppear` (inline-rename parity with New file).
+
+Persistence note (flag, defer): git can't track empty dirs, so an empty folder lives
+on disk (the fs walk shows it across reopen) but is lost on a git clean/reclone. A
+`.gitkeep` would persist it — a product decision, not needed for this fix.
+
+**Test.** Main: `listFiles` returns a `kind:'dir'` entry for an empty folder;
+`createFolder` twice yields `untitled` + `untitled-2` (no throw). Renderer: an empty
+dir renders in the sidebar; `namesInDir` includes it so `uniqueName` bumps; New
+folder drops into rename. Live (Miguel): click New folder repeatedly → `untitled`,
+`untitled-2`, … each appears and is renameable; no NAME_EXISTS.
+
+**Lane.** `shared/ipc/document.ts` (FileEntry) + `ipc-registry.ts` (listFiles) +
+`FileService.ts` (uniquify + return path) + `Sidebar.tsx` (render dirs) +
+`Workspace.tsx` (namesInDir + onCreateFolder). NOTE: `Workspace.tsx` is also touched
+by the editor-keybinds task — different functions (namesInDir/onCreateFolder vs the
+keydown), mergeable, but rebase. Owner: a free files-lane sibling (lucid-volhard /
+pensive-allen).
