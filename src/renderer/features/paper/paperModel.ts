@@ -159,6 +159,16 @@ const LINE_H_CAP = 16
  *  reclaimed line doesn't touch the next block. */
 const MIN_GAP = 2
 
+/** Block kind from its id: the last path segment's letter prefix —
+ *  `par`/`sec`/`env`/`pre`, per `assignIds` in shared/blocks/parse.ts
+ *  (`id = ${path}#${hash}`, path segments like `sec1/env2`). Lets geometry
+ *  heuristics gate on kind without threading the block tree down here. */
+function blockKindPrefix(id: string): string {
+  const path = id.split('#')[0] ?? id
+  const seg = path.split('/').pop() ?? path
+  return seg.replace(/\d+$/, '')
+}
+
 /** Settle vertical relationships between page-adjacent block boxes so a
  *  block's wash/selection neither bleeds into its neighbour nor stops short of
  *  it. Per page, boxes are sorted top-to-bottom; for each adjacent pair:
@@ -170,26 +180,29 @@ const MIN_GAP = 2
  *     onto the previous baseline, so the real last visual line has no rect and
  *     the box stops a line short; this reclaims exactly that line without going
  *     to the midpoint (which still clips it) and leaves genuine whitespace
- *     clear when the gap is bigger than one line (BUG-25).
+ *     clear when the gap is bigger than one line (BUG-25). Skipped when either
+ *     neighbour is an `environment`: the space before/after a float/table/
+ *     display is real `\intextsep`, not a dropped line (BUG-37).
  *  Genuine structural gaps (> ~2.5 lines) and the last box on a page stay put.
  *  Returns a new map; inputs aren't mutated. */
 export function resolveBoxOverlaps(rects: Map<string, PdfRect[]>): Map<string, PdfRect[]> {
   const out = new Map<string, PdfRect[]>()
-  const byPage = new Map<number, PdfRect[]>()
+  const byPage = new Map<number, Array<{ box: PdfRect; kind: string }>>()
   for (const [id, boxes] of rects) {
     const clones = boxes.map((b) => ({ ...b }))
     out.set(id, clones)
-    for (const c of clones) {
-      const arr = byPage.get(c.page)
-      if (arr) arr.push(c)
-      else byPage.set(c.page, [c])
+    const kind = blockKindPrefix(id)
+    for (const box of clones) {
+      const arr = byPage.get(box.page)
+      if (arr) arr.push({ box, kind })
+      else byPage.set(box.page, [{ box, kind }])
     }
   }
-  for (const boxes of byPage.values()) {
-    boxes.sort((a, b) => a.y - b.y)
-    for (let i = 0; i < boxes.length - 1; i++) {
-      const a = boxes[i]!
-      const b = boxes[i + 1]!
+  for (const entries of byPage.values()) {
+    entries.sort((p, q) => p.box.y - q.box.y)
+    for (let i = 0; i < entries.length - 1; i++) {
+      const a = entries[i]!.box
+      const b = entries[i + 1]!.box
       const aBottom = a.y + a.height
       const lineHeight = Math.min(a.height, LINE_H_CAP)
       if (b.y < aBottom) {
@@ -200,8 +213,12 @@ export function resolveBoxOverlaps(rects: Map<string, PdfRect[]>): Map<string, P
         b.y = m
         b.height = Math.max(0, bBottom - m)
       } else if (b.y - aBottom <= SETTLE_GAP_K * lineHeight) {
-        // small gap: extend a by ≤ one line to reclaim the dropped wrapped
-        // line; leave b put so real whitespace beyond one line stays clear.
+        // small gap: extend a by ≤ one line to reclaim a synctex-dropped wrapped
+        // line; leave b put so real whitespace beyond one line stays clear
+        // (BUG-25). But the gap before/after an environment (figure/table/
+        // display) is real \intextsep, never a dropped line — never extend a
+        // text box into a float's whitespace, nor a float's box downward (BUG-37).
+        if (entries[i]!.kind === 'env' || entries[i + 1]!.kind === 'env') continue
         const newBottom = Math.min(aBottom + lineHeight, b.y - MIN_GAP)
         a.height = Math.max(a.height, newBottom - a.y)
       }
