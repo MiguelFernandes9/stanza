@@ -69,7 +69,6 @@ export function PaperPane(props: Props): JSX.Element {
   const [zoom, setZoom] = useState(1.5)
   const [geo, setGeo] = useState<PageGeometry | null>(null)
   const [numPages, setNumPages] = useState(0)
-  const [containerW, setContainerW] = useState(900)
   // Per-page boxes per block: a block straddling a page break has a box on
   // each page it touches, so neither page's wash drops out (BUG-16).
   const [blockRects, setBlockRects] = useState<Map<string, PdfRect[]>>(new Map())
@@ -192,18 +191,6 @@ export function PaperPane(props: Props): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pdf, blocksSig])
 
-  // Measure the scroll container so the page can center and the rail can sit
-  // to its right (mock's containerW). ResizeObserver tracks pane resizes.
-  useLayoutEffect(() => {
-    const sc = scrollRef.current
-    if (!sc || typeof ResizeObserver === 'undefined') return
-    const measure = (): void => setContainerW(sc.clientWidth)
-    measure()
-    const ro = new ResizeObserver(measure)
-    ro.observe(sc)
-    return () => ro.disconnect()
-  }, [])
-
   // A fresh compose task opens its bubble once (so it's editable); afterwards
   // the user may collapse it freely and it won't re-open.
   useLayoutEffect(() => {
@@ -257,7 +244,7 @@ export function PaperPane(props: Props): JSX.Element {
   })
 
   const pageWidth = geo?.width ?? FALLBACK_PAGE_WIDTH
-  const { pageLeft, pageRightX, railLeft, cW } = paneLayout(containerW, pageWidth)
+  const { pageRightX, railLeft, cW } = paneLayout(pageWidth)
   const slot = geo ? geo.height + geo.gap : 0
   const pageStackH = geo ? numPages * slot : 0
   const openTasks = state.tasks.filter((t) => openIds.includes(t.id))
@@ -391,7 +378,20 @@ export function PaperPane(props: Props): JSX.Element {
         style={{ flex: 1, overflow: 'auto', scrollbarGutter: 'stable', background: 'var(--surface-canvas)' }}
       >
         {pdf ? (
-          <div style={{ position: 'relative', width: cW, height: contentH, minHeight: '100%' }}>
+          // Fixed-width page+rail track, centred by margin-inline:auto. The page
+          // sits at the track origin (left:0); centring is pure CSS, so a
+          // container resize never re-derives pageLeft → no sideways jitter
+          // (M2-5). margin-inline:auto never goes negative, so a narrow pane
+          // scrolls from the left edge instead of clipping it.
+          <div
+            style={{
+              position: 'relative',
+              width: cW,
+              height: contentH,
+              minHeight: '100%',
+              marginInline: 'auto'
+            }}
+          >
             {/* connector lines: one bezier per open bubble */}
             <svg
               width={cW}
@@ -416,8 +416,8 @@ export function PaperPane(props: Props): JSX.Element {
               })}
             </svg>
 
-            {/* the centered page */}
-            <div style={{ position: 'absolute', left: pageLeft, top: PAD, width: pageWidth }}>
+            {/* the page, at the track origin (the track itself is centred) */}
+            <div style={{ position: 'absolute', left: 0, top: PAD, width: pageWidth }}>
               <PdfPageStack
                 pdf={pdf}
                 scale={zoom}

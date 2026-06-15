@@ -1,20 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { connectorPath, GAPX, PAD, paneLayout, phaseTone, RAIL, stackTops } from './paperPaneLayout'
+import { connectorPath, GAPX, paneLayout, phaseTone, RAIL, stackTops } from './paperPaneLayout'
 
-describe('paneLayout', () => {
-  it('centers the page when the container is wide', () => {
-    const l = paneLayout(900, 600)
-    expect(l.pageLeft).toBe(150) // (900 - 600) / 2
-    expect(l.pageRightX).toBe(750)
-    expect(l.railLeft).toBe(750 + GAPX)
-    expect(l.cW).toBe(Math.max(900, 780 + RAIL + PAD)) // rail pushes content wider
+describe('paneLayout — page/rail track from page width only (M2-5)', () => {
+  it('places the page at the track origin: page-right = pageWidth, rail-left = pageWidth + GAPX', () => {
+    const l = paneLayout(600)
+    expect(l.pageRightX).toBe(600)
+    expect(l.railLeft).toBe(600 + GAPX)
   })
 
-  it('pins the page to PAD when the container is too narrow to center', () => {
-    const l = paneLayout(500, 600)
-    expect(l.pageLeft).toBe(PAD) // (500-600)/2 < PAD → clamp
-    expect(l.pageRightX).toBe(PAD + 600)
-    expect(l.railLeft).toBe(PAD + 600 + GAPX)
+  it('content width is the intrinsic page + gap + rail, with no container term', () => {
+    // Pure function of pageWidth — CSS centres this fixed-width track, so a
+    // container resize (a ⌘E/⌘J pane toggle) never re-derives the layout and
+    // the page can't jitter sideways (M2-5).
+    expect(paneLayout(600).cW).toBe(600 + GAPX + RAIL)
+    expect(paneLayout(564).cW).toBe(564 + GAPX + RAIL)
   })
 })
 
