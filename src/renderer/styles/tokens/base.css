@@ -11,11 +11,15 @@
 }
 
 html {
+  height: 100%;
+  overflow: hidden;
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
 }
 
 body {
+  height: 100%;
+  overflow: hidden;
   margin: 0;
   font-family: var(--font-sans);
   font-size: var(--text-base);
@@ -26,6 +30,15 @@ body {
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   font-feature-settings: 'kern' 1;
+}
+
+/* The Electron shell fills the window and never scrolls itself: a transient
+   overlay (tooltip, menu, toast) that overflows must not spawn a document
+   scrollbar — that feedback loop was BUG-44's hover "shake". Inner panes own
+   their own scrolling via overflow:auto. */
+#root {
+  height: 100%;
+  overflow: hidden;
 }
 
 ::selection {
