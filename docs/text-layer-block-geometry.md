@@ -157,6 +157,10 @@ margin/`\textwidth` overhang; pill still clears the formula. Lane: `paperModel.t
 
 ## Tier 2 (next) — unify EVERY block box on text rows
 
+**Detailed implementable plan: [`tier2-text-layer-unification.md`](tier2-text-layer-unification.md)**
+(global row-binning + the figure/image non-text crux + staged 2a/2b rollout). The
+sketch below is the summary; that doc is the spec.
+
 Generalise Tier 1 to all blocks: `blockBox(block) = union of text rows in the
 block's synctex-bounded region`. This collapses the whole synctex-rect→box
 pipeline into one function and lets us delete:
