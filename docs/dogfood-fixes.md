@@ -1997,3 +1997,43 @@ folder drops into rename. Live (Miguel): click New folder repeatedly → `untitl
 by the editor-keybinds task — different functions (namesInDir/onCreateFolder vs the
 keydown), mergeable, but rebase. Owner: a free files-lane sibling (lucid-volhard /
 pensive-allen).
+
+## BUG-48 — outline clicks don't navigate (no PDF scroll, no source jump, force select); no figure/eqn numbers
+
+**Symptom.** Clicking an outline row always switches to Select mode and selects the
+block, but the PDF stays parked where you were and the source editor never moves.
+There's no Read-mode behaviour (it can't take you to the source). The outline also
+shows raw env names ("figure", "equation") instead of "Figure 1" / "Equation 2".
+
+**Root cause.** `onPickBlock` (`Workspace.tsx:624`) is one hardcoded path —
+`set-view 'select'` + `toggle-block` — with no mode branch and no scroll/jump. The
+reveal mechanisms all already exist and are unused here: source jump
+(`editorApi.jumpTo`, used by inverse search `Workspace.tsx:308`), PDF scroll+glow
+(the F7 flash effect `PaperPane.tsx:219`), and exact block geometry
+(`blockRects.get(id)`, the Tier-2 boxes). Numbering: the block model has no counters
+(numbering is compile-time); `outlineLabel` (`OutlineTree.tsx:16`) just shows
+`node.name`.
+
+**Fix (durable).** Spec: `docs/outline-navigation-and-numbering.md`.
+- **Part A (nav, must-have).** Replace the forced path with one `revealBlock(id)`:
+  ALWAYS scroll the PDF to the block's own geometry box + ALWAYS `jumpTo` the source
+  (open file + scroll to `contentStartLine ?? span.startLine`); select ONLY in
+  select mode; never force `set-view`. One path, no per-mode `if`-pile. Read mode →
+  source jump + PDF scroll, no selection; select mode → + select.
+- **Part B (numbers, measured).** Derive "Figure 1"/"Equation 2" from the **rendered
+  number in the Tier-2 text layer** (caption `Figure N:`, math `(N)`), not from a
+  document-order guess (which breaks on chapter resets/`\nonumber`/starred). Thread a
+  `Map<blockId,string>` from PaperPane up to OutlineTree; fall back to the
+  capitalised env name when no number renders. Source choice (text-layer vs `.aux`)
+  flagged for Miguel — default text-layer.
+
+**Test.** Unit: read-mode `revealBlock` jumps source + emits PDF-scroll, no
+`toggle-block`/`set-view`; select-mode also selects; `outlineLabel(node, numbers)`
+prefers the map. Live (Miguel): Read mode click → editor + PDF both go there, no
+select; Select mode click → block selects + PDF scrolls; outline reads "Figure 1".
+
+**Lane.** `OutlineTree.tsx` + `Sidebar.tsx` (number passthrough) + `Workspace.tsx`
+(`onPickBlock`→`revealBlock`) + `PaperPane.tsx` (reveal-by-geometry; Part B number
+map) + `paperModel.ts` (Part B extraction). **Branch off main AFTER BUG-47 merges** —
+shares `Workspace.tsx` + `Sidebar.tsx` with it. Part A lands first (own commit),
+Part B after Miguel confirms the number source. Owner: a free outline/paper sibling.
