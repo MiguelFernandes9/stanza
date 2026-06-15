@@ -178,7 +178,67 @@ split. TDD.
 from live siblings (BUG-35 = BlockOverlay/PaperPane; M2-2 = src/main).
 Downstream consumers (paperModel/BlockOverlay) unedited.
 
-**Status.** Diagnosed (workflow-verified; high confidence on mechanism).
-Caveat: the user's `ch1.tex` isn't in the repo, so confirm the real 113-133
-region uses `%` comment lines (or `\paragraph`) between prose — the fix is a
-genuine parser defect regardless.
+**Status.** Shipped PR #57 (merged). It was a genuine parser defect, but it did
+NOT resolve the dogfood `113-133` symptom — the real ch1.tex separates those
+paragraphs with blank lines, not comments. The actual cause is **M2-4** below.
+
+---
+
+## M2-4 — Paragraph span over-reaches across font-group / `\par` wrappers (the real 113-133 bug)
+
+**Symptom.** Badge `¶ ch1.tex:113-133` over prose that is really lines 115-132 —
+the span swallows the surrounding `{\small` / `{\footnotesize` open and the
+`\par}` close. M2-3 (PR #57) did not fix it.
+
+**Root cause** (empirically verified — ran the REAL parser on the actual
+`/tmp/stanza-demo/chapters/ch1.tex`). The chapter wraps prose in nested
+font-declaration groups:
+
+```
+113 {\small
+114 {\footnotesize
+115-132  <prose>
+133 \par}
+135-141  <prose>
+142 \par}
+```
+
+`walkBody` recurses into brace groups with shared paragraph state
+([parse.ts:167-169](src/shared/blocks/parse.ts#L167), BUG-22). Inside,
+`\small` / `\footnotesize` and `\par` are not section/env/standalone/transparent
+macros, so they hit the catch-all `joinParagraph`
+([parse.ts:172-173](src/shared/blocks/parse.ts#L172)) and count as paragraph
+content: `\small` (113) STARTS the paragraph instead of the prose at 115, and
+`\par` (133) EXTENDS it instead of ending at 132.
+
+Real parser output (before): `paragraph [113-133]`, `[135-142]`, `[163-173]`
+(every `{\small…\par}`-wrapped paragraph inflated by its wrapper lines).
+Blank-separated paragraphs (`[106-111]`) and display-math/equation blocks are
+already correct.
+
+**Fix** (verified — applied to walkBody, re-ran the real parser, then 20 parse
+tests still green):
+1. Add `'par'` to `STANDALONE_MACROS`
+   ([parse.ts:18](src/shared/blocks/parse.ts#L18)) so `\par` flushes the
+   paragraph (fixes the END over-reach).
+2. Add the font-declaration macros to `TRANSPARENT_MACROS`
+   ([parse.ts:44](src/shared/blocks/parse.ts#L44)) so they're skipped without
+   starting a paragraph (fixes the START over-reach):
+   `small footnotesize scriptsize normalsize large Large LARGE huge Huge tiny`
+   `rmfamily sffamily ttfamily bfseries mdseries itshape slshape scshape`
+   `upshape em normalfont`.
+
+After (verified): `paragraph [115-132]`, `[135-141]`, `[164-172]` — correct
+prose spans.
+
+**Test.** parse.test.ts: a `{\small {\footnotesize <prose> \par} <prose> \par}`
+fixture yields paragraph spans covering ONLY the prose lines (not the `{\small`
+/ `\par}` lines); `\par` flushes; a leading font-decl macro doesn't start the
+paragraph early. TDD.
+
+**Lane.** `src/shared/blocks/parse.ts` + `__tests__/parse.test.ts`. PR #57
+already merged; no live sibling on parse.ts. Disjoint from BUG-36
+(`paperModel.ts`).
+
+**Status.** Diagnosed + fix empirically verified on the real doc. Not yet
+dispatched.
