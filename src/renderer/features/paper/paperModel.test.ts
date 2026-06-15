@@ -497,6 +497,32 @@ describe('resolveBoxOverlaps — settle overlaps and small gaps (BUG-19 / BUG-25
     const out = resolveBoxOverlaps(rects)
     expect(out.get('a')![0]!.height).toBe(80)
   })
+
+  it('does NOT extend a paragraph box into the gap before a figure float (BUG-37)', () => {
+    // Live synctex, demo ch2.tex:6-9 (page 8): the paragraph's last line bottoms
+    // at 352.72; the next block is the \begin{figure} env at 364.68 — an 11.96pt
+    // gap that is real \intextsep float spacing, not a synctex-dropped line. The
+    // small-gap settle (gap ≤ 2.5×16=40) must NOT fire across a float boundary.
+    const rects = new Map<string, PdfRect[]>([
+      ['par2#a1a1a1', [{ page: 8, x: 72, y: 320, width: 300, height: 32.72 }]], // bottom 352.72
+      ['env3#b2b2b2', [{ page: 8, x: 72, y: 364.68, width: 300, height: 200 }]] // figure top 364.68
+    ])
+    const out = resolveBoxOverlaps(rects)
+    expect(out.get('par2#a1a1a1')![0]!.y + out.get('par2#a1a1a1')![0]!.height).toBeCloseTo(352.72, 6)
+    expect(out.get('env3#b2b2b2')![0]!.y).toBeCloseTo(364.68, 6) // float untouched
+  })
+
+  it('still extends a paragraph into a small gap before another paragraph (BUG-25 kept)', () => {
+    // Same geometry, but the lower block is a paragraph — the dropped-line
+    // reclaim must still fire; only float/env boundaries are exempt.
+    const rects = new Map<string, PdfRect[]>([
+      ['par2#a1a1a1', [{ page: 8, x: 72, y: 320, width: 300, height: 32.72 }]], // bottom 352.72
+      ['par3#c3c3c3', [{ page: 8, x: 72, y: 364.68, width: 300, height: 40 }]] // para top 364.68
+    ])
+    const out = resolveBoxOverlaps(rects)
+    // extend by one line: min(352.72+16=368.72, 364.68-2=362.68) = 362.68
+    expect(out.get('par2#a1a1a1')![0]!.y + out.get('par2#a1a1a1')![0]!.height).toBeCloseTo(362.68, 6)
+  })
 })
 
 describe('blockBoxesByPage — per-page boxes for a straddling block (BUG-16)', () => {
