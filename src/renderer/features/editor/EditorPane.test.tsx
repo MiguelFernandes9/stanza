@@ -42,4 +42,11 @@ describe('EditorPane tab bar', () => {
     expect(html).toContain('Close main.tex')
     expect(html).toContain('Close ch1.tex')
   })
+
+  it('shows a placeholder and no tabs when no file is open', () => {
+    const html = markup([], '')
+    expect(html).toContain('No file open')
+    // No tab chips, no close affordances.
+    expect(html).not.toContain('Close main.tex')
+  })
 })

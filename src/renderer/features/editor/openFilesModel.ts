@@ -21,15 +21,15 @@ export function openTab(state: TabState, relPath: string): TabState {
 }
 
 /** Close `relPath`: drop the tab and apply the reactivate rule. */
-export function closeTab(state: TabState, relPath: string, mainFile: string): TabState {
-  return removeTabs(state, new Set([relPath]), mainFile)
+export function closeTab(state: TabState, relPath: string): TabState {
+  return removeTabs(state, new Set([relPath]))
 }
 
 /** Delete `relPath` (and anything beneath it, for a folder delete), then apply
  *  the close-reactivate rule. */
-export function deleteTabs(state: TabState, relPath: string, mainFile: string): TabState {
+export function deleteTabs(state: TabState, relPath: string): TabState {
   const removed = new Set(state.openFiles.filter((f) => isUnder(f, relPath)))
-  return removeTabs(state, removed, mainFile)
+  return removeTabs(state, removed)
 }
 
 /** Rename `from`→`to`, carrying folder children (prefix rewrite). The tab set
@@ -46,18 +46,19 @@ function isUnder(f: string, path: string): boolean {
 }
 
 /** Drop `removed` from the tab set. If the active tab went with them, focus the
- *  nearest survivor to its left (else its right); when none survive, hide the
- *  pane and fall back to `mainFile`. The pane only closes on empty — a delete
- *  while it is hidden must not force it open. */
-function removeTabs(state: TabState, removed: Set<string>, mainFile: string): TabState {
+ *  nearest survivor to its left (else its right); when none survive, empty the
+ *  active file and hide the pane (no main-file fallback — the editor opens
+ *  empty, per the placeholder default). The pane only closes on empty — a
+ *  delete while it is hidden must not force it open. */
+function removeTabs(state: TabState, removed: Set<string>): TabState {
   const openFiles = state.openFiles.filter((f) => !removed.has(f))
   const sourceOpen = openFiles.length > 0 ? state.sourceOpen : false
   if (!removed.has(state.activeFile)) {
     return { openFiles, activeFile: state.activeFile, sourceOpen }
   }
-  if (openFiles.length === 0) return { openFiles, activeFile: mainFile, sourceOpen: false }
+  if (openFiles.length === 0) return { openFiles, activeFile: '', sourceOpen: false }
   const index = state.openFiles.indexOf(state.activeFile)
   const left = state.openFiles.slice(0, index).filter((f) => !removed.has(f)).at(-1)
   const right = state.openFiles.slice(index + 1).find((f) => !removed.has(f))
-  return { openFiles, activeFile: left ?? right ?? mainFile, sourceOpen }
+  return { openFiles, activeFile: left ?? right ?? '', sourceOpen }
 }

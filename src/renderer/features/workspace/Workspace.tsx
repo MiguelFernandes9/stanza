@@ -75,7 +75,9 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
   }, [chatOpen])
 
   const [opRecords, setOpRecords] = useState<OpRecord[]>([])
-  const [activeFile, setActiveFile] = useState(doc.mainFile)
+  // Nothing is open at first — the editor shows its placeholder until the user
+  // opens a file (sidebar click or PDF inverse search).
+  const [activeFile, setActiveFile] = useState('')
   const [compileErrors, setCompileErrors] = useState<CompileError[]>([])
   const [pdfState, setPdfState] = useState<{ rel: string; nonce: number } | null>(null)
   const [pdfFlash, setPdfFlash] = useState<PdfFlash | null>(null)
@@ -83,9 +85,9 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
   const [renameOnAppear, setRenameOnAppear] = useState<string | null>(null)
   const clearRenameOnAppear = useCallback(() => setRenameOnAppear(null), [])
   const editorApi = useRef<EditorApi | null>(null)
-  // Editor tab set (source of truth; EditorPane renders it). Starts with the
-  // main file; reset alongside activeFile when the document changes.
-  const [openFiles, setOpenFiles] = useState<string[]>([doc.mainFile])
+  // Editor tab set (source of truth; EditorPane renders it). Starts empty;
+  // reset alongside activeFile when the document changes.
+  const [openFiles, setOpenFiles] = useState<string[]>([])
 
   // Reset the editor on a document SWITCH (root changes), not on every in-place
   // file mutation. A rename/delete returns a fresh DocumentInfo (new object,
@@ -93,9 +95,9 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
   // just applied; keying on `doc.root` only resets when a different project
   // opens.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => setActiveFile(doc.mainFile), [doc.root])
+  useEffect(() => setActiveFile(''), [doc.root])
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => setOpenFiles([doc.mainFile]), [doc.root])
+  useEffect(() => setOpenFiles([]), [doc.root])
 
   // Live tab snapshot for the stable open/close callbacks: EditorPane captures
   // onSelectFile once (its register effect), so the handlers must read the
@@ -112,16 +114,12 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
   // reveals the pane.
   const openFile = useCallback((relPath: string) => applyTabs(openTab(tab.current, relPath)), [applyTabs])
   const closeFile = useCallback(
-    (relPath: string) => applyTabs(closeTab(tab.current, relPath, doc.mainFile)),
-    [applyTabs, doc.mainFile]
+    (relPath: string) => applyTabs(closeTab(tab.current, relPath)),
+    [applyTabs]
   )
-  // ⌘E / TitleBar toggle. Reopening after the last tab was closed (openFiles
-  // empty) re-seeds the active file so the revealed pane is never tab-less.
-  const toggleSource = useCallback(() => {
-    const t = tab.current
-    if (!t.sourceOpen && t.openFiles.length === 0) setOpenFiles([t.activeFile])
-    setSourceOpen((v) => !v)
-  }, [])
+  // ⌘E / TitleBar toggle. Revealing the pane with no file open shows the
+  // placeholder (no main-file re-seed) — opening a file is an explicit action.
+  const toggleSource = useCallback(() => setSourceOpen((v) => !v), [])
 
   // FR4 stale-PDF rule: a failed compile keeps the last good render — the
   // nonce only bumps on ok, which busts the stanza-doc:// cache.
@@ -224,6 +222,7 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
 
   // F7 — synctex both directions.
   const forwardSearch = (line: number): void => {
+    if (!activeFile) return // no active file → no forward search
     void client.synctexForward({ file: activeFile, startLine: line, endLine: line }).then(
       (rects) => {
         const r = rects[0]
@@ -341,7 +340,7 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
       () => client.documentDelete({ relPath }),
       // Drop the tab(s) under the deleted path, then reactivate a neighbour
       // (or hide the pane when nothing is left open).
-      (res) => applyTabs(deleteTabs(tab.current, relPath, res.doc?.mainFile ?? doc.mainFile))
+      () => applyTabs(deleteTabs(tab.current, relPath))
     )
 
   const onDuplicateFile = (relPath: string): void =>

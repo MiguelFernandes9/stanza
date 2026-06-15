@@ -159,7 +159,8 @@ export function EditorPane({
   // Load the active file into the view (cache-first).
   useEffect(() => {
     const view = viewRef.current
-    if (!view) return
+    // No file open (empty tab set) → nothing to read; the placeholder shows.
+    if (!view || activeFile === '') return
     const setBuffer = (content: string): void => {
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: content } })
       setLineCount(view.state.doc.lines)
@@ -262,7 +263,36 @@ export function EditorPane({
         ))}
       </div>
 
-      <div ref={hostRef} style={{ flex: 1, minHeight: 0, overflow: 'hidden' }} />
+      <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
+        {/* The view stays mounted so it is ready the moment a file opens; it is
+            just hidden behind the placeholder when nothing is open. */}
+        <div
+          ref={hostRef}
+          style={{
+            position: 'absolute',
+            inset: 0,
+            overflow: 'hidden',
+            visibility: openFiles.length === 0 ? 'hidden' : 'visible'
+          }}
+        />
+        {openFiles.length === 0 && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '0 24px',
+              textAlign: 'center',
+              color: 'var(--ink-400)',
+              font: 'var(--weight-regular) var(--text-sm)/1.5 var(--font-sans)'
+            }}
+          >
+            No file open — choose a file from the sidebar
+          </div>
+        )}
+      </div>
 
       <div
         style={{
