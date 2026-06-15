@@ -306,3 +306,70 @@ edit here.
 **Status.** Re-diagnosed; root cause confirmed by the live discriminator
 (zoom=no-jitter, code/ai=jitter). Durable fix specified, not yet dispatched.
 Prior gutter fix left in place (harmless).
+
+---
+
+## M2-6 — "Editing block" pill lands on the running header / folio
+
+**Symptom.** When the selected block is the **first content block on a page**
+(e.g. page 2, the continuation paragraph "on which gas is struck…"), the blue
+"Editing block" pill renders on top of the running header
+("CHAPTER 1. INTRODUCTION 2") instead of above the paragraph. The block's wash
+(box) is correct — only the pill is misplaced.
+
+**Root cause — pill placement, not box extent.** `pillPlacement`
+([paperModel.ts:485](src/renderer/features/paper/paperModel.ts#L485)) returns
+`top: tight ? 2 : -9` for prose: when not "tight" it lifts the pill **9 pt above
+the box top**. `tight = isTightAbove(box, neighbors)` = `gapAbove < threshold`
+([paperModel.ts:145](src/renderer/features/paper/paperModel.ts#L145)), and
+`gapAbove` ([paperModel.ts:96](src/renderer/features/paper/paperModel.ts#L96))
+measures the gap **only to other block boxes**. The running head / folio is not
+a block, so it is invisible to it. The first content block on a page has **no
+block neighbour above** → `gapAbove = Infinity` → not tight → pill lifts to
+`top:-9`. The overlay is anchored at `top: rect.y`
+([BlockOverlay.tsx:80](src/renderer/features/paper/BlockOverlay.tsx#L80)) =
+box top = first body line; -9 from there sits on the header row above it. The
+box extent never reaches the header (prose box = union of synctex rects,
+[blockBoxesByPage:309](src/renderer/features/paper/paperModel.ts#L309);
+`reclaimDroppedRows` only extends down; `padBoxClamped` top-pad ≤ a few pt). The
+deeper cause: `pageTextRows`
+([pdfTextRows.ts:69](src/renderer/features/paper/pdfTextRows.ts#L69)) returns
+**every** glyph row including the head/folio with no content filter, so the
+geometry layer has **no notion of the page's content band**.
+
+**Same class as Tier 2 (and its latent twin).** Tier 2 row-binning bins every
+row by `top ≤ baseline < ceiling`; the **bottom** block's ceiling is the page
+bottom, so a footer folio (chapter-opening `plain` pages put the page number in
+the footer) bins **into the last block**. Tier 2 must exclude non-content rows
+to be correct regardless of the pill — and doing so yields the content band the
+pill needs.
+
+**Fix — durable, folded into Tier 2 Stage 2a.** At the text-layer source,
+classify and exclude non-content rows (running head, folio, footer) so
+`binContentToBlocks` never bins them, and expose the per-page **content-band
+top**. `pillPlacement` / its caller then clamps the pill so it never lifts above
+the topmost content row (at the page top it tucks `top:2` instead of `-9`). One
+rule on the content band, **no first-block special-case** — composes with every
+block type. A standalone page-top guard would be ripped out by Tier 2 (duct
+tape); don't. See the Tier 2 spec, Stage 2a.
+
+**Optional early-out.** If the artifact must die before Tier 2 is dispatched,
+ship the content-band-top primitive alone (topmost content row per page from the
+existing `pageTextRows`) + the pill clamp; Tier 2 reuses it. A down-payment, not
+throwaway.
+
+**Test.** The pill rect must sit at/below the page content-band top when the
+first block on a page is selected. Rendered-layout → **live-verify on
+/tmp/stanza-demo** (select the first body block on page 2; the pill must clear
+the running head). Per the live-gate rule, a placement assertion alone won't
+catch it — eyeball the demo.
+
+**Lane.** `paperModel.ts` (`pillPlacement` + content band) + `pdfTextRows.ts`
+(non-content classifier) + `BlockOverlay.tsx` (consumer) — the **same paper
+lane** as Tier 2. Do it **inside Tier 2 Stage 2a**; do not open a competing edit
+on `paperModel.ts`. Owner: the Tier 2 sibling (`quirky-bohr` / paper-lane
+holder).
+
+**Status.** Diagnosed (static, grounded in the code paths). **Not reproduced
+live yet** — confirm pill-rect vs header band on the demo before dispatch.
+Folded into Tier 2 Stage 2a (this commit). Not dispatched.
