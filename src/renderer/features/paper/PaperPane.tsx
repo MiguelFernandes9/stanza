@@ -20,7 +20,7 @@ import { pageTextRows } from './pdfTextRows'
 import type { TextRow } from './pdfTextRows'
 import { pageGraphics } from './pdfGraphics'
 import type { GraphicBox } from './pdfGraphics'
-import { BADGE, PAD, RAIL, RAIL_GUTTER, connectorPath, paneLayout, phaseTone, stackTops } from './paperPaneLayout'
+import { BADGE, PAD, RAIL, RAIL_GUTTER, connectorPath, paneLayout, pdfScrollTop, phaseTone, stackTops } from './paperPaneLayout'
 
 const FALLBACK_PAGE_WIDTH = 564
 
@@ -47,6 +47,11 @@ interface Props {
   onInverseSearch: (page: number, x: number, y: number) => void
   /** Editor ⌘-click target (F7 forward). */
   flash: PdfFlash | null
+  /** Outline reveal: scroll to this block's geometry box (nonce re-fires on a
+   *  repeat click of the same row). */
+  revealBlock: { id: string; nonce: number } | null
+  /** Synctex-forward fallback when a block's geometry box isn't computed yet. */
+  onForwardSearch: (line: number) => void
   onToggleBlock: (id: string, additive: boolean) => void
   onActivateTask: (taskId: number) => void
   onToggleAdding: () => void
@@ -220,14 +225,34 @@ export function PaperPane(props: Props): JSX.Element {
     if (!flash || !geo) return
     const el = scrollRef.current
     if (el) {
-      const slot = geo.height + geo.gap
-      el.scrollTo({ top: PAD + (flash.page - 1) * slot + flash.y * zoom - el.clientHeight / 3, behavior: 'smooth' })
+      el.scrollTo({ top: pdfScrollTop(flash.page, flash.y, geo, zoom, el.clientHeight), behavior: 'smooth' })
     }
     setActiveFlash(flash)
     const t = setTimeout(() => setActiveFlash(null), 1100)
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flash?.nonce, geo != null])
+
+  // Outline reveal: scroll to the block's OWN geometry box (exact, matches the
+  // overlay — no synctex \label drift). Mirrors the flash scroll + glow. If the
+  // box isn't computed yet, fall back to synctex-forward so it still scrolls.
+  useEffect(() => {
+    const rb = props.revealBlock
+    if (!rb || !geo) return
+    const el = scrollRef.current
+    const box = blockRects.get(rb.id)?.[0]
+    if (box) {
+      if (el) {
+        el.scrollTo({ top: pdfScrollTop(box.page, box.y, geo, zoom, el.clientHeight), behavior: 'smooth' })
+      }
+      setActiveFlash({ page: box.page, y: box.y, height: box.height, nonce: rb.nonce })
+      const t = setTimeout(() => setActiveFlash(null), 1100)
+      return () => clearTimeout(t)
+    }
+    const block = byId.get(rb.id)
+    if (block) props.onForwardSearch(block.contentStartLine ?? block.span.startLine)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.revealBlock?.nonce, geo != null])
 
   // Anchor every task to its first block's box (geometry, not the DOM, so a
   // card stays aligned even when its page is virtualized out — BUG-17), then

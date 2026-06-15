@@ -1,5 +1,28 @@
 import { describe, expect, it } from 'vitest'
-import { connectorPath, GAPX, paneLayout, phaseTone, RAIL, stackTops } from './paperPaneLayout'
+import {
+  connectorPath,
+  GAPX,
+  PAD,
+  paneLayout,
+  pdfScrollTop,
+  phaseTone,
+  RAIL,
+  stackTops
+} from './paperPaneLayout'
+
+describe('pdfScrollTop — scroll offset that lands a box ~a third down the pane', () => {
+  const geo = { width: 500, height: 800, gap: 20 } // slot = 820
+
+  it('offsets a box on page 1 by its zoomed y minus a third of the viewport', () => {
+    // PAD + 0 slots + 300*1.5 − 600/3 = PAD + 450 − 200
+    expect(pdfScrollTop(1, 300, geo, 1.5, 600)).toBe(PAD + 450 - 200)
+  })
+
+  it('adds one slot per page above the target', () => {
+    // page 3 → two slots of 820 below PAD, box at y 0
+    expect(pdfScrollTop(3, 0, geo, 1.5, 600)).toBe(PAD + 2 * 820 - 200)
+  })
+})
 
 describe('paneLayout — page/rail track from page width only (M2-5)', () => {
   it('places the page at the track origin: page-right = pageWidth, rail-left = pageWidth + GAPX', () => {
