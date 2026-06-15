@@ -1759,3 +1759,76 @@ float gaps still don't.
 
 **Lane.** Renderer paper, `pdfTextRows.ts` (add `baseline`) + `paperModel.ts`
 `reclaimDroppedRows`. Same owner as #64 (`quirky-bohr`). Branch off main.
+
+## BUG-42 — `SPANS_LOCKED`: dismissing a review card leaks the backend lock (and its op branch)
+
+**Symptom.** `claude:run` fails with `Error: SPANS_LOCKED`
+(`ReviewService.assertSpansFree`) on a section that shows **no** pending review —
+e.g. composing "make this section two columns" on §Discussion (ch2.tex:62-74)
+errors repeatedly, then later "just works" on its own.
+
+**Root cause.** The op lock is in-memory: `ReviewService.pendingSpans`
+(`Map<opId, BlockSpan[]>`, `ReviewService.ts:19`) is set by `capture()` when an op
+produces a proposal (live `stanza/op-<opId>` branch) and cleared **only** by
+`resolve()` (`:71/:76/:86`). The renderer clears it through `resolveTask →
+client.reviewResolve(accept|reject)` (`Workspace.tsx:395`). But the **dismiss**
+path — `taskStore` `case 'dismiss'` → `removeTask` (`taskStore.ts:211`), wired
+from the review card's ✕ (`PaperPane.tsx:514`, `Workspace.tsx:534`) — removes the
+card **locally and never calls `reviewResolve`.** A review-phase task owns a
+backend lock + branch, so dismissing it orphans both: the lock blocks every future
+op on those spans (`SPANS_LOCKED`) and the branch lingers, with **no card left to
+resolve it.** `pendingSpans` is in-memory, so an app restart wipes the lock (and
+`list()` re-emits the orphan branch as a fresh card) — which is why it "starts
+working" by itself. Same desync family as BUG-33 (a sibling resolve makes another
+card vanish without clearing its backend).
+
+**Fix (single source of truth for the lock).** Dismissing a **review**-phase task
+must reject the backend op, not just drop the card: route it through
+`reviewResolve({ opId, accept: false })` (deletes the branch + clears
+`pendingSpans`). Compose/noop tasks (no op/branch) keep dismissing locally; busy
+stays non-dismissable. Implement in the Workspace dismiss handler (or the reducer
+path): a `review` task (has `opId`/proposal) → `resolveTask(taskId, false)`; else
+local dismiss. Audit other review-card removal paths (BUG-33 disappearance,
+reanchor drops) for the same leak.
+
+**Test.** Renderer: dismissing a review task calls `reviewResolve(reject)` with
+its opId (compose/noop don't). Main (`ReviewService.test.ts`): after a reject the
+spans are free and the branch is deleted. Live (Miguel): op → review card →
+dismiss via ✕ → re-run an op on the same section → no `SPANS_LOCKED`.
+
+**Lane.** Renderer `taskStore.ts` + `Workspace.tsx` + a `ReviewService` regression
+test. Separate lane from the M2-5 paper-geometry work — free sibling, NOT bohr.
+
+## BUG-43 — the app sometimes goes all-white (uncaught render exception; no error boundary, no log)
+
+**Symptom.** Intermittently the whole window goes blank — only the cream
+`--surface-canvas` background, no content, no error shown. "Sometimes happens."
+
+**Root cause.** The cream background means the renderer PROCESS is alive and CSS
+is loaded — so it is **not** a process crash (main's `render-process-gone`
+handler, `index.ts:37`, only `reload()`s a dead process). It is an **uncaught
+exception during a React render** that unmounts the tree, leaving the styled body.
+There is **no React error boundary** anywhere in `src/renderer/`, **no global
+`window.onerror` / `unhandledrejection`** handlers, and renderer errors aren't
+logged anywhere persistent (`console.error` → DevTools the user doesn't have
+open). So a render throw is silent, unrecoverable, and untraceable — we can't even
+see which throw it is. Likely sites given recent churn: hot geometry math
+(`Math.min(...[])` on an empty rect/row set → `Infinity`/`NaN`, pdf.js text-layer
+edges) — but the real defect is the missing safety net, not one site.
+
+**Fix (observability + recovery — dissolves the class).** Build the renderer
+error-observability layer — see
+[`renderer-error-observability.md`](renderer-error-observability.md): a root
+ErrorBoundary (recovery panel, never white), global `window.onerror` /
+`unhandledrejection` handlers, and a persistent main-side
+`userData/logs/renderer-errors.log` via an `app:logError` IPC. Turns every
+white-screen into a one-click-recover panel **and** a logged stack; the captured
+stack then pins the underlying throw for a source-level follow-up.
+
+**Test.** Renderer: a throwing child renders the boundary fallback (not the app)
+and calls the report IPC. Main: `app:logError` appends a line to the log file.
+Live (Miguel): trigger a throw → recovery panel + a log entry, not white.
+
+**Lane.** Renderer `main.tsx` + new `ErrorBoundary.tsx` + report helper; main
+`index.ts` + new `errorLog.ts`; `shared/ipc` channel + type; preload expose.
+Self-contained — one free sibling.
