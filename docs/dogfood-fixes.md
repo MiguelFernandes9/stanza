@@ -1832,3 +1832,42 @@ Live (Miguel): trigger a throw → recovery panel + a log entry, not white.
 **Lane.** Renderer `main.tsx` + new `ErrorBoundary.tsx` + report helper; main
 `index.ts` + new `errorLog.ts`; `shared/ipc` channel + type; preload expose.
 Self-contained — one free sibling.
+
+## BUG-44 — hover-jitter (the REAL M2-5 cause): a right-edge button tooltip spawns a document scrollbar
+
+**Symptom.** Hovering the **Source (⌘E)** / **Assistant (⌘J)** buttons in the
+TitleBar makes "something spawn" and the whole app "shakes a bit." Four prior
+M2-5 PRs (#66/#68/#69/#70) never fixed it.
+
+**Root cause — it was never the PDF pane.** The TitleBar buttons each wrap in
+`<Tooltip side="bottom">` (`TitleBar.tsx:98-103`). The bubble is
+`position:absolute; whiteSpace:nowrap`, **centered on the button**
+(`left:50%; translateX(-50%)`, `Tooltip.tsx:73-79`). Those buttons sit at the
+**far right** of the window, so a wide centered nowrap tooltip overflows the
+**right edge of the viewport**. And the app shell can scroll: `base.css` sets
+`body { margin:0 }` but **no `overflow`/`height` on `html`/`body`/`#root`**, while
+the Workspace root is `height:100vh`. So the overflowing tooltip spawns a
+**document horizontal scrollbar**; because the shell is exactly 100vh, that
+~15px-tall scrollbar then forces a **vertical** scrollbar → feedback → the
+"shake." Mouse-leave → tooltip + scrollbars vanish → snaps back. Hover on/off =
+the jitter. (#66/#68/#70 fixed real but DIFFERENT PaperPane residuals; #69
+centering was also real — none was this.)
+
+**Fix (dissolves the class).** A desktop Electron shell must never get a document
+scrollbar from a transient overlay:
+1. `base.css`: `html, body { height:100%; overflow:hidden; }` + `#root {
+   height:100%; overflow:hidden; }`. Inner panes keep their own `overflow:auto`.
+   This alone kills the jitter.
+2. Make `Tooltip` viewport-aware so a right-edge tooltip clamps/flips instead of
+   being clipped by the new shell overflow (align to the button's right edge when
+   it would overflow, or portal + clamp). Same PR.
+
+**Test (live, Playwright-electron — baseline first).** Today: hovering the
+Source/Assistant buttons grows `documentElement.scrollWidth` past `clientWidth`
+(scrollbar spawns) — capture that as the failing baseline. After: hover any
+TitleBar button → `scrollWidth <= clientWidth`, no scrollbar, no shake; tooltip
+fully visible (not clipped). `tsc` + suite green.
+
+**Lane.** `src/renderer/styles/tokens/base.css` (shell overflow) +
+`src/renderer/components/feedback/Tooltip.tsx` (viewport clamp). Tiny,
+self-contained — free sibling, NOT the PaperPane lane.
