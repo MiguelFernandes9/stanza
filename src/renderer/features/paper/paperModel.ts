@@ -146,12 +146,14 @@ export function isTightAbove(box: PdfRect, neighbors: PdfRect[], threshold: numb
   return gapAbove(box, neighbors) < threshold
 }
 
-/** A text row counts as "below" a box if its top sits at most this far above
- *  the box bottom — absorbs sub-pt overlap and rounding. */
+/** Tolerance (pt) for "is this baseline below the box bottom" — absorbs sub-pt
+ *  rounding between the synctex box bottom and the converted text baseline. */
 const RECLAIM_BELOW_EPS = 2
-/** A row is contiguous with the box's tail only if the vertical gap to it is no
- *  larger than one row height; a larger gap means a different (next) block. */
-const RECLAIM_GAP_K = 1
+/** A row is contiguous with the box's tail only if the baseline-to-baseline gap
+ *  is at most this many font-heights. One line of normal leading is ~1.2 font
+ *  heights, two lines ~2.4 — so ~1.5 reclaims a single dropped line but stops
+ *  before the next block. */
+const RECLAIM_GAP_K = 1.5
 
 /** Extend each block box DOWN to cover the block's OWN rendered text rows that
  *  synctex dropped (it collapses a wrapped last source line onto the previous
@@ -188,19 +190,24 @@ export function reclaimDroppedRows(
           ...(topsByPage.get(b.page) ?? []).filter((t) => t > b.y + RECLAIM_BELOW_EPS),
           Infinity
         )
+        // Partition on the row BASELINE (= converted transform[5] = synctex `v`
+        // basis), NOT yTop. yTop is baseline − pdf.js font height, ~3.5pt taller
+        // than synctex's box height, so a yTop-based ceiling let the next
+        // block's first row clear `nextTop` and get absorbed (BUG-41). boxBottom
+        // and nextTop are both synctex-basis, so the baseline lines up with them.
         const below = rows
           .filter(
             (r) =>
-              r.yTop >= boxBottom - RECLAIM_BELOW_EPS &&
-              r.yTop < nextTop - RECLAIM_BELOW_EPS &&
+              r.baseline > boxBottom - RECLAIM_BELOW_EPS &&
+              r.baseline < nextTop &&
               r.xRight > b.x &&
               r.xLeft < b.x + b.width
           )
-          .sort((p, q) => p.yTop - q.yTop)
+          .sort((p, q) => p.baseline - q.baseline)
         let newBottom = boxBottom
         for (const r of below) {
-          if (r.yTop - newBottom <= RECLAIM_GAP_K * (r.yBottom - r.yTop)) {
-            newBottom = Math.max(newBottom, r.yBottom)
+          if (r.baseline - newBottom <= RECLAIM_GAP_K * (r.baseline - r.yTop)) {
+            newBottom = Math.max(newBottom, r.baseline)
           } else break
         }
         return newBottom > boxBottom ? { ...b, height: newBottom - b.y } : { ...b }

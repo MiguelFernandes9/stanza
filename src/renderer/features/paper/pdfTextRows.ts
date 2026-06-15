@@ -5,6 +5,10 @@ import type { PDFPageProxy } from '../pdf/pdfjsSetup'
  *  line — including the wrapped last lines synctex sometimes drops — so it is
  *  the source of truth for how far a block's text actually extends. */
 export interface TextRow {
+  /** Converted `transform[5]` — the baseline in synctex `v` basis, i.e. the
+   *  SAME basis as the synctex box top/bottom. Partition reclaim on this, never
+   *  on the font-height-inflated `yTop` (BUG-41). */
+  baseline: number
   yTop: number
   yBottom: number
   xLeft: number
@@ -37,15 +41,16 @@ export function textRows(items: TextItemLike[], viewport: ViewportLike): TextRow
     .filter((it) => typeof it.str === 'string' && it.str.trim() !== '' && it.height > 0 && it.width > 0)
     .map((it) => {
       const [bx, by] = viewport.convertToViewportPoint(it.transform[4]!, it.transform[5]!)
-      return { xLeft: bx!, xRight: bx! + it.width, yBottom: by!, yTop: by! - it.height }
+      return { xLeft: bx!, xRight: bx! + it.width, baseline: by!, yBottom: by!, yTop: by! - it.height }
     })
-    .sort((a, b) => a.yBottom - b.yBottom)
+    .sort((a, b) => a.baseline - b.baseline)
 
   const rows: TextRow[] = []
   for (const c of cells) {
     const last = rows[rows.length - 1]
-    const tol = (c.yBottom - c.yTop) * BASELINE_TOL
-    if (last && Math.abs(c.yBottom - last.yBottom) <= tol) {
+    const tol = (c.baseline - c.yTop) * BASELINE_TOL
+    if (last && Math.abs(c.baseline - last.baseline) <= tol) {
+      last.baseline = Math.max(last.baseline, c.baseline)
       last.yTop = Math.min(last.yTop, c.yTop)
       last.yBottom = Math.max(last.yBottom, c.yBottom)
       last.xLeft = Math.min(last.xLeft, c.xLeft)

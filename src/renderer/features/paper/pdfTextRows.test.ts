@@ -22,6 +22,9 @@ describe('textRows — pdf.js bottom-up items → top-left rows', () => {
     // baseline f so that pageHeight − f = yBottom 200.12 → f = 591.88.
     const rows = textRows([item(90, 591.88, 41, 10.91, 'follows:')], viewport(792))
     expect(rows).toHaveLength(1)
+    // baseline = converted transform[5] (synctex `v` basis) — the partition
+    // basis for reclaim, the same as the synctex box top/bottom (BUG-41).
+    expect(rows[0]!.baseline).toBeCloseTo(200.12, 2)
     expect(rows[0]!.yBottom).toBeCloseTo(200.12, 2)
     expect(rows[0]!.yTop).toBeCloseTo(189.21, 2) // 200.12 − height 10.91
     expect(rows[0]!.xLeft).toBeCloseTo(90, 5)
