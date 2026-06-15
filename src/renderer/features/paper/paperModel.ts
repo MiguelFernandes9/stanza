@@ -1,6 +1,7 @@
 import type { BlockNode } from '../../../shared/blocks/types'
 import type { BlockSpan, PdfRect } from '../../../shared/ipc'
 import type { TaskPhase } from '../tasks/taskStore'
+import type { TextRow } from './pdfTextRows'
 
 /** Selection state a task stamps on a block — drives the edge bar, the
  *  selection wash and the hover/lock pill on both the PDF overlay and the
@@ -145,102 +146,104 @@ export function isTightAbove(box: PdfRect, neighbors: PdfRect[], threshold: numb
   return gapAbove(box, neighbors) < threshold
 }
 
-/** Multiplier on the upper box's line-height: a downward gap up to this many
- *  lines below a box is treated as a synctex-dropped wrapped line and settled.
- *  ~2.5 covers a paragraph-before-a-list gap (~1.83 lines) while genuine
- *  structural gaps (before floats/sections) stay larger and untouched. */
-const SETTLE_GAP_K = 2.5
-/** Line-height cap (pt) for the settle threshold. The boxes reaching here are
- *  unioned to one rect per page, so per-line H is gone — estimate it as the
- *  box's own height capped at a typical body line, so a tall multi-line box
- *  doesn't earn a proportionally huge gap budget. */
-const LINE_H_CAP = 16
-/** Whitespace (pt) left between an extended box and the block below, so the
- *  reclaimed line doesn't touch the next block. */
-const MIN_GAP = 2
+/** A text row counts as "below" a box if its top sits at most this far above
+ *  the box bottom — absorbs sub-pt overlap and rounding. */
+const RECLAIM_BELOW_EPS = 2
+/** A row is contiguous with the box's tail only if the vertical gap to it is no
+ *  larger than one row height; a larger gap means a different (next) block. */
+const RECLAIM_GAP_K = 1
 
-/** Block kind from its id: the last path segment's letter prefix —
- *  `par`/`sec`/`env`/`pre`, per `assignIds` in shared/blocks/parse.ts
- *  (`id = ${path}#${hash}`, path segments like `sec1/env2`). Lets geometry
- *  heuristics gate on kind without threading the block tree down here. */
-function blockKindPrefix(id: string): string {
-  const path = id.split('#')[0] ?? id
-  const seg = path.split('/').pop() ?? path
-  return seg.replace(/\d+$/, '')
-}
-
-/** List environments — body text flow, not floats. Unlike a figure/table/
- *  display-math float (real \intextsep around it), the gap above a list can be
- *  a synctex-dropped wrapped line of the paragraph before it, so the settle
- *  reclaim is allowed to fire across a list boundary (BUG-40-list). */
-const LIST_ENVS = new Set(['itemize', 'enumerate', 'description'])
-function isListEnv(name: string | undefined): boolean {
-  return name !== undefined && LIST_ENVS.has(name)
-}
-
-/** Settle vertical relationships between page-adjacent block boxes so a
- *  block's wash/selection neither bleeds into its neighbour nor stops short of
- *  it. Per page, boxes are sorted top-to-bottom; for each adjacent pair:
- *   - OVERLAP (`bTop < aBottom`): meet at the midpoint of the overlapping band
- *     (a float's `\end` strut over the next paragraph, BUG-19).
- *   - SMALL GAP (`0 ≤ gap ≤ ~2.5 line-heights`): extend the upper box DOWN by
- *     up to one line — `min(aBottom + lineHeight, bTop − MIN_GAP)` — and leave
- *     the lower box put. synctex sometimes collapses a wrapped last source line
- *     onto the previous baseline, so the real last visual line has no rect and
- *     the box stops a line short; this reclaims exactly that line without going
- *     to the midpoint (which still clips it) and leaves genuine whitespace
- *     clear when the gap is bigger than one line (BUG-25). Skipped when either
- *     neighbour is a FLOAT-like `environment` (figure/table/display math, or
- *     an unnamed env): the space before/after it is real `\intextsep`, not a
- *     dropped line (BUG-37). A LIST env (itemize/enumerate/description) is body
- *     text flow, so the reclaim still fires across it — the gap above a list
- *     can be a paragraph's dropped wrapped last line (BUG-40-list). `envNames`
- *     supplies each block's env name so list and float are told apart (the id
- *     kind-prefix only says `env`).
- *  Genuine structural gaps (> ~2.5 lines) and the last box on a page stay put.
- *  Returns a new map; inputs aren't mutated. */
-export function resolveBoxOverlaps(
-  rects: Map<string, PdfRect[]>,
-  envNames: Map<string, string> = new Map()
+/** Extend each block box DOWN to cover the block's OWN rendered text rows that
+ *  synctex dropped (it collapses a wrapped last source line onto the previous
+ *  baseline, so the box comes out a line short — the BUG-25/37/40 family). The
+ *  pdf.js text layer has every line, so this measures the real extent instead of
+ *  guessing from the inter-block gap. For each box, pull the bottom to the last
+ *  text row that is below it, x-overlaps it, sits above the next block on the
+ *  page, and follows contiguously (no row-height-sized gap). Whitespace before a
+ *  section heading or a float has NO rows in the gap, so those boxes stay put —
+ *  no neighbour-kind gating. Pure; returns a new map, inputs untouched. */
+export function reclaimDroppedRows(
+  boxesById: Map<string, PdfRect[]>,
+  rowsByPage: Map<number, TextRow[]>
 ): Map<string, PdfRect[]> {
+  const topsByPage = new Map<number, number[]>()
+  for (const boxes of boxesById.values()) {
+    for (const b of boxes) {
+      const arr = topsByPage.get(b.page)
+      if (arr) arr.push(b.y)
+      else topsByPage.set(b.page, [b.y])
+    }
+  }
   const out = new Map<string, PdfRect[]>()
-  // `floatish`: a non-list environment whose surrounding gap is real spacing,
-  // never a dropped line — it blocks the small-gap reclaim on either side.
-  const byPage = new Map<number, Array<{ box: PdfRect; floatish: boolean }>>()
+  for (const [id, boxes] of boxesById) {
+    out.set(
+      id,
+      boxes.map((b) => {
+        const rows = rowsByPage.get(b.page)
+        if (!rows) return { ...b }
+        const boxBottom = b.y + b.height
+        // Ceiling: the nearest block starting below this box — never reclaim
+        // rows that belong to it.
+        const nextTop = Math.min(
+          ...(topsByPage.get(b.page) ?? []).filter((t) => t > b.y + RECLAIM_BELOW_EPS),
+          Infinity
+        )
+        const below = rows
+          .filter(
+            (r) =>
+              r.yTop >= boxBottom - RECLAIM_BELOW_EPS &&
+              r.yTop < nextTop - RECLAIM_BELOW_EPS &&
+              r.xRight > b.x &&
+              r.xLeft < b.x + b.width
+          )
+          .sort((p, q) => p.yTop - q.yTop)
+        let newBottom = boxBottom
+        for (const r of below) {
+          if (r.yTop - newBottom <= RECLAIM_GAP_K * (r.yBottom - r.yTop)) {
+            newBottom = Math.max(newBottom, r.yBottom)
+          } else break
+        }
+        return newBottom > boxBottom ? { ...b, height: newBottom - b.y } : { ...b }
+      })
+    )
+  }
+  return out
+}
+
+/** Resolve genuine OVERLAPS between page-adjacent block boxes: when a box's top
+ *  falls inside the box above (a float's `\end` strut over the next paragraph),
+ *  the two meet at the midpoint of the overlapping band so neither bleeds into
+ *  the other (BUG-19). A box that ends a line SHORT — synctex dropped its
+ *  wrapped last row — is handled separately by `reclaimDroppedRows` against the
+ *  real pdf.js text layer, not guessed from the inter-block gap (which couldn't
+ *  tell a dropped line from section/float/list whitespace, the BUG-25/37/40 +
+ *  list-over-fire churn). Per page, boxes are sorted top-to-bottom and only
+ *  overlapping pairs are touched. Returns a new map; inputs aren't mutated. */
+export function resolveBoxOverlaps(rects: Map<string, PdfRect[]>): Map<string, PdfRect[]> {
+  const out = new Map<string, PdfRect[]>()
+  const byPage = new Map<number, PdfRect[]>()
   for (const [id, boxes] of rects) {
     const clones = boxes.map((b) => ({ ...b }))
     out.set(id, clones)
-    const floatish = blockKindPrefix(id) === 'env' && !isListEnv(envNames.get(id))
     for (const box of clones) {
       const arr = byPage.get(box.page)
-      if (arr) arr.push({ box, floatish })
-      else byPage.set(box.page, [{ box, floatish }])
+      if (arr) arr.push(box)
+      else byPage.set(box.page, [box])
     }
   }
-  for (const entries of byPage.values()) {
-    entries.sort((p, q) => p.box.y - q.box.y)
-    for (let i = 0; i < entries.length - 1; i++) {
-      const a = entries[i]!.box
-      const b = entries[i + 1]!.box
+  for (const boxes of byPage.values()) {
+    boxes.sort((a, b) => a.y - b.y)
+    for (let i = 0; i < boxes.length - 1; i++) {
+      const a = boxes[i]!
+      const b = boxes[i + 1]!
       const aBottom = a.y + a.height
-      const lineHeight = Math.min(a.height, LINE_H_CAP)
       if (b.y < aBottom) {
-        // overlap: meet at the midpoint of the overlapping band (BUG-19)
+        // overlap → meet at the midpoint of the overlapping band (BUG-19)
         const bBottom = b.y + b.height
         const m = (aBottom + b.y) / 2
         a.height = m - a.y
         b.y = m
         b.height = Math.max(0, bBottom - m)
-      } else if (b.y - aBottom <= SETTLE_GAP_K * lineHeight) {
-        // small gap: extend a by ≤ one line to reclaim a synctex-dropped wrapped
-        // line; leave b put so real whitespace beyond one line stays clear
-        // (BUG-25). But the gap before/after a FLOAT-like env (figure/table/
-        // display) is real \intextsep, never a dropped line — never extend a
-        // text box into a float's whitespace, nor a float's box downward (BUG-37).
-        // A list neighbour is body text, so it does NOT block the reclaim.
-        if (entries[i]!.floatish || entries[i + 1]!.floatish) continue
-        const newBottom = Math.min(aBottom + lineHeight, b.y - MIN_GAP)
-        a.height = Math.max(a.height, newBottom - a.y)
       }
     }
   }
