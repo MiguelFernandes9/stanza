@@ -66,6 +66,35 @@ export function reorderTabs(state: TabState, from: number, to: number): TabState
   return { ...state, openFiles }
 }
 
+/** Move `file` to the GAP/insertion index `toIndex` (0..length, where length =
+ *  "after the last tab"), the model behind drag-to-reorder with a between-tabs
+ *  drop. Because the dragged file is removed first, a gap to the RIGHT of its
+ *  old slot shifts left by one; both of its own adjacent gaps are no-ops. Out-of
+ *  range gaps clamp; an unknown file returns `state` as-is. Delegates the splice
+ *  to `reorderTabs` (which also no-ops an unchanged index). */
+export function moveTabToIndex(state: TabState, file: string, toIndex: number): TabState {
+  const from = state.openFiles.indexOf(file)
+  if (from === -1) return state
+  const clamped = Math.max(0, Math.min(toIndex, state.openFiles.length))
+  const to = clamped > from ? clamped - 1 : clamped
+  return reorderTabs(state, from, to)
+}
+
+/** The gap index where the drop-between insertion bar should render, or null
+ *  when it must be hidden: nothing is dragging, no gap is hovered, or the drop
+ *  would not move the tab (its own two adjacent gaps). Pure so the bar-visibility
+ *  rule is one tested place, separate from the pointer-half math in the view. */
+export function insertionBarIndex(
+  openFiles: string[],
+  draggingFile: string | null,
+  dropIndex: number | null,
+): number | null {
+  if (draggingFile === null || dropIndex === null) return null
+  const from = openFiles.indexOf(draggingFile)
+  if (from !== -1 && (dropIndex === from || dropIndex === from + 1)) return null
+  return dropIndex
+}
+
 /** The tab to focus for Cmd+<n> (1..9): 1..8 → that 1-based tab; 9 → the LAST
  *  tab (browser convention). null when there are fewer tabs (no-op). */
 export function tabForIndex(openFiles: string[], n: number): string | null {

@@ -21,9 +21,25 @@ export function planMove(from: string, toDir: string): MovePlan {
   return { ok: true, to: toDir ? `${toDir}/${baseName(from)}` : baseName(from) }
 }
 
+/** True only when dropping on `dir` ('' = root) from the currently-dragged path
+ *  would succeed: something is dragging, `dir` is the hovered target, and
+ *  planMove permits it. The gate for the truthful drop highlight — a noop or
+ *  descendant target stays unlit. Reuses planMove (the single move-rule source);
+ *  JSX-free so it unit-tests without a DOM. */
+export function isValidDropTarget(
+  dragging: string | null,
+  overDir: string | null,
+  dir: string,
+): boolean {
+  return dragging !== null && overDir === dir && planMove(dragging, dir).ok
+}
+
 export interface FileDrag {
   dragging: string | null
   overDir: string | null
+  /** True when the live drag would successfully land on `dir` ('' = root) —
+   *  drives the truthful (planMove-gated) container-drop highlight. */
+  canDrop: (dir: string) => boolean
   /** Props making a row the drag SOURCE. */
   sourceProps: (path: string) => {
     draggable: true
@@ -33,7 +49,7 @@ export interface FileDrag {
   /** Props making a folder/root a drop TARGET (`dir` '' = root). */
   targetProps: (dir: string) => {
     onDragOver: (e: ReactDragEvent) => void
-    onDragLeave: () => void
+    onDragLeave: (e: ReactDragEvent) => void
     onDrop: (e: ReactDragEvent) => void
   }
 }
@@ -48,6 +64,7 @@ export function useFileDrag(onMove: (from: string, toDir: string) => void): File
   return {
     dragging,
     overDir,
+    canDrop: (dir) => isValidDropTarget(dragging, overDir, dir),
     sourceProps: (path) => ({
       draggable: true,
       onDragStart: (e) => {
@@ -64,9 +81,16 @@ export function useFileDrag(onMove: (from: string, toDir: string) => void): File
       onDragOver: (e) => {
         if (dragging === null) return
         e.preventDefault()
+        // The innermost target wins: without this, a dragOver on a folder row
+        // bubbles to the enclosing root drop zone, whose handler runs last and
+        // overwrites overDir with '' — so the folder never highlights.
+        e.stopPropagation()
         setOverDir(dir)
       },
-      onDragLeave: () => setOverDir((d) => (d === dir ? null : d)),
+      onDragLeave: (e) => {
+        e.stopPropagation()
+        setOverDir((d) => (d === dir ? null : d))
+      },
       onDrop: (e) => {
         if (dragging === null) return
         e.preventDefault()
