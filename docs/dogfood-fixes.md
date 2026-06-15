@@ -1662,3 +1662,38 @@ overhang).
 
 **Lane.** Renderer paper, `paperModel.ts` `mathBoxesByPage` (1 function — same
 owner as BUG-36/38). Branch off main.
+
+## BUG-40 — paragraph box extends into the whitespace before a SECTION heading (BUG-37, finished)
+
+Same shape as BUG-37, but the block below is a `\section` heading, not a float:
+paragraph boxes hang ~16pt below their last line into the heading's space-above
+(seen before "2.2 A citation", "2.3 Discussion", "Outline").
+
+**Root cause.** BUG-37 gated the BUG-25 "reclaim a synctex-dropped last line"
+extension to skip only when a neighbour is an **environment**
+(`resolveBoxOverlaps`, `paperModel.ts`: `if (kind === 'env' …) continue`). A
+section heading is kind `sec`, so a paragraph→heading pair still extends. Verified
+with live synctex: paragraph `ch1.tex:97-102` ends at v-bottom **638.21** (four
+full lines, nothing dropped); `\section{Outline}` top is **660.34** — a
+**22.13pt** gap that is the section `\beforeskip`, not a dropped line.
+`lineHeight=16`, `2.5×16=40 ≥ 22.13`, so the box grows to `654.21`, ~16pt into
+the heading's whitespace.
+
+**Fix (restrict the reclaim to paragraph→paragraph).** The dropped-last-line
+reclaim only makes sense between two text-flow paragraphs; the gap before a
+section heading OR a float is structural whitespace. Change the gate to extend
+**only when both neighbours are paragraphs**: `if (entries[i].kind !== 'par' ||
+entries[i+1].kind !== 'par') continue`. This subsumes the BUG-37 env case and
+adds the section case. Leave the overlap→midpoint branch (BUG-19) untouched —
+overlaps still resolve regardless of kind.
+
+**Test (`paperModel.test.ts`).** Paragraph box (`bottom 638.21`) above a `sec`
+heading box (`top 660.34`, gap 22.13) → paragraph NOT extended. Keep/confirm the
+BUG-25 paragraph→paragraph case still extends (its fixture ids must carry the
+`par` prefix so `blockKindPrefix` reads `par`). Live gate (Miguel): paragraph
+boxes before "Outline" / "2.2" / "2.3" end at their last line.
+
+**⚠️ Sequencing.** Same file as BUG-39 (`mathBoxesByPage`, in flight on
+`fix/math-box-content`). Different function, but to avoid a conflict give BUG-40
+to the **same sibling** (append to the BUG-39 branch) or branch after BUG-39
+merges. **Lane.** Renderer paper, `paperModel.ts` `resolveBoxOverlaps`.
