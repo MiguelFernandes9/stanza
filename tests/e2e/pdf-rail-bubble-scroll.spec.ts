@@ -85,10 +85,12 @@ test('an open rail bubble is reachable by horizontal scroll; no spurious scrollb
   // The fix: the rail now extends the scroll content so the bubble is scrollable to.
   expect(open0.maxScroll, `bubble open but the rail is not scrollable (maxScroll ${open0.maxScroll}, bubble ${open0.bubble!.offRight}px past pane)`).toBeGreaterThanOrEqual(open0.bubble!.offRight - 1)
 
-  // (3) Scroll right → the full bubble becomes reachable.
+  // (3) Scroll right → the full bubble becomes reachable, AND it keeps a right
+  //     gutter (RAIL_GUTTER) so it isn't flush against the pane edge.
   await setScrollLeft(99999)
   const openMax = await measure()
-  expect(openMax.bubble!.offRight, `bubble right still clipped after scroll (${openMax.bubble!.offRight}px past pane)`).toBeLessThanOrEqual(2)
+  expect(openMax.bubble!.offRight, `bubble not fully revealed with a margin (offRight ${openMax.bubble!.offRight}, want ≈ -24)`).toBeLessThanOrEqual(-16)
+  expect(openMax.bubble!.offRight, `bubble over-scrolled past the gutter (offRight ${openMax.bubble!.offRight})`).toBeGreaterThanOrEqual(-40)
   // …and we can scroll back to the page's left edge.
   await setScrollLeft(0)
   expect((await measure()).scrollLeft).toBe(0)

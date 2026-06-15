@@ -20,7 +20,7 @@ import { pageTextRows } from './pdfTextRows'
 import type { TextRow } from './pdfTextRows'
 import { pageGraphics } from './pdfGraphics'
 import type { GraphicBox } from './pdfGraphics'
-import { BADGE, PAD, RAIL, connectorPath, paneLayout, phaseTone, stackTops } from './paperPaneLayout'
+import { BADGE, PAD, RAIL, RAIL_GUTTER, connectorPath, paneLayout, phaseTone, stackTops } from './paperPaneLayout'
 
 const FALLBACK_PAGE_WIDTH = 564
 
@@ -558,6 +558,17 @@ export function PaperPane(props: Props): JSX.Element {
                     </div>
                   )
                 })}
+
+                {/* Trailing gutter: push the scrollable rail a little past the
+                    rightmost bubble so a scrolled-to bubble keeps a margin from
+                    the pane's right edge instead of sitting flush (BUG-46). It
+                    lives inside the clipped overlay, so it only adds scroll width
+                    while a bubble is open — the centred no-bubble layout is
+                    unchanged. */}
+                <div
+                  aria-hidden
+                  style={{ position: 'absolute', left: cW, top: 0, width: RAIL_GUTTER, height: 1, pointerEvents: 'none' }}
+                />
               </div>
             </div>
           </div>
