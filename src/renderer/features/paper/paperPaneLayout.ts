@@ -1,12 +1,13 @@
 import type { TaskPhase } from '../tasks/taskStore'
 
-/** v0.3 pane geometry (pure). The page + right rail form one fixed-width track
- *  that CSS centres in the scroll container; every task is a badge at the page's
- *  right edge that opens a bubble in the rail, connected by a bezier. Kept
- *  JSX-free so it unit-tests like paperModel; PaperPane feeds it the page width
- *  only (no measured container width — that produced a one-frame-stale re-centre
- *  and sideways jitter on a pane toggle, M2-5). Constants mirror the mock
- *  (`PdfPane.jsx`). */
+/** v0.3 pane geometry (pure). CSS centres the PAGE in the scroll container; the
+ *  right rail hangs off the page's right edge as an absolute overlay (every task
+ *  is a badge at that edge opening a bubble in the rail, connected by a bezier).
+ *  Kept JSX-free so it unit-tests like paperModel; PaperPane feeds it the page
+ *  width only (no measured container width — centring off a measured width
+ *  produced a one-frame-stale re-centre and sideways jitter on a pane toggle, and
+ *  centring the page+rail TRACK instead of the page left-shifted the page by half
+ *  the rail, M2-5). Constants mirror the mock (`PdfPane.jsx`). */
 
 export const PAD = 28
 export const GAPX = 30
@@ -17,18 +18,20 @@ export const CARD_GAP = 14
 export const BADGE = 28
 
 export interface PaneLayout {
-  /** Page's right edge within the track. The page sits at the track origin
-   *  (x = 0), so there is no `pageLeft` — CSS centres the whole track. */
+  /** Page's right edge, measured from the page's own left (x = 0). The page is
+   *  the centred unit, so there is no `pageLeft`; badges park at this edge. */
   pageRightX: number
-  /** Left edge of the right rail (where bubbles sit). */
+  /** Left edge of the right rail (where bubbles sit), off the page's right. */
   railLeft: number
-  /** Intrinsic track width = page + gap + rail. Fixed; CSS centres it. */
+  /** Page + gap + rail span. Sizes the connector svg's coordinate box so a
+   *  bezier can reach from the page edge into the rail — NOT a centred track
+   *  (the page alone is centred; the rail overlays to its right). */
   cW: number
 }
 
 /** Layout from the page width alone — no container measure, so it can't go
  *  stale on a resize (M2-5). The page occupies [0, pageW]; the rail follows
- *  after GAPX; the track is exactly wide enough for both. */
+ *  after GAPX; cW spans both so the connector svg can bridge them. */
 export function paneLayout(pageW: number): PaneLayout {
   const pageRightX = pageW
   const railLeft = pageRightX + GAPX
