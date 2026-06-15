@@ -24,9 +24,9 @@ import {
   cycleTab,
   decideCloseActive,
   deleteTabs,
+  moveTabToIndex,
   openTab,
   renameTabs,
-  reorderTabs,
   tabForIndex,
   type TabState
 } from '../editor/openFilesModel'
@@ -140,15 +140,11 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
     (relPath: string) => applyTabs(closeTab(tab.current, relPath)),
     [applyTabs]
   )
-  // Drag-reorder: a tab (draggedFile) dropped onto another (targetFile) moves to
-  // the target's slot; activeFile is unchanged.
+  // Drag-reorder: a tab (draggedFile) dropped at gap `toIndex` (0..length) lands
+  // there; activeFile is unchanged. Index insert, not onto-target.
   const reorderFiles = useCallback(
-    (draggedFile: string, targetFile: string) => {
-      const t = tab.current
-      const from = t.openFiles.indexOf(draggedFile)
-      const to = t.openFiles.indexOf(targetFile)
-      if (from === -1 || to === -1) return
-      applyTabs(reorderTabs(t, from, to))
+    (draggedFile: string, toIndex: number) => {
+      applyTabs(moveTabToIndex(tab.current, draggedFile, toIndex))
     },
     [applyTabs]
   )

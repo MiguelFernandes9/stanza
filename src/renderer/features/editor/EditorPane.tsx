@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import type { JSX } from 'react'
 import { setDiagnostics } from '@codemirror/lint'
 import { EditorState } from '@codemirror/state'
@@ -9,6 +9,26 @@ import { baseExtensions } from './cmExtensions'
 import { setProjectContext } from './completion/contextFacet'
 import type { ProjectContext } from './completion/projectContext'
 import { FileTab } from './FileTab'
+import { insertionBarIndex } from './openFilesModel'
+
+/** Drop-between insertion indicator rendered in a tab-strip gap — a 2px blue
+ *  bar at the computed insertion index (drag-drop affordances). */
+function InsertionBar(): JSX.Element {
+  return (
+    <div
+      aria-hidden
+      data-testid="tab-insertion-bar"
+      style={{
+        flex: '0 0 auto',
+        alignSelf: 'center',
+        width: 2,
+        height: 24,
+        borderRadius: 2,
+        background: 'var(--drop-accent)'
+      }}
+    />
+  )
+}
 
 export interface EditorApi {
   /** Write every dirty buffer to disk; returns the saved paths. */
@@ -35,8 +55,8 @@ interface Props {
   onSelectFile: (file: string) => void
   /** Close a tab — Workspace owns the open-files set. */
   onCloseFile: (file: string) => void
-  /** Drag-reorder tabs — Workspace reorders the open-files set. */
-  onReorder: (draggedFile: string, dropTargetFile: string) => void
+  /** Drag-reorder a tab to a gap index — Workspace applies moveTabToIndex. */
+  onReorder: (draggedFile: string, toIndex: number) => void
   /** ⌘S — save the active file to disk, then compile (trigger 1). Editing a
    *  buffer no longer compiles; the PDF refreshes only on this explicit save. */
   onSaveActiveAndCompile: () => void
@@ -249,6 +269,11 @@ export function EditorPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  const stripRef = useRef<HTMLDivElement | null>(null)
+  const [draggingFile, setDraggingFile] = useState<string | null>(null)
+  const [dropIndex, setDropIndex] = useState<number | null>(null)
+  const barIndex = insertionBarIndex(openFiles, draggingFile, dropIndex)
+
   return (
     <section
       style={{
@@ -262,6 +287,21 @@ export function EditorPane({
       }}
     >
       <div
+        ref={stripRef}
+        onDragOver={(e) => {
+          if (draggingFile !== null) e.preventDefault()
+        }}
+        onDrop={(e) => {
+          e.preventDefault()
+          if (draggingFile !== null && dropIndex !== null) onReorder(draggingFile, dropIndex)
+          setDraggingFile(null)
+          setDropIndex(null)
+        }}
+        onDragLeave={(e) => {
+          // Clear only when the pointer leaves the strip itself, not on the
+          // bubble while moving between tabs inside it.
+          if (!stripRef.current?.contains(e.relatedTarget as Node | null)) setDropIndex(null)
+        }}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -274,17 +314,27 @@ export function EditorPane({
           overflowX: 'auto'
         }}
       >
-        {openFiles.map((file) => (
-          <FileTab
-            key={file}
-            file={file}
-            active={file === activeFile}
-            dirty={dirty.has(file)}
-            onSelect={onSelectFile}
-            onClose={requestClose}
-            onReorder={onReorder}
-          />
+        {openFiles.map((file, i) => (
+          <Fragment key={file}>
+            {barIndex === i && <InsertionBar />}
+            <FileTab
+              file={file}
+              index={i}
+              active={file === activeFile}
+              dirty={dirty.has(file)}
+              dragging={file === draggingFile}
+              onSelect={onSelectFile}
+              onClose={requestClose}
+              onDragStartTab={setDraggingFile}
+              onDragOverTab={setDropIndex}
+              onDragEndTab={() => {
+                setDraggingFile(null)
+                setDropIndex(null)
+              }}
+            />
+          </Fragment>
         ))}
+        {barIndex === openFiles.length && <InsertionBar />}
       </div>
 
       <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
