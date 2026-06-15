@@ -11,23 +11,28 @@ export function buildFileTree(entries: FileEntry[]): FileTreeNode[] {
 }
 
 function subtree(entries: FileEntry[], prefix: string): FileTreeNode[] {
-  const dirs = new Map<string, FileEntry[]>()
+  // Children grouped by their immediate subdirectory, plus the directories that
+  // are direct children of `prefix` (a `kind:'dir'` entry — the only signal for
+  // an EMPTY dir, BUG-47). A non-empty dir appears in both; the union dedupes.
+  const dirGroups = new Map<string, FileEntry[]>()
+  const dirNames = new Set<string>()
   const files: FileEntry[] = []
   for (const e of entries) {
     const rest = e.relPath.slice(prefix.length)
     const slash = rest.indexOf('/')
     if (slash === -1) {
-      files.push(e)
+      if (e.kind === 'dir') dirNames.add(prefix + rest)
+      else files.push(e)
     } else {
       const dir = prefix + rest.slice(0, slash)
-      const group = dirs.get(dir)
+      const group = dirGroups.get(dir)
       if (group) group.push(e)
-      else dirs.set(dir, [e])
+      else dirGroups.set(dir, [e])
     }
   }
-  const dirNodes: FileTreeNode[] = [...dirs.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([dir, group]) => ({ dir, children: subtree(group, `${dir}/`) }))
+  const dirNodes: FileTreeNode[] = [...new Set([...dirGroups.keys(), ...dirNames])]
+    .sort((a, b) => a.localeCompare(b))
+    .map((dir) => ({ dir, children: subtree(dirGroups.get(dir) ?? [], `${dir}/`) }))
   const fileNodes: FileTreeNode[] = files
     .sort((a, b) => a.relPath.localeCompare(b.relPath))
     .map((entry) => ({ entry }))

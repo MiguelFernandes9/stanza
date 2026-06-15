@@ -1,5 +1,5 @@
 import { cpSync, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path'
 import type { GitClient } from '../infra/GitClient'
 
 /** Resolve `rel` under `root` and assert it stays inside. Rejects absolute
@@ -65,11 +65,12 @@ export class FileService {
     await this.commitIfDirty(`wip: delete ${relPath}`)
   }
 
-  /** Create an empty file under `dir` ('' = root); returns its rel path. */
+  /** Create an empty file under `dir` ('' = root); auto-bumps a colliding name
+   *  ("untitled.tex" → "untitled 2.tex") rather than throwing, so the New file
+   *  flow can't error on a stale name. Returns the created rel path. */
   async createFile(dir: string, name: string): Promise<string> {
-    const rel = dir ? `${dir}/${name}` : name
+    const rel = this.freeNamePath(dir ? `${dir}/${name}` : name)
     const abs = safeJoin(this.root, rel)
-    if (existsSync(abs)) throw new Error('NAME_EXISTS')
     mkdirSync(dirname(abs), { recursive: true })
     writeFileSync(abs, '')
     await this.commitIfDirty(`wip: create ${rel}`)
@@ -93,19 +94,37 @@ export class FileService {
     return rels
   }
 
-  /** Create an empty directory under `dir` ('' = root). */
-  async createFolder(dir: string, name: string): Promise<void> {
-    const rel = dir ? `${dir}/${name}` : name
-    const abs = safeJoin(this.root, rel)
-    if (existsSync(abs)) throw new Error('NAME_EXISTS')
-    mkdirSync(abs, { recursive: true })
-    // An empty dir is invisible to git — nothing to commit, tree stays clean.
-    // It surfaces in document:files once it holds a file.
+  /** Create an empty directory under `dir` ('' = root); auto-bumps a colliding
+   *  name ("untitled" → "untitled 2") rather than throwing, so repeated New
+   *  folder can't error (BUG-47). Returns the created rel path. */
+  async createFolder(dir: string, name: string): Promise<string> {
+    const rel = this.freeNamePath(dir ? `${dir}/${name}` : name)
+    mkdirSync(safeJoin(this.root, rel), { recursive: true })
+    // An empty dir has nothing for git to track (tree stays clean), but it now
+    // surfaces in document:files via the directory walk (BUG-47) and persists on
+    // disk across reopen; a git clean/reclone drops it (a .gitkeep would
+    // persist — a product decision, deferred).
+    return rel
   }
 
   /** `rel` itself if free, else the collision-suffixed " copy" variant. */
   private freeImportPath(rel: string): string {
     return existsSync(safeJoin(this.root, rel)) ? this.freeDupPath(rel) : rel
+  }
+
+  /** `rel` if free, else the first free "<base> N" variant (keeping any
+   *  extension) — matches the renderer's uniqueName scheme so New file/New
+   *  folder pick the same name whether the renderer or the service de-dupes,
+   *  and never collide on a stale view (BUG-47). */
+  private freeNamePath(rel: string): string {
+    if (!existsSync(safeJoin(this.root, rel))) return rel
+    const parent = dirname(rel)
+    const ext = extname(rel)
+    const base = basename(rel, ext)
+    const prefix = parent === '.' ? '' : `${parent}/`
+    let n = 2
+    while (existsSync(safeJoin(this.root, `${prefix}${base} ${n}${ext}`))) n++
+    return `${prefix}${base} ${n}${ext}`
   }
 
   /** First free "<base> copy[.ext]" variant, incrementing to stay unique. */

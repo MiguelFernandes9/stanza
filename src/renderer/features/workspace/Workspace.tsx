@@ -462,7 +462,14 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
 
   const onCreateFolder = (dir: string): void => {
     const name = uniqueName(namesInDir(dir), 'untitled', '')
-    runFileOp(() => client.documentCreateFolder({ dir, name }))
+    runFileOp(
+      () => client.documentCreateFolder({ dir, name }),
+      (res) => {
+        // Inline-rename parity with New file: drop straight into renaming the new
+        // folder. No openFile — a directory isn't an editor tab (BUG-47).
+        if (res.newRelPath) setRenameOnAppear(res.newRelPath)
+      }
+    )
   }
 
   // Upload: main shows the OS picker and copies the bytes; result flows through

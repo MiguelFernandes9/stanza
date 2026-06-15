@@ -14,8 +14,10 @@ export interface DocumentOpenRequest {
 /** One project file for the sidebar FILES tree (document:files).
  *  The renderer derives tree structure and icons from relPath + kind. */
 export interface FileEntry {
-  relPath: string       // e.g. "chapters/ch1.tex", "figs/plot.pdf"
-  kind: 'tex' | 'bib' | 'image' | 'style' | 'text' | 'other'
+  relPath: string       // e.g. "chapters/ch1.tex", "figs/plot.pdf", "chapters"
+  /** 'dir' for a directory (incl. empty ones) so the tree can show and target
+   *  it; otherwise the file's type. */
+  kind: 'dir' | 'tex' | 'bib' | 'image' | 'style' | 'text' | 'other'
 }
 
 export interface RecentProject {

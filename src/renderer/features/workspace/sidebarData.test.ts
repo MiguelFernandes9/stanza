@@ -43,6 +43,37 @@ describe('buildFileTree', () => {
       'z.tex'
     ])
   })
+
+  it('renders an empty directory entry as an expandable dir node (BUG-47)', () => {
+    const tree = buildFileTree([f('main.tex'), f('untitled', 'dir')])
+    expect(tree.map((n) => ('dir' in n ? n.dir : n.entry.relPath))).toEqual(['untitled', 'main.tex'])
+    const dir = tree[0]
+    if (!('dir' in dir)) throw new Error('expected an empty dir node, got a file leaf')
+    expect(dir.children).toEqual([])
+  })
+
+  it('does not double-create a dir present both as an entry and via its files (BUG-47)', () => {
+    const tree = buildFileTree([f('chapters', 'dir'), f('chapters/ch1.tex')])
+    expect(tree).toHaveLength(1) // one 'chapters' dir node, not a dir + a stray leaf
+    const chapters = tree[0]
+    if (!('dir' in chapters)) throw new Error('expected dir node')
+    expect(chapters.children.map((c) => ('dir' in c ? c.dir : c.entry.relPath))).toEqual([
+      'chapters/ch1.tex'
+    ])
+  })
+
+  it('nests an empty subdirectory (BUG-47)', () => {
+    const tree = buildFileTree([f('chapters/ch1.tex'), f('chapters/sub', 'dir')])
+    const chapters = tree[0]
+    if (!('dir' in chapters)) throw new Error('expected dir node')
+    expect(chapters.children.map((c) => ('dir' in c ? c.dir : c.entry.relPath))).toEqual([
+      'chapters/sub', // empty dir sorts before the file
+      'chapters/ch1.tex'
+    ])
+    const sub = chapters.children[0]
+    if (!('dir' in sub)) throw new Error('expected nested empty dir node')
+    expect(sub.children).toEqual([])
+  })
 })
 
 describe('relativeTime', () => {
