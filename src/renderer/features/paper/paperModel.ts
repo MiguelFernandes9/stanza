@@ -305,10 +305,15 @@ export function isMathEnvName(name: string | undefined): boolean {
  *  synctex returns full-block-height container rects (\textwidth, and
  *  textwidth+number) alongside narrower per-line glyph rects; unioning all
  *  gives a full-column box wider than the formula (BUG-23). Take top/bottom
- *  from every rect, but left/right from the per-line glyph rects only — those
- *  shorter than 0.7× the block height — so the box hugs the formula. Fallback:
- *  when no rect is sub-full-height (single-line equation, all rects the same
- *  height), keep the full width — it's the only signal. */
+ *  from every rect. The LEFT is the true formula left — `min(x)` over every
+ *  rect: a tall \frac leaves only a short inner fragment (the denominator)
+ *  passing the height filter, so hugging the left to glyph rects collapses the
+ *  box onto mid-formula (BUG-36). The height filter only trims the RIGHT
+ *  overshoot — the \textwidth / numbered container sits to the right of the
+ *  formula left, never to its left — so the right comes from the per-line glyph
+ *  rects (those shorter than 0.7× the block height). Fallback: when no rect is
+ *  sub-full-height (single-line equation, all rects the same height), the right
+ *  uses every rect — the full width is the only signal. */
 export function mathBoxesByPage(rects: PdfRect[]): PdfRect[] {
   const byPage = new Map<number, PdfRect[]>()
   for (const r of rects) {
@@ -324,7 +329,7 @@ export function mathBoxesByPage(rects: PdfRect[]): PdfRect[] {
       const bottom = Math.max(...rs.map((r) => r.y + r.height))
       const glyphs = rs.filter((r) => r.height < 0.7 * (bottom - y))
       const widthRects = glyphs.length ? glyphs : rs
-      const x = Math.min(...widthRects.map((r) => r.x))
+      const x = Math.min(...rs.map((r) => r.x))
       const right = Math.max(...widthRects.map((r) => r.x + r.width))
       return { page, x, y, width: right - x, height: bottom - y }
     })

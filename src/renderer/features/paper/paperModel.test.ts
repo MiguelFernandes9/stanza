@@ -235,6 +235,27 @@ describe('mathBoxesByPage — hug the formula ink (BUG-23)', () => {
     expect(box!.width).toBeCloseTo(325, 5) // glyph width, not 485.5 (the number container)
   })
 
+  it('anchors the left to the formula, not a tall frac inner fragment (BUG-36)', () => {
+    // Live synctex for the demo \[…\] at ch1.tex:197-203 (page 6, post y=v−H
+    // transform). A tall \frac leaves only the short DENOMINATOR (B) under the
+    // 0.7×height glyph filter, so hugging the left to glyph rects collapsed
+    // box.x onto mid-formula (308) instead of the true formula left (198.54).
+    const rects: PdfRect[] = [
+      { page: 6, x: 198.54, y: 100, width: 214.92, height: 26.68 }, // A formula line box
+      { page: 6, x: 308.01, y: 115.77, width: 80.89, height: 10.91 }, // B frac denominator
+      { page: 6, x: 306.82, y: 100.91, width: 83.28, height: 25.77 }, // C frac numerator
+      { page: 6, x: 390.1, y: 100.5, width: 3.64, height: 26.18 } // D \bigg| rule
+    ]
+    const [box] = mathBoxesByPage(rects)
+    expect(box!.x).toBeCloseTo(198.54, 2) // formula left (rect A), NOT 308 (denominator)
+    expect(box!.x).toBeLessThan(300) // never collapsed onto the inner fragment
+    // Right still trimmed to the glyph extent (denominator B) — the height
+    // filter only ever removes the RIGHT overshoot, never moves the left.
+    expect(box!.x + box!.width).toBeCloseTo(388.9, 2)
+    expect(box!.y).toBeCloseTo(100, 5)
+    expect(box!.y + box!.height).toBeCloseTo(126.68, 5)
+  })
+
   it('keeps full width for a single-line equation (all rects same height)', () => {
     const rects: PdfRect[] = [
       { page: 2, x: 72, y: 100, width: 400, height: 20 }, // container
