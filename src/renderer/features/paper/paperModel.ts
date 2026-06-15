@@ -318,20 +318,24 @@ export function isMathEnvName(name: string | undefined): boolean {
   return name !== undefined && MATH_ENV_NAMES.has(name.replace(/\*$/, ''))
 }
 
-/** Per-page box for a display-math block, width hugged to the formula ink.
- *  synctex returns full-block-height container rects (\textwidth, and
- *  textwidth+number) alongside narrower per-line glyph rects; unioning all
- *  gives a full-column box wider than the formula (BUG-23). Take top/bottom
- *  from every rect. The LEFT is the true formula left — `min(x)` over every
- *  rect: a tall \frac leaves only a short inner fragment (the denominator)
- *  passing the height filter, so hugging the left to glyph rects collapses the
- *  box onto mid-formula (BUG-36). The height filter only trims the RIGHT
- *  overshoot — the \textwidth / numbered container sits to the right of the
- *  formula left, never to its left — so the right comes from the per-line glyph
- *  rects (those shorter than 0.7× the block height). Fallback: when no rect is
- *  sub-full-height (single-line equation, all rects the same height), the right
- *  uses every rect — the full width is the only signal. */
-export function mathBoxesByPage(rects: PdfRect[]): PdfRect[] {
+/** Per-page box for a display-math block, hugged to the formula ink. synctex
+ *  returns full-block-height container rects (the \textwidth box, the
+ *  \textwidth+number box, and — for a numbered/split equation — containers out
+ *  in the page margin) alongside narrower per-line glyph rects. Two
+ *  position-aware rules separate the formula from the containers:
+ *   - LEFT: `min(x)` over rects at/right of the body text column
+ *     (`bodyTextColLeft`). The formula content sits at/right of the column; a
+ *     numbered eq's margin containers sit left of it and are dropped, so the
+ *     box left is the formula left, not the margin (BUG-38) — while a \frac's
+ *     full-height line box (in-column) is kept, so the left doesn't collapse
+ *     onto a short inner fragment (BUG-36).
+ *   - RIGHT: `max(x+width)` over the per-line glyph rects (height < 0.7× the
+ *     block height), trimming the \textwidth/number container's right overshoot
+ *     (BUG-23). Fallback: a single-line equation has no sub-height glyph rect,
+ *     so the right uses every rect — the full width is the only signal.
+ *  Top/bottom come from every rect. `bodyTextColLeft` is threaded from
+ *  PaperPane (min x over non-environment block rects). */
+export function mathBoxesByPage(rects: PdfRect[], bodyTextColLeft: number): PdfRect[] {
   const byPage = new Map<number, PdfRect[]>()
   for (const r of rects) {
     if (r.width <= 0 || r.height <= 0) continue
@@ -346,7 +350,16 @@ export function mathBoxesByPage(rects: PdfRect[]): PdfRect[] {
       const bottom = Math.max(...rs.map((r) => r.y + r.height))
       const glyphs = rs.filter((r) => r.height < 0.7 * (bottom - y))
       const widthRects = glyphs.length ? glyphs : rs
-      const x = Math.min(...rs.map((r) => r.x))
+      // Left = the formula's true left, from rects at/right of the body text
+      // column. A numbered/split equation also emits full-height CONTAINER
+      // rects out in the page margin (left of the text column); min(x) over ALL
+      // rects would land the box in the margin (BUG-38). Math content always
+      // sits at/right of the text column, so the in-column min is the formula
+      // left — the frac's full-height line box (BUG-36) is kept, the margin
+      // container dropped. Fallback to all rects if nothing is in-column.
+      const inColumn = rs.filter((r) => r.x >= bodyTextColLeft)
+      const leftRects = inColumn.length ? inColumn : rs
+      const x = Math.min(...leftRects.map((r) => r.x))
       const right = Math.max(...widthRects.map((r) => r.x + r.width))
       return { page, x, y, width: right - x, height: bottom - y }
     })

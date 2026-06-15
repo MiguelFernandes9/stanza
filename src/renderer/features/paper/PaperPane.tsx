@@ -143,27 +143,34 @@ export function PaperPane(props: Props): JSX.Element {
     let alive = true
     const forward = (span: BlockSpan) => client.synctexForward(span).catch((): PdfRect[] => [])
     void Promise.all(
-      pageBlocks.map(async (b) => {
-        // Environment blocks query their INTERIOR span — \begin/\end delimiter
-        // lines carry no content and forward-map to stray galley rects (\end
-        // lands on the paragraph below, BUG-21). Falls back to the full span.
-        const rects = await blockGeometryRects(b, forward)
-        // Drop page-break artifacts (the solid-rect filter) and keep one box
-        // per page, so a \chapter heading adds no 0-height box on the preceding
-        // page (BUG-5) and a block straddling a break is washed on both (BUG-16).
-        // Display-math envs additionally hug the box width to the formula
-        // glyphs, dropping the full-textwidth container/number rects (BUG-23).
-        const boxes = isMathEnvName(b.envName) ? mathBoxesByPage(rects) : blockBoxesByPage(rects)
-        return boxes.length ? ([b.id, boxes] as const) : null
-      })
-    ).then((entries) => {
+      // Environment blocks query their INTERIOR span — \begin/\end delimiter
+      // lines carry no content and forward-map to stray galley rects (\end
+      // lands on the paragraph below, BUG-21). Falls back to the full span.
+      pageBlocks.map(async (b) => ({ b, rects: await blockGeometryRects(b, forward) }))
+    ).then((perBlock) => {
       if (!alive) return
+      // Body text-column left: the leftmost non-environment (paragraph/heading)
+      // rect. Display-math content sits at/right of it, while synctex's margin
+      // container rects for a numbered equation sit further left — they must not
+      // anchor the hugged math box (BUG-38). 0 when the page has no text block.
+      const bodyRects = perBlock.filter(({ b }) => b.kind !== 'environment').flatMap(({ rects }) => rects)
+      const bodyTextColLeft = bodyRects.length ? Math.min(...bodyRects.map((r) => r.x)) : 0
+      const entries = perBlock
+        .map(({ b, rects }) => {
+          // Drop page-break artifacts (the solid-rect filter) and keep one box
+          // per page, so a \chapter heading adds no 0-height box on the preceding
+          // page (BUG-5) and a block straddling a break is washed on both (BUG-16).
+          // Display-math envs additionally hug the box to the formula ink,
+          // dropping the container / number / margin rects (BUG-23/36/38).
+          const boxes = isMathEnvName(b.envName) ? mathBoxesByPage(rects, bodyTextColLeft) : blockBoxesByPage(rects)
+          return boxes.length ? ([b.id, boxes] as const) : null
+        })
+        .filter((e): e is NonNullable<typeof e> => e != null)
       // Trim raw-synctex box overlaps (a float's box extends over the next
       // paragraph's box) before storing, so overlays, allBoxes, selection and
       // hover all consume non-overlapping extents — padding can't fix an
       // overlap in the box itself (BUG-19 reopened).
-      const built = new Map(entries.filter((e): e is NonNullable<typeof e> => e != null))
-      setBlockRects(resolveBoxOverlaps(built))
+      setBlockRects(resolveBoxOverlaps(new Map(entries)))
     })
     return () => {
       alive = false
