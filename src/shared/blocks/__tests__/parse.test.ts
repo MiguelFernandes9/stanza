@@ -176,6 +176,37 @@ describe('body-level brace groups (BUG-22)', () => {
   })
 })
 
+describe('comment lines as soft paragraph delimiters (M2-3)', () => {
+  test('an own-line comment between prose splits the paragraph', () => {
+    // unified-latex emits parbreak only on a blank line, so a % comment line
+    // with no blank line otherwise fuses the surrounding prose into one
+    // overshooting paragraph. An own-line comment must flush the open paragraph.
+    const roots = parseBlocks('x.tex', 'Alpha.\n% note\nBeta.')
+    expect(roots.map((b) => b.kind)).toEqual(['paragraph', 'paragraph'])
+    expect(roots[0]!.span).toMatchObject({ startLine: 1, endLine: 1 })
+    expect(roots[1]!.span).toMatchObject({ startLine: 3, endLine: 3 })
+  })
+
+  test('a trailing inline comment does not split the paragraph', () => {
+    // `prose % note` on one line is sameline:true — it absorbs into the
+    // paragraph, it must not split it.
+    const roots = parseBlocks('x.tex', 'Alpha. % note\nBeta.')
+    expect(roots.map((b) => b.kind)).toEqual(['paragraph'])
+    expect(roots[0]!.span).toMatchObject({ startLine: 1, endLine: 2 })
+  })
+
+  test('\\paragraph and \\subparagraph become section blocks, not prose', () => {
+    // Secondary M2-3: without these in SECTION_LEVELS a \paragraph subheading
+    // fuses into the body and inherits the enclosing chapter's title.
+    const para = parseBlocks('x.tex', '\\paragraph{Note}\nBody.')
+    expect(para.map((b) => b.kind)).toEqual(['section'])
+    expect(para[0]!.name).toBe('Note')
+    const sub = parseBlocks('x.tex', '\\subparagraph{Sub}\nBody.')
+    expect(sub.map((b) => b.kind)).toEqual(['section'])
+    expect(sub[0]!.name).toBe('Sub')
+  })
+})
+
 describe('parseProjectBlocks', () => {
   const FILES: Record<string, string> = {
     'main.tex': [

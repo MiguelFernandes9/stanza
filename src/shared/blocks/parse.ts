@@ -7,6 +7,8 @@ const SECTION_LEVELS: Record<string, number> = {
   section: 2,
   subsection: 3,
   subsubsection: 4,
+  paragraph: 5,
+  subparagraph: 6,
 }
 
 const ENVIRONMENT_TYPES = new Set(['environment', 'mathenv', 'displaymath', 'verbatim'])
@@ -125,7 +127,17 @@ function walkBody(file: string, nodes: Ast.Node[]): BlockNode[] {
       if (!node.position) continue
       const { start, end } = node.position
 
-      if (node.type === 'whitespace' || node.type === 'comment') continue
+      if (node.type === 'whitespace') continue
+      if (node.type === 'comment') {
+        // An own-line comment after prose is a soft paragraph break. unified-latex
+        // emits parbreak only on a blank line, so without this two paragraphs
+        // separated by a bare `% note` line (no blank line) fuse into one
+        // overshooting block (M2-3). A trailing inline comment (`prose % note`,
+        // sameline) absorbs into the open paragraph instead of splitting it.
+        if (!node.sameline) flushParagraph()
+        else if (paragraph) paragraph.endLine = Math.max(paragraph.endLine, end.line)
+        continue
+      }
       if (node.type === 'parbreak') {
         flushParagraph()
         continue
