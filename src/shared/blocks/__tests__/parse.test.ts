@@ -236,6 +236,76 @@ describe('font-declaration groups and \\par (M2-4)', () => {
   })
 })
 
+describe('display math joins the paragraph; \\begin envs stay blocks (BUG-45)', () => {
+  // Rule (Miguel): a block is any \begin{...} environment OR a paragraph (or a
+  // section). \[..\] and $$..$$ are NOT \begin{...} — they join the surrounding
+  // paragraph, exactly like inline $..$. A real equation environment
+  // (\begin{equation}/align/...) IS still its own block, unchanged.
+
+  test('an embedded \\[..\\] is part of its paragraph, not a separate block', () => {
+    // Prose flush against \[..\] with no blank line is ONE LaTeX paragraph
+    // (display math does not break a paragraph). This is the ch1.tex:243-253
+    // shape that wrongly produced two blocks over one galley paragraph.
+    const roots = parseBlocks('ch1.tex', 'Prose before\n\\[ a = 0 \\]\nprose after.')
+    expect(roots.map((b) => b.kind)).toEqual(['paragraph'])
+    expect(roots[0]!.span).toMatchObject({ startLine: 1, endLine: 3 })
+    // the display-math line resolves to that one paragraph — not its own block
+    expect(blockAtLine(roots, 'ch1.tex', 2)).toBe(roots[0])
+  })
+
+  test('the absorbed math source participates in the paragraph id/hash', () => {
+    // ownText / content-hash must cover the math, so the id is stable across
+    // reparses and changes when the equation changes.
+    const src = (rhs: string): string => `Prose before\n\\[ a = ${rhs} \\]\nprose after.`
+    const id0 = parseBlocks('ch1.tex', src('0'))[0]!.id
+    const id0again = parseBlocks('ch1.tex', src('0'))[0]!.id
+    const id1 = parseBlocks('ch1.tex', src('1'))[0]!.id
+    expect(id0).toBe(id0again) // stable across reparses
+    expect(id1).not.toBe(id0) // the equation is inside the hashed span
+  })
+
+  test('an isolated \\[..\\] forms a paragraph block of its own', () => {
+    // Blank lines both sides → the equation alone is a paragraph block (still
+    // selectable, as a paragraph — never an `environment`).
+    const roots = parseBlocks('ch1.tex', 'Intro.\n\n\\[ y = 1 \\]\n\nOutro.')
+    expect(roots.map((b) => b.kind)).toEqual(['paragraph', 'paragraph', 'paragraph'])
+    expect(roots[1]!.span).toMatchObject({ startLine: 3, endLine: 3 })
+    expect(blockAtLine(roots, 'ch1.tex', 3)).toBe(roots[1])
+  })
+
+  test('an embedded $$..$$ also joins its paragraph', () => {
+    const roots = parseBlocks('ch1.tex', 'Prose before\n$$ a = 0 $$\nprose after.')
+    expect(roots.map((b) => b.kind)).toEqual(['paragraph'])
+    expect(roots[0]!.span).toMatchObject({ startLine: 1, endLine: 3 })
+  })
+
+  test('a \\begin{equation} is STILL its own environment block (unchanged)', () => {
+    const roots = parseBlocks('ch1.tex', 'Lead in.\n\\begin{equation}\n  x = 1\n\\end{equation}')
+    expect(roots.map((b) => b.kind)).toEqual(['paragraph', 'environment'])
+    expect(roots[1]!).toMatchObject({ name: 'equation', span: { startLine: 2, endLine: 4 } })
+  })
+
+  test('a \\begin{align} is STILL its own environment block (unchanged)', () => {
+    const roots = parseBlocks('ch1.tex', '\\begin{align}\n  x &= 1\n\\end{align}')
+    expect(roots.map((b) => b.kind)).toEqual(['environment'])
+    expect(roots[0]!.name).toBe('align')
+  })
+
+  test('figure / itemize / verbatim stay their own blocks (unchanged)', () => {
+    const fig = parseBlocks('ch1.tex', '\\begin{figure}\n  \\includegraphics{x}\n\\end{figure}')
+    expect(fig.map((b) => b.kind)).toEqual(['environment'])
+    expect(fig[0]!.name).toBe('figure')
+
+    const itm = parseBlocks('ch1.tex', '\\begin{itemize}\n  \\item one\n\\end{itemize}')
+    expect(itm.map((b) => b.kind)).toEqual(['environment'])
+    expect(itm[0]!.name).toBe('itemize')
+
+    const vrb = parseBlocks('ch1.tex', '\\begin{verbatim}\ncode here\n\\end{verbatim}')
+    expect(vrb.map((b) => b.kind)).toEqual(['environment'])
+    expect(vrb[0]!.name).toBe('verbatim')
+  })
+})
+
 describe('parseProjectBlocks', () => {
   const FILES: Record<string, string> = {
     'main.tex': [

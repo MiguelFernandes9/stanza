@@ -11,7 +11,13 @@ const SECTION_LEVELS: Record<string, number> = {
   subparagraph: 6,
 }
 
-const ENVIRONMENT_TYPES = new Set(['environment', 'mathenv', 'displaymath', 'verbatim'])
+/** AST node types that form their own block: `\begin{...}` environments
+ *  ('environment'), math environments like equation/align/gather ('mathenv'),
+ *  and 'verbatim'. NOT 'displaymath' (`\[..\]` / `$$..$$`): those are not
+ *  `\begin{}` constructs and don't break a paragraph in LaTeX, so they join the
+ *  surrounding paragraph via joinParagraph, exactly like inline `$..$` — see the
+ *  fall-through at the end of walkNodes (BUG-45). */
+const ENVIRONMENT_TYPES = new Set(['environment', 'mathenv', 'verbatim'])
 
 /** Structural macros that carry no prose: they end the current paragraph
  *  and are skipped (like whitespace/comments), never becoming a selectable
@@ -196,8 +202,7 @@ function walkBody(file: string, nodes: Ast.Node[]): BlockNode[] {
 
       if (ENVIRONMENT_TYPES.has(node.type)) {
         flushParagraph()
-        const name = node.type === 'displaymath' ? 'displaymath' : envName(node as Ast.Environment)
-        attach(block('environment', file, start.line, end.line, name))
+        attach(block('environment', file, start.line, end.line, envName(node as Ast.Environment)))
         continue
       }
 
@@ -211,7 +216,9 @@ function walkBody(file: string, nodes: Ast.Node[]): BlockNode[] {
         continue
       }
 
-      // anything else (string, inline macro, math) joins a paragraph
+      // anything else (string, inline macro, inline or display math) joins a
+      // paragraph — incl. 'displaymath' \[..\]/$$..$$, which is not a \begin
+      // env and so never breaks the paragraph (BUG-45)
       joinParagraph(start.line, end.line)
     }
   }
