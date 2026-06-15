@@ -204,8 +204,8 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IpcChannels.documentCreateFolder, async (_e, a: { dir: string; name: string }) => {
     const doc = requireSession()
-    await doc.files.createFolder(a.dir, a.name)
-    return fileMutationResult(doc)
+    const newRelPath = await doc.files.createFolder(a.dir, a.name)
+    return fileMutationResult(doc, newRelPath)
   })
 
   // Upload (v0.4): main shows the OS picker and copies the bytes — nothing
@@ -396,6 +396,9 @@ function listFiles(root: string, dir = ''): FileEntry[] {
     const relPath = dir ? `${dir}/${entry.name}` : entry.name
     if (entry.isDirectory()) {
       if (entry.name !== 'node_modules' && !entry.name.startsWith('.')) {
+        // Emit the directory itself (so an EMPTY dir is visible and a New folder
+        // can't re-collide, BUG-47), then recurse for its children.
+        found.push({ relPath, kind: 'dir' })
         found.push(...listFiles(root, relPath))
       }
     } else {

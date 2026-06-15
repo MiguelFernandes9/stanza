@@ -226,6 +226,22 @@ describe('file management channels (v0.2)', () => {
     }
   })
 
+  test('New folder lists an empty dir + returns its path; a second one bumps (BUG-47)', async () => {
+    await openProject()
+    const r1 = (await invoke('document:createFolder', { dir: '', name: 'untitled' })) as FileMutationResult
+    // an empty directory is now visible in the listing (was invisible -> the
+    // renderer re-asked for "untitled" -> NAME_EXISTS on the next click)
+    expect(r1.files).toContainEqual({ relPath: 'untitled', kind: 'dir' })
+    expect(r1.newRelPath).toBe('untitled') // drives inline rename, like New file
+
+    const r2 = (await invoke('document:createFolder', { dir: '', name: 'untitled' })) as FileMutationResult
+    expect(r2.newRelPath).toBe('untitled 2') // bumped, no NAME_EXISTS throw
+    expect(r2.files.filter((file) => file.kind === 'dir').map((file) => file.relPath).sort()).toEqual([
+      'untitled',
+      'untitled 2'
+    ])
+  })
+
   test('rename returns a FileMutationResult with the fresh listing', async () => {
     const root = await openProject()
     writeFileSync(join(root, 'notes.md'), 'hi\n')

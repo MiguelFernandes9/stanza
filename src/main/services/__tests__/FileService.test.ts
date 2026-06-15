@@ -139,19 +139,27 @@ describe('FileService.createFile', () => {
     expect(has('chapters/ch3.tex')).toBe(true)
   })
 
-  test('throws NAME_EXISTS when the file already exists', async () => {
-    await expect(files.createFile('', 'main.tex')).rejects.toThrow('NAME_EXISTS')
+  test('bumps a colliding name instead of throwing, keeping the extension (BUG-47)', async () => {
+    expect(await files.createFile('', 'main.tex')).toBe('main 2.tex')
+    expect(has('main 2.tex')).toBe(true)
   })
 })
 
 describe('FileService.createFolder', () => {
-  test('creates a new directory', async () => {
-    await files.createFolder('', 'appendix')
+  test('creates a new directory and returns its relPath', async () => {
+    expect(await files.createFolder('', 'appendix')).toBe('appendix')
     expect(existsSync(join(root, 'appendix'))).toBe(true)
   })
 
-  test('throws NAME_EXISTS when the folder already exists', async () => {
-    await expect(files.createFolder('', 'chapters')).rejects.toThrow('NAME_EXISTS')
+  test('bumps a colliding default name instead of throwing (BUG-47)', async () => {
+    // An empty dir is invisible to the renderer's namesInDir until the model fix
+    // lands, so the service self-uniquifies — repeated New folder must not throw.
+    expect(await files.createFolder('', 'chapters')).toBe('chapters 2')
+  })
+
+  test('two New folders yield untitled then untitled 2 (no throw, BUG-47)', async () => {
+    expect(await files.createFolder('', 'untitled')).toBe('untitled')
+    expect(await files.createFolder('', 'untitled')).toBe('untitled 2')
   })
 })
 
