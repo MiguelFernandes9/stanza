@@ -6,6 +6,7 @@ import { EditorView, keymap } from '@codemirror/view'
 import { client } from '@renderer/lib/client'
 import type { CompileError, DocumentInfo } from '@shared/ipc'
 import { baseExtensions } from './cmExtensions'
+import { FileTab } from './FileTab'
 
 export interface EditorApi {
   /** Write every dirty buffer to disk; returns the saved paths. */
@@ -19,7 +20,11 @@ interface Props {
   /** Editor pane width (px) — drag-resizable via usePaneWidths. */
   width: number
   activeFile: string
+  /** Open tabs in open order — the bar renders these, not every project file. */
+  openFiles: string[]
   onSelectFile: (file: string) => void
+  /** Close a tab — Workspace owns the open-files set. */
+  onCloseFile: (file: string) => void
   /** Any buffer edit — F6 debounce hook. */
   onDocChanged: () => void
   errors: CompileError[]
@@ -31,13 +36,15 @@ interface Props {
 
 /** Source editor pane (F4) — CodeMirror 6 with codemirror-lang-latex
  *  (lezer grammar; picked over @codemirror/legacy-modes stex for active
- *  maintenance and structured highlighting). File tabs over texFiles,
- *  dirty dots, ⌘S save, design §2 chrome. */
+ *  maintenance and structured highlighting). Open-file tabs, dirty dots,
+ *  ⌘S save, design §2 chrome. */
 export function EditorPane({
   doc,
   width,
   activeFile,
+  openFiles,
   onSelectFile,
+  onCloseFile,
   onDocChanged,
   errors,
   onForwardSearch,
@@ -62,18 +69,32 @@ export function EditorPane({
       return next
     })
 
+  // Write one buffer to disk and clear its dirty flag. The content is read
+  // synchronously, so callers that unmount the pane right after (closing the
+  // last tab) still flush the in-flight write.
+  const saveFile = async (file: string): Promise<void> => {
+    await client.documentSave({ relPath: file, content: buffers.current.get(file) ?? '' })
+    markDirty(file, false)
+  }
+
   const saveDirty = async (): Promise<string[]> => {
     const saved: string[] = []
     for (const file of [...buffers.current.keys()]) {
       if (!dirtyRef.current.has(file)) continue
-      await client.documentSave({ relPath: file, content: buffers.current.get(file) ?? '' })
-      markDirty(file, false)
+      await saveFile(file)
       saved.push(file)
     }
     return saved
   }
   const dirtyRef = useRef(dirty)
   dirtyRef.current = dirty
+
+  // Close a tab without losing unsaved text: a dirty buffer is saved first
+  // (same per-file path as saveDirty), then Workspace drops it from openFiles.
+  const requestClose = (file: string): void => {
+    if (dirtyRef.current.has(file)) void saveFile(file)
+    onCloseFile(file)
+  }
 
   const applyJump = (view: EditorView, line: number): void => {
     const docLine = view.state.doc.line(Math.min(Math.max(line, 1), view.state.doc.lines))
@@ -229,34 +250,16 @@ export function EditorPane({
         >
           Source
         </span>
-        {doc.texFiles.map((file) => {
-          const active = file === activeFile
-          return (
-            <button
-              key={file}
-              onClick={() => onSelectFile(file)}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                height: 28,
-                padding: '0 10px',
-                border: `1px solid ${active ? 'var(--border-default)' : 'transparent'}`,
-                borderRadius: 'var(--radius-sm)',
-                background: active ? 'var(--surface-card)' : 'transparent',
-                color: active ? 'var(--ink-900)' : 'var(--ink-500)',
-                font: `var(--weight-${active ? 'semibold' : 'medium'}) var(--text-xs)/1 var(--font-mono)`,
-                cursor: 'pointer',
-                whiteSpace: 'nowrap'
-              }}
-            >
-              {file.split('/').pop()}
-              {dirty.has(file) && (
-                <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--clay-500)' }} />
-              )}
-            </button>
-          )
-        })}
+        {openFiles.map((file) => (
+          <FileTab
+            key={file}
+            file={file}
+            active={file === activeFile}
+            dirty={dirty.has(file)}
+            onSelect={onSelectFile}
+            onClose={requestClose}
+          />
+        ))}
       </div>
 
       <div ref={hostRef} style={{ flex: 1, minHeight: 0, overflow: 'hidden' }} />

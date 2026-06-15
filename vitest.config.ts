@@ -7,6 +7,14 @@ const sharedAlias = {
   '@shared': fileURLToPath(new URL('./src/shared', import.meta.url)),
 }
 
+// Renderer tests resolve both `@shared` and `@renderer`, matching
+// electron.vite.config.ts so component modules (EditorPane → lib/client)
+// stay importable.
+const rendererAlias = {
+  ...sharedAlias,
+  '@renderer': fileURLToPath(new URL('./src/renderer', import.meta.url)),
+}
+
 // One project per src layer (plan T2.1) plus two cross-cutting ones:
 // `tests` covers tests/ (fixture contracts, mock harness);
 // `integration` needs real tectonic and only runs via
@@ -32,6 +40,7 @@ export default defineConfig({
         },
       },
       {
+        resolve: { alias: rendererAlias },
         test: {
           name: 'renderer',
           environment: 'jsdom',
