@@ -90,6 +90,23 @@ const TRANSPARENT_MACROS = new Set([
   'normalfont',
 ])
 
+/** First interior line of an environment that carries visible content — the
+ *  first child that isn't whitespace/comment/parbreak or an invisible
+ *  TRANSPARENT_MACRO. A leading \label/\phantomsection/… forward-maps to the
+ *  prose line ABOVE (BUG-11/20), so an env's geometry region must start past it
+ *  or its box merges into the paragraph above (M2-7). Reuses the parser's
+ *  TRANSPARENT_MACROS as the single source of truth. Undefined when the env is
+ *  empty or all-transparent. */
+function envContentStartLine(node: Ast.Environment): number | undefined {
+  for (const child of node.content) {
+    if (!child.position) continue
+    if (child.type === 'whitespace' || child.type === 'comment' || child.type === 'parbreak') continue
+    if (child.type === 'macro' && TRANSPARENT_MACROS.has(child.content)) continue
+    return child.position.start.line
+  }
+  return undefined
+}
+
 /** Parse .tex source into the block tree: preamble, nested sections,
  *  paragraphs, environments. Ids are structural path + content hash —
  *  derived from the parse, never embedded in the source. */
@@ -202,7 +219,13 @@ function walkBody(file: string, nodes: Ast.Node[]): BlockNode[] {
 
       if (ENVIRONMENT_TYPES.has(node.type)) {
         flushParagraph()
-        attach(block('environment', file, start.line, end.line, envName(node as Ast.Environment)))
+        const env = block('environment', file, start.line, end.line, envName(node as Ast.Environment))
+        // Record the first real content line only when leading invisible macros
+        // push it past the line after \begin; every ordinary env keeps the
+        // existing startLine+1 geometry (M2-7).
+        const contentStart = envContentStartLine(node as Ast.Environment)
+        if (contentStart !== undefined && contentStart > start.line + 1) env.contentStartLine = contentStart
+        attach(env)
         continue
       }
 

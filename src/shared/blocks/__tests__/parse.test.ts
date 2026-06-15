@@ -306,6 +306,37 @@ describe('display math joins the paragraph; \\begin envs stay blocks (BUG-45)', 
   })
 })
 
+describe('environment content-start line — skip a leading \\label (M2-7)', () => {
+  test('an equation whose first interior line is \\label starts content at the math line', () => {
+    // \label forward-maps to the END of the prose line ABOVE (BUG-11/20), so an
+    // env whose geometry region began at the label line drags its box up into
+    // the paragraph above (M2-7). contentStartLine records the first REAL content
+    // line so environmentInteriorSpan can start the query there.
+    const roots = parseBlocks(
+      'ch1.tex',
+      'Prose.\n\n\\begin{equation}\n\\label{eq:x}\nE = mc^2\n\\end{equation}'
+    )
+    const eqn = roots.find((b) => b.kind === 'environment')!
+    expect(eqn.span).toMatchObject({ startLine: 3, endLine: 6 }) // block span unchanged
+    expect(eqn.contentStartLine).toBe(5) // the math line — NOT line 4 (\label)
+  })
+
+  test('absorbs several leading transparent macros, not just one', () => {
+    const roots = parseBlocks(
+      'ch1.tex',
+      '\\begin{equation}\n\\label{a}\n\\phantomsection\nx = 1\n\\end{equation}'
+    )
+    expect(roots.find((b) => b.kind === 'environment')!.contentStartLine).toBe(4)
+  })
+
+  test('an environment with content on its first interior line gets no override', () => {
+    // First interior line is already content → interior = startLine+1 as before;
+    // the label-less equation must stay unmerged (regression discriminator).
+    const roots = parseBlocks('ch1.tex', '\\begin{equation}\nE = mc^2\n\\end{equation}')
+    expect(roots.find((b) => b.kind === 'environment')!.contentStartLine).toBeUndefined()
+  })
+})
+
 describe('parseProjectBlocks', () => {
   const FILES: Record<string, string> = {
     'main.tex': [
