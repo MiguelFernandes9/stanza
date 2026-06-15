@@ -12,6 +12,9 @@ import type { TaskPhase } from '../tasks/taskStore'
 export const PAD = 28
 export const GAPX = 30
 export const RAIL = 326
+/** Breathing room kept to the RIGHT of the rail so a bubble you scroll to never
+ *  sits flush against the pane's right edge (BUG-46 follow-up). */
+export const RAIL_GUTTER = 24
 /** Min vertical gap between two stacked bubbles. */
 export const CARD_GAP = 14
 /** Badge diameter; its left edge sits at pageRightX − BADGE/2. */
