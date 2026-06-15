@@ -450,3 +450,58 @@ unmerged, coordinate/rebase and make sure the fix survives the 2b region rewrite
 
 **Status.** Diagnosed + measured (synctex evidence + discriminator). Not
 dispatched.
+
+---
+
+## M2-8 — Block box clips the last line's descenders (row box omits descent, top overshoots)
+
+**Symptom.** Every block box clips the bottom of its last text line — the
+descenders (p/g/y/q tails) of the last line poke below the box border — and there
+is extra headroom above the first line. Universal ("all cases"). Seen on the demo
+citation paragraph ("A citation is more than a courtesy … the whole bibliography
+pipeline.").
+
+**Root cause (code-confirmed).** The text-row vertical box is defined relative to
+the baseline ([pdfTextRows.ts:44](src/renderer/features/paper/pdfTextRows.ts#L44)):
+
+```
+{ baseline: by, yBottom: by, yTop: by - height }
+```
+
+- `yBottom = baseline` → **omits the descent** (the part of glyphs below the
+  baseline).
+- `yTop = baseline - height`, where `height` ≈ the full line height → **overshoots**
+  above the cap line.
+
+`binContentToBlocks` builds the block box as the union of its rows —
+`bottom = max(yBottom)` = the **last line's baseline**, `top = min(yTop)`
+([paperModel.ts:391](src/renderer/features/paper/paperModel.ts#L391)). Net: the box
+is shifted **up by ~one descent** — headroom on top, descender clip on the bottom.
+
+**Discriminator (proves it's the row box, not a dropped last line).** The
+screenshot shows **both** a gap above the first line **and** a clip through the
+last line. A dropped-last-line bug clips the bottom but adds **no** top headroom;
+the headroom + clip together is the signature of the `[baseline - height,
+baseline]` row box. So the cause is the row vertical model, not a band cutoff.
+
+**Fix.** Make the row vertical extent descent-aware in `pdfTextRows.ts`:
+`yBottom = baseline + descent`, `yTop = baseline - ascent`, with ascent/descent
+from the font metrics if accessible, else an estimate (ascent ≈ 0.8·height,
+descent ≈ 0.2·height — **measure the real descent on the demo** to set the
+fraction, per the text-layer philosophy). `binContentToBlocks` then unions correct
+extents with no change. **Keep the baseline-based *partitioning* untouched** — the
+binning deliberately keys on `baseline`, never `yTop` (BUG-41); only the box
+*extent* (`yTop`/`yBottom`) changes.
+
+**Test.** `pdfTextRows` unit: a row's `yBottom > baseline` (descent included) and
+`yTop` sits ~ascent (not a full line height) above the baseline; the same-row
+merge preserves descent-aware extents. Live on `/tmp/stanza-demo`: a block box
+fully encloses its last line including descenders, with no headroom gap above the
+first line (citation paragraph + a descender-heavy line).
+
+**Lane.** `pdfTextRows.ts` (row model) + the `binContentToBlocks` consumer
+(`paperModel.ts`) — `pensive-allen`'s Stage-2b geometry lane. Coordinate; branch
+off latest main.
+
+**Status.** Diagnosed + code-confirmed (row model + the headroom/clip
+discriminator). Not pixel-measured. Not dispatched.
