@@ -1,5 +1,5 @@
 import { autocompletion, completionKeymap } from '@codemirror/autocomplete'
-import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
+import { defaultKeymap, history, historyKeymap, indentWithTab, insertNewline } from '@codemirror/commands'
 import { bracketMatching, defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { lintGutter } from '@codemirror/lint'
 import { EditorView, drawSelection, highlightActiveLine, keymap, lineNumbers } from '@codemirror/view'
@@ -66,7 +66,17 @@ export function baseExtensions(): Extension[] {
       icons: true
     }),
     lintGutter(),
-    keymap.of([...completionKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
+    // Enter inserts a PLAIN newline (no copied indent) — LaTeX shouldn't auto-
+    // indent. Sits below completionKeymap (so the popup's Enter still accepts)
+    // but above defaultKeymap (whose insertNewlineAndIndent copies indentation).
+    // indentWithTab stays — Tab still indents; only Enter changes.
+    keymap.of([
+      ...completionKeymap,
+      { key: 'Enter', run: insertNewline },
+      ...defaultKeymap,
+      ...historyKeymap,
+      indentWithTab
+    ]),
     stanzaTheme,
     EditorView.lineWrapping
   ]
