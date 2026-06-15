@@ -1919,3 +1919,34 @@ its own block; itemize unchanged.
 **Lane.** `src/shared/blocks/parse.ts` (+ parse.test.ts) ONLY — drop `'displaymath'`
 from `ENVIRONMENT_TYPES` + the dead naming ternary. No renderer change (equation /
 align blocks keep their existing math geometry + pill). One sibling; tiny.
+
+## BUG-46 — PDF pane: no horizontal scroll when the page is wider than the pane
+
+**Symptom.** Zoom in (or a narrow pane) so the page is wider than the PaperPane —
+you cannot scroll sideways to reach the page's right edge.
+
+**Root cause (suspect — confirm live).** The scroll container (`PaperPane.tsx:388`,
+`overflow:auto`) centres the page with a flex row `justify-content: safe center`
+(`:401`) holding the page as a `flex:0 0 auto; width:pageWidth` flow child (`:405`).
+A flex item centred in an `overflow:auto` flex container that is wider than the
+container is not reliably scrollable to the overflow — the classic
+flex-centred-overflow bug; `safe center` changes alignment but doesn't make the
+row's scrollWidth grow to its content. #69/#70 tuned this area to KILL a spurious
+h-scrollbar when the page FITS (rail-overlay clip), and in doing so left no working
+h-scroll when the page genuinely overflows.
+
+**Fix.** Make BOTH regimes work, live-verified at several zooms: (a) page fits →
+centred, NO h-scrollbar (keep the #69/#70 wins); (b) page wider than pane → h-scroll
+works, page's left AND right edges reachable. Likely add `min-width: min-content`
+(or `width: max-content`) to the flex centring row (`:401`) so the overflowing page
+extends the scroll container's scrollWidth and the right edge becomes reachable;
+keep the rail overlay clipped to the pane (`:433`) so IT never adds scrollWidth (no
+#70 regression). Measure, don't prescribe-and-ship.
+
+**Test (live, Playwright-electron, both regimes).** Page fits: `scrollWidth ==
+clientWidth` (no h-scrollbar), centred (Δ≈1px). Page wider: `scrollWidth ==
+pageWidth`, `scrollLeft` moves 0..(scrollWidth−clientWidth), right edge reachable.
+Plus the #70 guard: no spurious scrollbar on hover / ⌘E / ⌘J when the page fits.
+
+**Lane.** `PaperPane.tsx` (the centring row / scroll structure) only. Owner: bohr
+(built #69/#70 — owns the centre-vs-clip tradeoff).
