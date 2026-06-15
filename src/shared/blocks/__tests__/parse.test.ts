@@ -207,6 +207,35 @@ describe('comment lines as soft paragraph delimiters (M2-3)', () => {
   })
 })
 
+describe('font-declaration groups and \\par (M2-4)', () => {
+  test('prose wrapped in {\\small {\\footnotesize …}} spans only the prose lines', () => {
+    // The real demo shape: a paragraph wrapped in nested font-declaration groups
+    // must NOT eat the `{\small` / `{\footnotesize` opens (lines 1-2) or the
+    // `\par}` closes — its span is the prose only (was [1-7], over-reaching).
+    const roots = parseBlocks(
+      'ch1.tex',
+      '{\\small\n{\\footnotesize\nAlpha one\nalpha two.\n\\par}\nBeta three.\n\\par}',
+    )
+    expect(roots.map((b) => b.kind)).toEqual(['paragraph', 'paragraph'])
+    expect(roots[0]!.span).toMatchObject({ startLine: 3, endLine: 4 })
+    expect(roots[1]!.span).toMatchObject({ startLine: 6, endLine: 6 })
+  })
+
+  test('\\par flushes the open paragraph even with no blank line', () => {
+    const roots = parseBlocks('x.tex', 'Alpha.\n\\par\nBeta.')
+    expect(roots.map((b) => b.kind)).toEqual(['paragraph', 'paragraph'])
+    expect(roots[0]!.span).toMatchObject({ startLine: 1, endLine: 1 })
+    expect(roots[1]!.span).toMatchObject({ startLine: 3, endLine: 3 })
+  })
+
+  test('a leading font-declaration macro does not start the paragraph early', () => {
+    // The paragraph starts at the prose line, not the `{\large` line above it.
+    const roots = parseBlocks('x.tex', '{\\large\nBody text.}')
+    expect(roots.map((b) => b.kind)).toEqual(['paragraph'])
+    expect(roots[0]!.span).toMatchObject({ startLine: 2, endLine: 2 })
+  })
+})
+
 describe('parseProjectBlocks', () => {
   const FILES: Record<string, string> = {
     'main.tex': [
