@@ -51,9 +51,16 @@ export function RecentRow({ recent, onOpen }: Props): JSX.Element {
         {primed ? <FileText size={19} /> : <Folder size={19} />}
       </span>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
           <span
-            style={{ font: 'var(--weight-semibold) var(--text-base)/1.3 var(--font-sans)', color: 'var(--ink-900)' }}
+            style={{
+              font: 'var(--weight-semibold) var(--text-base)/1.3 var(--font-sans)',
+              color: 'var(--ink-900)',
+              minWidth: 0,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis'
+            }}
           >
             {recent.name}
           </span>
@@ -63,7 +70,15 @@ export function RecentRow({ recent, onOpen }: Props): JSX.Element {
             </Badge>
           )}
         </div>
-        <div style={{ font: 'var(--text-xs)/1.4 var(--font-mono)', color: 'var(--ink-400)' }}>
+        <div
+          style={{
+            font: 'var(--text-xs)/1.4 var(--font-mono)',
+            color: 'var(--ink-400)',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis'
+          }}
+        >
           {recent.root}
         </div>
       </div>
