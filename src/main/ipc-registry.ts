@@ -16,12 +16,16 @@ import type {
   OpRecord,
   RecentProject,
   ReviewDecision,
+  GlobalSettings,
+  DocumentSettings,
+  DocumentSettingsResult,
+  SettingsChanged,
 } from '@shared/ipc'
 import { parseProjectBlocks } from '@shared/blocks/parse'
 import { armSettleWatcher } from './infra/FileWatcher'
 import { DefaultProcessRunner } from './infra/ProcessRunner'
 import { GitClient } from './infra/GitClient'
-import { Store } from './infra/Store'
+import { Store, GlobalSettingsStore } from './infra/Store'
 import { ClaudeService } from './services/ClaudeService'
 import { changedFilesInDiff } from './services/diffSpans'
 import { DocumentService } from './services/DocumentService'
@@ -30,6 +34,7 @@ import { mapRecents } from './recents'
 
 const runner = new DefaultProcessRunner()
 let store: Store
+let globalSettings: GlobalSettingsStore
 let documents: DocumentService
 let session: DocumentSession | null = null
 let priming: AbortController | null = null
@@ -52,6 +57,7 @@ export function getRecentProjects(): RecentProject[] {
 /** The only place channels bind to services (spec §5). */
 export function registerIpcHandlers(): void {
   store = new Store(join(app.getPath('userData'), 'projects.json'))
+  globalSettings = new GlobalSettingsStore(join(app.getPath('userData'), 'settings.json'))
   documents = new DocumentService({
     store,
     makeGit: (root) => new GitClient(runner, root),
@@ -241,6 +247,49 @@ export function registerIpcHandlers(): void {
     const rels = await doc.files.importFiles(a.dir, result.filePaths)
     return fileMutationResult(doc, rels[0])
   })
+
+  // ---- Settings (Lane S) ----
+  ipcMain.handle(IpcChannels.settingsGetGlobal, (): GlobalSettings => globalSettings.get())
+
+  ipcMain.handle(IpcChannels.settingsSetGlobal, (_e, patch: Partial<GlobalSettings>): GlobalSettings => {
+    const next = globalSettings.set(patch)
+    // Broadcast so every window applies the new font/theme live, no reload.
+    sendToAll(IpcChannels.settingsChanged, { global: next } satisfies SettingsChanged)
+    return next
+  })
+
+  ipcMain.handle(IpcChannels.settingsGetDocument, (): DocumentSettings => {
+    const rec = store.getProject(requireSession().info.root)
+    return { mainFile: rec.mainFile, compile: rec.compile }
+  })
+
+  ipcMain.handle(
+    IpcChannels.settingsSetDocument,
+    async (_e, patch: DocumentSettings): Promise<DocumentSettingsResult> => {
+      const doc = requireSession()
+      const root = doc.info.root
+      const mainFileChanged = patch.mainFile !== undefined && patch.mainFile !== doc.info.mainFile
+      store.setProject(root, {
+        ...(patch.mainFile !== undefined ? { mainFile: patch.mainFile } : {}),
+        ...(patch.compile !== undefined ? { compile: patch.compile } : {}),
+      })
+      if (mainFileChanged) {
+        // CompileService captures `doc` at construction and never re-reads
+        // session.info, so a mainFile change must REBUILD the session/compiler
+        // (mirror document:open) — mutating info alone wouldn't recompile from
+        // the new file. open() honors the override just written above.
+        const info = await documents.open(root)
+        if (info) {
+          session = new DocumentSession(info, runner, store)
+          return { doc: info }
+        }
+        return { doc: null }
+      }
+      // Compiler-only change: update the live compiler in place, no rebuild.
+      if (patch.compile !== undefined) doc.compiler.setOptions(patch.compile)
+      return { doc: null }
+    },
+  )
 }
 
 /** Diff-gated op pipeline (FR7): lock check → clean tree → arm watcher →

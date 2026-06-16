@@ -64,7 +64,12 @@ export class DocumentService {
       }
     }
 
-    const mainFile = detectMainFile(texFiles, read)
+    // Prefer the user's saved main-file override (settings:setDocument) when it
+    // still exists in the project; else auto-detect. Detection isn't
+    // authoritative, so a deliberate choice wins (Lane S, root-cause path).
+    const override = this.deps?.store.getProject(root).mainFile
+    const mainFile =
+      override && texFiles.includes(override) ? override : detectMainFile(texFiles, read)
     if (mainFile === null) return null
 
     return { root, mainFile, texFiles: orderTexFiles(mainFile, texFiles, read) }

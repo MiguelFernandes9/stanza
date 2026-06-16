@@ -24,6 +24,8 @@ export class DocumentSession {
   constructor(info: DocumentInfo, runner: ProcessRunner, store: Store) {
     this.info = info
     this.compiler = new CompileService(runner, info)
+    // Per-document compiler knobs persisted by settings:setDocument (Lane S).
+    this.compiler.setOptions(store.getProject(info.root).compile ?? {})
     this.git = new GitClient(runner, info.root)
     this.review = new ReviewService(this.git)
     this.claude = new ClaudeService(runner, store, info)

@@ -10,8 +10,11 @@ import type {
   CompileStatus,
   DocumentInfo,
   DocumentOpenRequest,
+  DocumentSettings,
+  DocumentSettingsResult,
   FileEntry,
   FileMutationResult,
+  GlobalSettings,
   HistoryDiff,
   InversePoint,
   OpRecord,
@@ -21,6 +24,7 @@ import type {
   ReviewDecision,
   ReviewProposal,
   ReviewResolution,
+  SettingsChanged,
   SourceLocation
 } from '@shared/ipc'
 import type { BlockNode } from '@shared/blocks/types'
@@ -90,7 +94,18 @@ export const api = {
   /** Abort the priming pipeline (manager-approved addition; handler is a
    *  backend follow-up — callers must tolerate rejection until it lands). */
   primeCancel: () => invoke<void>(IpcChannels.primeCancel),
+  /** App-wide settings (editor font + theme). setGlobal also broadcasts
+   *  settings:changed so every window applies the change live. */
+  settingsGetGlobal: () => invoke<GlobalSettings>(IpcChannels.settingsGetGlobal),
+  settingsSetGlobal: (patch: Partial<GlobalSettings>) =>
+    invoke<GlobalSettings>(IpcChannels.settingsSetGlobal, patch),
+  /** Per-document settings (main-file override + compiler options). setDocument
+   *  returns a fresh DocumentInfo when the main file changed (session rebuilt). */
+  settingsGetDocument: () => invoke<DocumentSettings>(IpcChannels.settingsGetDocument),
+  settingsSetDocument: (patch: DocumentSettings) =>
+    invoke<DocumentSettingsResult>(IpcChannels.settingsSetDocument, patch),
   onCompileStatus: on<CompileStatus>(IpcChannels.compileStatus),
+  onSettingsChanged: on<SettingsChanged>(IpcChannels.settingsChanged),
   onClaudeStatus: on<ClaudeStatus>(IpcChannels.claudeStatus),
   onReviewProposal: on<ReviewProposal>(IpcChannels.reviewProposal),
   onPrimeStatus: on<PrimeStep>(IpcChannels.primeStatus),

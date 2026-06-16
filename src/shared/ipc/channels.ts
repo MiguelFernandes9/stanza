@@ -34,6 +34,11 @@ export const IpcChannels = {
   menuNewDocument: 'menu:newDocument',   // main→renderer event: File ▸ New document (⌘N)
   menuOpenFolder: 'menu:openFolder',     // main→renderer event: File ▸ Open folder… (⌘O)
   menuOpenRecent: 'menu:openRecent',     // main→renderer event: File ▸ Open Recent ▸ (payload root: string)
-  menuOpenSettings: 'menu:openSettings'  // main→renderer event: File ▸ Settings (⌘,)
+  menuOpenSettings: 'menu:openSettings', // main→renderer event: File ▸ Settings (⌘,)
+  settingsGetGlobal: 'settings:getGlobal',       // invoke → GlobalSettings
+  settingsSetGlobal: 'settings:setGlobal',       // invoke Partial<GlobalSettings> → GlobalSettings (also broadcasts settings:changed)
+  settingsGetDocument: 'settings:getDocument',   // invoke → DocumentSettings (open session's record)
+  settingsSetDocument: 'settings:setDocument',   // invoke DocumentSettings → DocumentSettingsResult (fresh DocumentInfo when mainFile changed)
+  settingsChanged: 'settings:changed'            // main→renderer event: SettingsChanged (live global apply)
 } as const
 export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels]

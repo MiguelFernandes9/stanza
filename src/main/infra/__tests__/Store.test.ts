@@ -1,8 +1,8 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
-import { Store } from '../Store'
+import { Store, GlobalSettingsStore } from '../Store'
 
 let dir: string
 let filePath: string
@@ -62,5 +62,27 @@ describe('Store', () => {
     store.setProject('/b', { blockCount: 42 })
     const roots = store.listProjects().map(([root]) => root)
     expect(roots.sort()).toEqual(['/a', '/b'])
+  })
+})
+
+describe('GlobalSettingsStore (Lane S)', () => {
+  test('missing file reads as empty settings', () => {
+    expect(new GlobalSettingsStore(join(dir, 'settings.json')).get()).toEqual({})
+  })
+
+  test('set merges, returns the merged settings, and persists to disk', () => {
+    const path = join(dir, 'settings.json')
+    const store = new GlobalSettingsStore(path)
+    expect(store.set({ editorFontSize: 15 })).toEqual({ editorFontSize: 15 })
+    const merged = store.set({ theme: 'dark', editorFontFamily: 'Menlo' })
+    expect(merged).toEqual({ editorFontSize: 15, theme: 'dark', editorFontFamily: 'Menlo' })
+    // round-trips through a fresh instance (the file on disk)
+    expect(new GlobalSettingsStore(path).get()).toEqual(merged)
+  })
+
+  test('a corrupt settings.json reads as empty (tolerant load)', () => {
+    const path = join(dir, 'settings.json')
+    writeFileSync(path, '{ not json')
+    expect(new GlobalSettingsStore(path).get()).toEqual({})
   })
 })

@@ -17,7 +17,9 @@ const stanzaTheme = EditorView.theme({
   '&': {
     height: '100%',
     background: 'var(--surface-card)',
-    font: 'var(--weight-regular) 13px/1.75 var(--font-mono)',
+    // Family + size come from CSS vars App sets from GlobalSettings (Lane S);
+    // fall back to the design default (JetBrains Mono 13px) when unset.
+    font: 'var(--weight-regular) var(--stz-editor-font-size, 13px)/1.75 var(--font-mono)',
     color: 'var(--ink-800)'
   },
   '.cm-scroller': { fontFamily: 'var(--font-mono)', lineHeight: '1.75' },

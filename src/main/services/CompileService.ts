@@ -9,11 +9,27 @@ import type {
 } from '../../shared/ipc/compile'
 import type { BlockSpan } from '../../shared/ipc/claude'
 import type { DocumentInfo } from '../../shared/ipc/document'
+import type { CompileOptions } from '../../shared/ipc/settings'
 import type { ProcessRunner } from '../infra/ProcessRunner'
 import { parseCompileLog } from '../../shared/latex/log'
 import { parseEditOutput, parseViewOutput } from '../../shared/latex/synctex'
 
 const TECTONIC_HINT = 'tectonic not found — install with: brew install tectonic'
+
+/** Build the tectonic argv: the MANDATORY `-X compile --synctex --keep-logs`
+ *  (SyncTeX is never optional — the PDF↔source model needs it), then the user's
+ *  CompileOptions appended, then the target file last (tectonic's positional
+ *  input). Only the v1-approved knobs map to flags; deterministic-mode /
+ *  output-dir / engine are deliberately unreachable. Pure (tested). */
+export function compileArgs(target: string, opts: CompileOptions = {}): string[] {
+  const args = ['-X', 'compile', '--synctex', '--keep-logs']
+  if (opts.paperSize) args.push('-Z', `paper-size=${opts.paperSize}`)
+  if (opts.shellEscape) args.push('-Z', 'shell-escape')
+  if (opts.continueOnErrors) args.push('-Z', 'continue-on-errors')
+  if (opts.reruns != null) args.push('-r', String(opts.reruns))
+  args.push(target)
+  return args
+}
 
 /** Forward queries sample at most this many lines of a span. */
 const MAX_QUERY_LINES = 40
@@ -64,6 +80,13 @@ export class CompileService {
   }
 
   private doc: DocumentInfo
+  /** User compiler knobs, appended to the mandatory argv. Updated live by
+   *  settings:setDocument (a compiler-only change needs no session rebuild). */
+  private options: CompileOptions = {}
+
+  setOptions(options: CompileOptions): void {
+    this.options = options
+  }
 
   private get pdfPath(): string {
     return join(this.root, `${this.lastBase}.pdf`)
@@ -99,7 +122,7 @@ export class CompileService {
     try {
       proc = await this.runner.run({
         cmd: 'tectonic',
-        args: ['-X', 'compile', '--synctex', '--keep-logs', target],
+        args: compileArgs(target, this.options),
         cwd: this.root,
         signal: controller.signal,
       })
