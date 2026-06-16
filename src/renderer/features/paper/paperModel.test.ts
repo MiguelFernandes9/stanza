@@ -148,6 +148,34 @@ describe('taskSpans', () => {
     const spans = taskSpans(['p1#b', 'p2#e'], tree)
     expect(spans).toEqual([span(14, 20), span(44, 52)])
   })
+
+  it('widens a lone container-env child to its enclosing wrapper (decision 2)', () => {
+    // a theorem (4-9) ⊃ equation (6-8): selecting only the equation edits the
+    // whole theorem span so the snippet keeps its \begin{theorem}..\end{theorem}.
+    const t: BlockNode[] = [
+      {
+        id: 'sec',
+        kind: 'section',
+        name: 'S',
+        span: span(1, 10),
+        children: [
+          {
+            id: 'thm',
+            kind: 'environment',
+            name: 'theorem',
+            span: span(4, 9),
+            children: [{ id: 'eq', kind: 'environment', name: 'equation', span: span(6, 8), children: [] }]
+          }
+        ]
+      }
+    ]
+    expect(taskSpans(['eq'], t)).toEqual([span(4, 9)]) // lone equation → theorem wrapper
+    expect(taskSpans(['thm', 'eq'], t)).toEqual([span(4, 9)]) // whole theorem selected → its span
+  })
+
+  it('does NOT widen a section child — a paragraph edits as itself', () => {
+    expect(taskSpans(['p1#b'], tree)).toEqual([span(14, 20)])
+  })
 })
 
 // chapter → {paragraph, subsection → {paragraph, equation, figure}} — the

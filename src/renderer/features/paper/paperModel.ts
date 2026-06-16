@@ -690,20 +690,33 @@ export function combinedSpanLabel(spans: BlockSpan[]): string {
     .join(', ')
 }
 
-/** Spans for claude:run. A fully-selected section contributes its own span;
- *  its children are then covered and dropped. */
+/** Spans for claude:run. A fully-selected section contributes its own span; its
+ *  children are then covered and dropped. A LONE child of a container environment
+ *  (an equation/caption/item whose enclosing env is NOT itself selected) widens
+ *  to that env's `\begin..\end` span, so the edit Claude receives stays valid
+ *  LaTeX and carries the surrounding context (decision 2). Section children do not
+ *  widen — a paragraph under a section edits as itself. Deduped by source block. */
 export function taskSpans(blockIds: string[], roots: BlockNode[]): BlockSpan[] {
   const ids = new Set(blockIds)
   const spans: BlockSpan[] = []
-  const walk = (nodes: BlockNode[]): void => {
+  const pushed = new Set<string>()
+  const push = (id: string, span: BlockSpan): void => {
+    if (pushed.has(id)) return
+    pushed.add(id)
+    spans.push(span)
+  }
+  const walk = (nodes: BlockNode[], parent: BlockNode | null): void => {
     for (const node of nodes) {
       if (ids.has(node.id)) {
-        spans.push(node.span)
+        // Widen a lone container-env child to its wrapper; the env parent is never
+        // in `ids` here (a selected env stops the walk before reaching its child).
+        if (parent && parent.kind === 'environment' && !ids.has(parent.id)) push(parent.id, parent.span)
+        else push(node.id, node.span)
         continue // children are covered by this span
       }
-      walk(node.children)
+      walk(node.children, node)
     }
   }
-  walk(roots)
+  walk(roots, null)
   return spans
 }
