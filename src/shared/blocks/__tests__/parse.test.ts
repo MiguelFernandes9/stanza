@@ -336,17 +336,18 @@ describe('nested environments (recursive block model)', () => {
     '\\end{document}', //                      25
   ].join('\n')
 
-  test('theorem nests prose + equation as children; equation stays a leaf', () => {
+  test('theorem nests only its equation as a child; prose is absorbed', () => {
     const s = parseBlocks(FILE, NESTED)[1]! // [preamble, section S]
     const theorem = s.children[0]!
     expect(theorem).toMatchObject({ kind: 'environment', name: 'theorem' })
-    expect(theorem.children.map((c) => c.kind)).toEqual(['paragraph', 'environment'])
-    expect(theorem.children[0]!.span).toMatchObject({ startLine: 5, endLine: 5 })
-    expect(theorem.children[1]!).toMatchObject({
+    // "Prose line." (5) is part of the theorem, not its own child block; only the
+    // distinct equation sub-block is a child (decision 0).
+    expect(theorem.children.map((c) => c.kind)).toEqual(['environment'])
+    expect(theorem.children[0]!).toMatchObject({
       name: 'equation',
       span: { startLine: 6, endLine: 8 },
     })
-    expect(theorem.children[1]!.children).toEqual([]) // equation is atomic
+    expect(theorem.children[0]!.children).toEqual([]) // equation is atomic
   })
 
   test('figure nests tikzpicture (atomic leaf) + caption; \\centering is not a block', () => {

@@ -248,12 +248,13 @@ function walkScope(file: string, nodes: Ast.Node[], out: BlockNode[]): void {
         const contentStart = envContentStartLine(env)
         if (contentStart !== undefined && contentStart > start.line + 1) envBlock.contentStartLine = contentStart
         attach(envBlock)
-        // Recurse a container env into its own children (containment axis): a list
-        // splits on \item, every other container walks its content as a sub-stream
-        // with the env as the new attach root. Atomic envs stay leaves.
+        // Recurse a container env into its CHILDREN (containment axis). Only
+        // distinct sub-blocks become children — nested envs, list \items,
+        // \caption, \includegraphics; plain prose stays part of this env (see
+        // walkEnvContent / docs §5.1). A list splits on \item.
         if (isContainerEnv(name, env.content)) {
           if (isListEnv(name)) parseItems(file, env, envBlock)
-          else walkScope(file, env.content as Ast.Node[], envBlock.children)
+          else walkEnvContent(file, env.content as Ast.Node[], envBlock)
         }
         continue
       }
@@ -296,6 +297,48 @@ function parseItems(file: string, env: Ast.Environment, listBlock: BlockNode): v
     const next = items[i + 1]
     const itemEnd = next ? next.position!.start.line - 1 : endLine - 1
     listBlock.children.push(block('paragraph', file, startLine, Math.max(startLine, itemEnd)))
+  }
+}
+
+/** Macros that form their own child block inside a container env — a labeled
+ *  sub-element worth selecting on its own: the caption and an embedded graphic.
+ *  Every other macro is absorbed into the parent env's prose. */
+const CHILD_MACROS = new Set(['caption', 'includegraphics'])
+
+/** Children of a non-list container environment: ONLY distinct sub-blocks become
+ *  children — nested environments (recursed), \caption, \includegraphics. Plain
+ *  prose, inline/standalone/transparent macros, and display math are absorbed
+ *  into the parent env (no child block), so clicking the prose selects the whole
+ *  env while clicking the equation selects the equation (docs §5.1, decision 0).
+ *  Brace groups are transparent — recursed in place. */
+function walkEnvContent(file: string, content: Ast.Node[], parent: BlockNode): void {
+  for (const node of content) {
+    if (!node.position) continue
+    const { start, end } = node.position
+
+    if (node.type === 'group') {
+      walkEnvContent(file, node.content, parent)
+      continue
+    }
+    if (node.type === 'macro' && CHILD_MACROS.has(node.content)) {
+      parent.children.push(block('paragraph', file, start.line, end.line))
+      continue
+    }
+    if (ENVIRONMENT_TYPES.has(node.type)) {
+      const env = node as Ast.Environment
+      const name = envName(env)
+      const envBlock = block('environment', file, start.line, end.line, name)
+      const contentStart = envContentStartLine(env)
+      if (contentStart !== undefined && contentStart > start.line + 1) envBlock.contentStartLine = contentStart
+      parent.children.push(envBlock)
+      if (isContainerEnv(name, env.content)) {
+        if (isListEnv(name)) parseItems(file, env, envBlock)
+        else walkEnvContent(file, env.content as Ast.Node[], envBlock)
+      }
+      continue
+    }
+    // prose, inline macros, standalone/transparent macros, sections, display
+    // math: all absorbed into the parent env — no child block.
   }
 }
 

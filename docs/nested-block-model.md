@@ -38,6 +38,13 @@ Same shape at every level — sections, subsections, and environments are all ju
 
 ### Locked product decisions
 
+0. **What becomes a child:** inside a container env, only **distinct sub-blocks**
+   are separate children — nested environments, list `\item`s, `\caption`, and
+   `\includegraphics`. Plain **prose is part of its container** (not its own
+   block). So clicking a theorem's prose selects the whole theorem; clicking its
+   equation selects the equation — "press theorem → entire, press equation →
+   equation" with no escalation. (Sections still keep their paragraphs as
+   separate blocks; this rule is about environment interiors.)
 1. **Depth:** fully recursive; list `\item`s are selectable child blocks.
 2. **Child edit scope:** a lone child selection's Claude span is the child's lines
    **plus the enclosing `\begin/\end` wrapper** (valid LaTeX + context).
