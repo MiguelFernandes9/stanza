@@ -466,34 +466,33 @@ describe('cardAnchorTops — geometry-anchored rail cards (BUG-17)', () => {
   ])
 
   it('anchors a scoped card from its block rect — non-zero even if the page is not rendered', () => {
-    const out = cardAnchorTops([{ id: 1, blockIds: ['b-pg3'] }], rects, geo, 1, 0)
+    const out = cardAnchorTops([{ id: 1, blockIds: ['b-pg3'] }], rects, geo, 1)
     // (3-1)*(800+16) + 120*1 = 1752 — derived from the rect, not a top:0 pin
     expect(out).toEqual([{ id: 1, top: 1752 }])
   })
 
-  it('anchors an unscoped whole-doc card (empty blockIds) at the viewport scrollTop, not 0', () => {
-    const out = cardAnchorTops([{ id: 7, blockIds: [] }], rects, geo, 1, 540)
-    expect(out).toEqual([{ id: 7, top: 540 }])
+  // M3-3: a whole-doc task (empty blockIds) is no longer page-anchored — it gets
+  // a pane-pinned marker instead, so it must NOT return a scroll-dependent top.
+  it('returns null for an unscoped whole-doc card (empty blockIds), not a scrollTop pin', () => {
+    expect(cardAnchorTops([{ id: 7, blockIds: [] }], rects, geo, 1)).toEqual([{ id: 7, top: null }])
   })
 
   it('uses the topmost (lowest-page) box and scales rect.y by zoom', () => {
-    const out = cardAnchorTops([{ id: 2, blockIds: ['b-straddle'] }], rects, geo, 2, 0)
+    const out = cardAnchorTops([{ id: 2, blockIds: ['b-straddle'] }], rects, geo, 2)
     // topmost box is page 2, y 690: (2-1)*(800+16) + 690*2 = 816 + 1380 = 2196
     expect(out).toEqual([{ id: 2, top: 2196 }])
   })
 
-  // BUG-32: a scoped task whose box isn't resolved yet must NOT park at
-  // scrollTop (= the screen top on open). It returns null so the renderer can
-  // hide the badge/bubble until geometry lands. Only a genuinely unscoped task
-  // (empty blockIds) keeps the scrollTop anchor.
+  // BUG-32: a scoped task whose box isn't resolved yet returns null so the
+  // renderer can hide the badge/bubble until geometry lands.
   it('returns null for a scoped task with no resolved rect — geometry not ready (BUG-32)', () => {
-    expect(cardAnchorTops([{ id: 3, blockIds: ['missing'] }], rects, geo, 1, 300)).toEqual([
+    expect(cardAnchorTops([{ id: 3, blockIds: ['missing'] }], rects, geo, 1)).toEqual([
       { id: 3, top: null }
     ])
   })
 
   it('returns null for a scoped task when page geometry is absent (BUG-32)', () => {
-    expect(cardAnchorTops([{ id: 4, blockIds: ['b-pg3'] }], rects, null, 1, 300)).toEqual([
+    expect(cardAnchorTops([{ id: 4, blockIds: ['b-pg3'] }], rects, null, 1)).toEqual([
       { id: 4, top: null }
     ])
   })

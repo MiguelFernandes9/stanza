@@ -33,6 +33,13 @@ export interface TaskState {
   nextId: number
 }
 
+/** A whole-document op carries no block ids (chat submit with no selection). Its
+ *  rail marker is pane-pinned, not page-anchored (M3-3) — scope, not a viewport
+ *  accident, drives where it lives. */
+export function isWholeDocTask(task: Pick<EditTask, 'blockIds'>): boolean {
+  return task.blockIds.length === 0
+}
+
 export const initialTaskState: TaskState = {
   tasks: [],
   activeTask: null,
