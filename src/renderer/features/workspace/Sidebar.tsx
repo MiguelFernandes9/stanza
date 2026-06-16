@@ -81,19 +81,48 @@ const MENU_ICON: Record<FileMenuId, ReactNode> = {
   upload: <Upload size={15} />
 }
 
-function SectionLabel({ children, icon }: { children: ReactNode; icon: ReactNode }): JSX.Element {
+/** A titled sidebar section (OUTLINE, HISTORY, …) whose body collapses.
+ *  The header is a button (chevron + icon + caps title); `children` render
+ *  only while open. State is local — one component, no per-section flags;
+ *  persisting open-state across sessions is deferred. */
+function CollapsibleSection({
+  title,
+  icon,
+  children
+}: {
+  title: string
+  icon: ReactNode
+  children: ReactNode
+}): JSX.Element {
+  const [open, setOpen] = useState(true)
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 4px 6px', color: 'var(--ink-400)' }}>
-      {icon}
-      <span
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
         style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          width: '100%',
+          padding: '0 4px 6px',
+          border: 'none',
+          background: 'transparent',
+          color: 'var(--ink-400)',
+          cursor: 'pointer',
           font: 'var(--weight-bold) var(--text-2xs)/1 var(--font-sans)',
           letterSpacing: 'var(--tracking-caps)',
           textTransform: 'uppercase'
         }}
       >
-        {children}
-      </span>
+        <span style={{ flex: '0 0 auto', display: 'inline-flex' }}>
+          {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+        </span>
+        <span style={{ flex: '0 0 auto', display: 'inline-flex' }}>{icon}</span>
+        {title}
+      </button>
+      {open && children}
     </div>
   )
 }
@@ -485,6 +514,9 @@ export function Sidebar({
       title={label}
       aria-label={label}
       style={{
+        // Same fixed-size-flex-chip class as BUG-50: never let a narrow
+        // sidebar squish the action buttons — the FILES label yields first.
+        flexShrink: 0,
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -516,7 +548,11 @@ export function Sidebar({
         style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '12px 12px', borderBottom: '1px solid var(--border-faint)' }}
       >
         <span
+          data-testid="project-icon"
           style={{
+            // Fixed-size flex chip: opt out of shrink (BUG-50) so a long
+            // doc.root path squeezes the text wrapper, never the square icon.
+            flex: '0 0 auto',
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -583,23 +619,25 @@ export function Sidebar({
           ))}
         </div>
 
-        <SectionLabel icon={<List size={12} />}>Outline</SectionLabel>
-        <div style={{ marginBottom: 18 }}>
-          <OutlineTree blocks={blocks} activeBlock={activeBlock} onPick={onPickBlock} numbers={outlineNumbers} />
-        </div>
+        <CollapsibleSection title="Outline" icon={<List size={12} />}>
+          <div style={{ marginBottom: 18 }}>
+            <OutlineTree blocks={blocks} activeBlock={activeBlock} onPick={onPickBlock} numbers={outlineNumbers} />
+          </div>
+        </CollapsibleSection>
 
-        <SectionLabel icon={<History size={12} />}>History</SectionLabel>
-        <div>
-          {history.map((c) => (
-            <Row
-              key={`${c.iso}-${c.subject}`}
-              icon={<GitCommitHorizontal size={14} />}
-              label={c.subject}
-              meta={relativeTime(c.iso)}
-              accent={c.kind === 'claude' ? 'var(--add-600)' : undefined}
-            />
-          ))}
-        </div>
+        <CollapsibleSection title="History" icon={<History size={12} />}>
+          <div>
+            {history.map((c) => (
+              <Row
+                key={`${c.iso}-${c.subject}`}
+                icon={<GitCommitHorizontal size={14} />}
+                label={c.subject}
+                meta={relativeTime(c.iso)}
+                accent={c.kind === 'claude' ? 'var(--add-600)' : undefined}
+              />
+            ))}
+          </div>
+        </CollapsibleSection>
       </div>
 
       {menu && (
