@@ -541,7 +541,9 @@ describe('binContentToBlocks — nested boxes + float rule (nested-block model)'
     // page-1 phantom never forms and the paragraph keeps its prose.
     const rects = new Map<string, PdfRect[]>([
       ['fig#1', [prect(1, 150, 600, 300, 24), prect(2, 150, 73, 330, 183)]], // source p1 + content p2
-      ['tikz#1', [prect(2, 159, 79, 330, 125)]], // graphic child p2 (79–204)
+      // the tikz child ALSO leaves a thin source-site rect on p1 (its \begin maps
+      // to the galley) — the real bug the live gate caught; the fix must drop it.
+      ['tikz#1', [prect(1, 90, 612, 432, 11), prect(2, 159, 79, 330, 125)]], // source p1 + content p2 (79–204)
       ['cap#1', [prect(2, 159, 245, 330, 11)]], // caption child p2 (245–256)
       ['para#1', [prect(1, 90, 600, 432, 24)]] // sibling prose on p1
     ])

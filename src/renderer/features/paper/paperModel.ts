@@ -354,6 +354,35 @@ export function binContentToBlocks(
   const inBand = (yTop: number, yBottom: number): boolean =>
     !band || (yBottom >= band.top - BAND_EPS && yTop <= band.bottom + BAND_EPS)
 
+  // A float's RENDER page = where the bulk of its own synctex rects land (the
+  // page LaTeX placed it on); its thin source-site rect on the origin page is the
+  // minority. A float DESCENDANT (graphic / caption) ALSO leaves a source-site
+  // rect on the origin page (its \begin line maps to the galley) — anchor every
+  // descendant to the float's render page and drop its origin-page region, so it
+  // can only own rows where the float really is and never steals the origin
+  // page's prose (live-gate fix; float exclusion alone is one level too shallow).
+  const floatRenderPage = new Map<string, number>()
+  for (const [id, rects] of rectsById) {
+    if (!metaOf(id).isFloat) continue
+    const heightByPage = new Map<number, number>()
+    for (const r of rects) {
+      if (r.width <= 0 || r.height <= 0) continue
+      heightByPage.set(r.page, (heightByPage.get(r.page) ?? 0) + r.height)
+    }
+    let best: number | undefined
+    let bestH = -1
+    for (const [p, h] of heightByPage) if (h > bestH) { bestH = h; best = p }
+    if (best !== undefined) floatRenderPage.set(id, best)
+  }
+  const floatPageFor = (id: string): number | null => {
+    let pid = metaOf(id).parentId
+    while (pid) {
+      if (metaOf(pid).isFloat) return floatRenderPage.get(pid) ?? null
+      pid = metaOf(pid).parentId
+    }
+    return null
+  }
+
   interface Region {
     id: string
     top: number
@@ -363,6 +392,7 @@ export function binContentToBlocks(
   }
   const regionsByPage = new Map<number, Region[]>()
   for (const [id, rects] of rectsById) {
+    const floatPage = floatPageFor(id)
     const byPage = new Map<number, PdfRect[]>()
     for (const r of rects) {
       if (r.width <= 0 || r.height <= 0) continue
@@ -372,6 +402,9 @@ export function binContentToBlocks(
       else byPage.set(r.page, [r])
     }
     for (const [page, rs] of byPage) {
+      // A float descendant lives only on the float's render page; drop its
+      // origin-page source-site rect (it would otherwise steal that page's prose).
+      if (floatPage !== null && page !== floatPage) continue
       const region: Region = {
         id,
         top: Math.min(...rs.map((r) => r.y)),
