@@ -109,6 +109,21 @@ export function expandIds(roots: BlockNode[], blockId: string): string[] {
   return node && node.children.length > 0 ? subtree(node) : [blockId]
 }
 
+/** The id of `blockId`'s immediate parent in the tree, or null when it is
+ *  top-level (or absent). Drives repeat-click escalation: clicking an
+ *  already-selected block re-selects its parent, then grandparent (decision 3). */
+export function parentOf(roots: BlockNode[], blockId: string): string | null {
+  const find = (nodes: BlockNode[], parent: string | null): { p: string | null } | null => {
+    for (const node of nodes) {
+      if (node.id === blockId) return { p: parent }
+      const hit = find(node.children, node.id)
+      if (hit) return hit
+    }
+    return null
+  }
+  return find(roots, null)?.p ?? null
+}
+
 /** Do two boxes overlap as rectangles? (Page-agnostic — callers gate on page.) */
 function boxesOverlap(a: PdfRect, b: PdfRect): boolean {
   return (

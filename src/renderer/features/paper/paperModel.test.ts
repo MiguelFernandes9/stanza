@@ -13,6 +13,7 @@ import {
   isMathEnvName,
   isTightAbove,
   padBoxClamped,
+  parentOf,
   PILL_MARGIN_GAP,
   pillPlacement,
   selectionBounds,
@@ -254,6 +255,22 @@ describe('expandIds — full subtree (BUG-8)', () => {
   })
   it('a leaf stays itself', () => {
     expect(expandIds(deep, 'eq1')).toEqual(['eq1'])
+  })
+})
+
+describe('parentOf — repeat-click escalation (nested-block model)', () => {
+  it('returns the immediate parent id of a nested block', () => {
+    expect(parentOf(deep, 'eq1')).toBe('sec-mot') // equation → its subsection
+    expect(parentOf(deep, 'p-mot')).toBe('sec-mot')
+    expect(parentOf(deep, 'sec-mot')).toBe('ch1') // subsection → chapter
+  })
+  it('returns null for a top-level block or an absent id', () => {
+    expect(parentOf(deep, 'ch1')).toBeNull()
+    expect(parentOf(deep, 'nope')).toBeNull()
+  })
+  it('finds the env parent of a child block', () => {
+    expect(parentOf(nestedTree, 'eq#w')).toBe('thm#y') // equation → theorem
+    expect(parentOf(nestedTree, 'thm#y')).toBe('sec#x')
   })
 })
 
