@@ -40,6 +40,8 @@ interface Props {
   outlineNumbers?: Map<string, string>
   activeBlock: string | null
   onPickBlock: (id: string) => void
+  /** Click a HISTORY commit → open its full-page diff vs current (by sha). */
+  onPickHistory: (hash: string) => void
   // v0.2 file management — actions live in Workspace (like onPickBlock); the
   // menu/inline-rename UI state stays local to this component.
   onOpenFile: (relPath: string) => void
@@ -403,6 +405,7 @@ export function Sidebar({
   outlineNumbers,
   activeBlock,
   onPickBlock,
+  onPickHistory,
   onOpenFile,
   onRename,
   onDuplicate,
@@ -629,11 +632,13 @@ export function Sidebar({
           <div>
             {history.map((c) => (
               <Row
-                key={`${c.iso}-${c.subject}`}
+                key={c.hash || `${c.iso}-${c.subject}`}
                 icon={<GitCommitHorizontal size={14} />}
                 label={c.subject}
                 meta={relativeTime(c.iso)}
                 accent={c.kind === 'claude' ? 'var(--add-600)' : undefined}
+                onClick={() => onPickHistory(c.hash)}
+                dataTestId={`history:${c.hash}`}
               />
             ))}
           </div>
