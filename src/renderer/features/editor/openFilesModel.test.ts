@@ -4,6 +4,8 @@ import {
   cycleTab,
   decideCloseActive,
   deleteTabs,
+  insertionBarIndex,
+  moveTabToIndex,
   openTab,
   renameTabs,
   reorderTabs,
@@ -163,6 +165,70 @@ describe('reorderTabs', () => {
     expect(reorderTabs(s, 1, 1).openFiles).toEqual(['a.tex', 'b.tex'])
     expect(reorderTabs(s, -1, 0)).toBe(s)
     expect(reorderTabs(s, 0, 5)).toBe(s)
+  })
+})
+
+describe('moveTabToIndex (drag-to-index insert)', () => {
+  // toIndex is the GAP/insertion index 0..n: "land before the tab currently at
+  // toIndex" (n = after the last tab). The dragged file is removed first, so a
+  // gap to the RIGHT of its old slot shifts left by one.
+  it('moves a tab forward, accounting for the removed-before-target shift', () => {
+    const next = moveTabToIndex(state(['a.tex', 'b.tex', 'c.tex', 'd.tex'], 'b.tex'), 'a.tex', 2)
+    expect(next.openFiles).toEqual(['b.tex', 'a.tex', 'c.tex', 'd.tex'])
+    expect(next.activeFile).toBe('b.tex')
+    expect(next.sourceOpen).toBe(true)
+  })
+
+  it('moves a tab to the very end (gap === length)', () => {
+    const next = moveTabToIndex(state(['a.tex', 'b.tex', 'c.tex', 'd.tex'], 'a.tex'), 'a.tex', 4)
+    expect(next.openFiles).toEqual(['b.tex', 'c.tex', 'd.tex', 'a.tex'])
+  })
+
+  it('moves a tab backward to a lower gap', () => {
+    const next = moveTabToIndex(state(['a.tex', 'b.tex', 'c.tex', 'd.tex'], 'a.tex'), 'd.tex', 1)
+    expect(next.openFiles).toEqual(['a.tex', 'd.tex', 'b.tex', 'c.tex'])
+  })
+
+  it('moves a tab to the front (gap 0)', () => {
+    const next = moveTabToIndex(state(['a.tex', 'b.tex', 'c.tex', 'd.tex'], 'a.tex'), 'c.tex', 0)
+    expect(next.openFiles).toEqual(['c.tex', 'a.tex', 'b.tex', 'd.tex'])
+  })
+
+  it('is a no-op (same reference) when dropped on its own slot, either side', () => {
+    const s = state(['a.tex', 'b.tex', 'c.tex'], 'a.tex')
+    expect(moveTabToIndex(s, 'b.tex', 1)).toBe(s) // gap left of itself
+    expect(moveTabToIndex(s, 'b.tex', 2)).toBe(s) // gap right of itself
+  })
+
+  it('is a no-op for a file that is not open', () => {
+    const s = state(['a.tex', 'b.tex'], 'a.tex')
+    expect(moveTabToIndex(s, 'z.tex', 0)).toBe(s)
+  })
+
+  it('clamps an out-of-range gap to the ends', () => {
+    const s = state(['a.tex', 'b.tex', 'c.tex'], 'a.tex')
+    expect(moveTabToIndex(s, 'a.tex', 99).openFiles).toEqual(['b.tex', 'c.tex', 'a.tex'])
+    expect(moveTabToIndex(s, 'c.tex', -5).openFiles).toEqual(['c.tex', 'a.tex', 'b.tex'])
+  })
+})
+
+describe('insertionBarIndex (drop-between bar placement)', () => {
+  const files = ['a.tex', 'b.tex', 'c.tex']
+
+  it('is null when nothing is dragging or no gap is hovered', () => {
+    expect(insertionBarIndex(files, null, 1)).toBeNull()
+    expect(insertionBarIndex(files, 'a.tex', null)).toBeNull()
+  })
+
+  it('hides the bar on the dragged tab\'s own two gaps (a no-op move)', () => {
+    expect(insertionBarIndex(files, 'b.tex', 1)).toBeNull() // gap left of b
+    expect(insertionBarIndex(files, 'b.tex', 2)).toBeNull() // gap right of b
+  })
+
+  it('shows the bar at the hovered gap for a real move', () => {
+    expect(insertionBarIndex(files, 'a.tex', 2)).toBe(2)
+    expect(insertionBarIndex(files, 'c.tex', 0)).toBe(0)
+    expect(insertionBarIndex(files, 'a.tex', 3)).toBe(3) // after the last tab
   })
 })
 

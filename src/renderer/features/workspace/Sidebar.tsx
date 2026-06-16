@@ -116,7 +116,12 @@ interface RowProps {
   /** Drag source / drop target wiring (v0.4 drag-move) spread onto the row. */
   dragProps?: ReturnType<FileDrag['sourceProps']>
   dropProps?: ReturnType<FileDrag['targetProps']>
+  /** Valid (planMove-gated) drop target under the cursor → blue drop highlight. */
   dropActive?: boolean
+  /** This row is the live drag source → ghost it ("what is moving"). */
+  isDragging?: boolean
+  /** Stable hook for drag-drop e2e selection (path-keyed). */
+  dataTestId?: string
 }
 
 function Row({
@@ -135,7 +140,9 @@ function Row({
   onRenameCancel,
   dragProps,
   dropProps,
-  dropActive = false
+  dropActive = false,
+  isDragging = false,
+  dataTestId
 }: RowProps): JSX.Element {
   const [hover, setHover] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -150,6 +157,7 @@ function Row({
     <div
       {...dragProps}
       {...dropProps}
+      data-testid={dataTestId}
       onClick={renaming ? undefined : onClick}
       onContextMenu={onContextMenu}
       onMouseEnter={() => setHover(true)}
@@ -162,7 +170,7 @@ function Row({
         padding: `0 8px 0 ${8 + indent * 14}px`,
         borderRadius: 'var(--radius-sm)',
         background: dropActive
-          ? 'var(--clay-50)'
+          ? 'var(--drop-fill)'
           : highlight
             ? 'var(--clay-50)'
             : hover
@@ -170,10 +178,14 @@ function Row({
               : 'transparent',
         color: highlight ? 'var(--clay-700)' : 'var(--ink-600)',
         boxShadow: dropActive
-          ? 'inset 0 0 0 2px var(--clay-400)'
+          ? 'inset 0 0 0 2px var(--drop-accent)'
           : menuOpen
             ? 'inset 0 0 0 1px var(--clay-200)'
             : 'none',
+        // Drag source ghost — "what is moving".
+        opacity: isDragging ? 0.4 : 1,
+        outline: isDragging ? '1px dashed var(--ink-300)' : undefined,
+        outlineOffset: isDragging ? -1 : undefined,
         cursor: 'pointer',
         userSelect: 'none'
       }}
@@ -286,6 +298,8 @@ function TreeNode({ node, indent, ctx }: { node: FileTreeNode; indent: number; c
         onContextMenu={(e) => ctx.openMenu(e, relPath, 'file', ctx.lockedFiles.has(relPath))}
         onClick={() => ctx.onFileClick(relPath)}
         dragProps={ctx.drag.sourceProps(relPath)}
+        isDragging={ctx.drag.dragging === relPath}
+        dataTestId={`dnd-row:${relPath}`}
       />
     )
   }
@@ -329,7 +343,9 @@ function DirNode({
         onClick={() => setOpen((o) => !o)}
         dragProps={ctx.drag.sourceProps(node.dir)}
         dropProps={ctx.drag.targetProps(node.dir)}
-        dropActive={ctx.drag.overDir === node.dir}
+        dropActive={ctx.drag.canDrop(node.dir)}
+        isDragging={ctx.drag.dragging === node.dir}
+        dataTestId={`dnd-row:${node.dir}`}
       />
       {open &&
         node.children.map((c) => (
@@ -558,7 +574,8 @@ export function Sidebar({
           style={{
             marginBottom: 18,
             borderRadius: 'var(--radius-sm)',
-            boxShadow: drag.overDir === '' ? 'inset 0 0 0 2px var(--clay-400)' : 'none'
+            background: drag.canDrop('') ? 'var(--drop-fill)' : undefined,
+            boxShadow: drag.canDrop('') ? 'inset 0 0 0 2px var(--drop-accent)' : 'none'
           }}
         >
           {tree.map((n) => (

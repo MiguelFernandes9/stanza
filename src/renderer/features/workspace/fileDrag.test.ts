@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { planMove } from './fileDrag'
+import { isValidDropTarget, planMove } from './fileDrag'
 
 describe('planMove — drag-drop move target + guards', () => {
   it('composes the dest path under the target dir', () => {
@@ -22,5 +22,27 @@ describe('planMove — drag-drop move target + guards', () => {
 
   it('rejects dropping a folder into its own descendant', () => {
     expect(planMove('chapters', 'chapters/sub')).toEqual({ ok: false, reason: 'descendant' })
+  })
+})
+
+describe('isValidDropTarget — truthful drop-highlight gate', () => {
+  it('is true only for the hovered dir when the move would succeed', () => {
+    expect(isValidDropTarget('intro.tex', 'chapters', 'chapters')).toBe(true)
+  })
+
+  it('is false for a dir that is not the one under the cursor', () => {
+    expect(isValidDropTarget('intro.tex', 'other', 'chapters')).toBe(false)
+  })
+
+  it('is false when nothing is being dragged', () => {
+    expect(isValidDropTarget(null, 'chapters', 'chapters')).toBe(false)
+  })
+
+  it('is false for a noop target (already the parent dir)', () => {
+    expect(isValidDropTarget('chapters/ch1.tex', 'chapters', 'chapters')).toBe(false)
+  })
+
+  it('is false for a descendant target (folder into itself/below)', () => {
+    expect(isValidDropTarget('chapters', 'chapters/sub', 'chapters/sub')).toBe(false)
   })
 })

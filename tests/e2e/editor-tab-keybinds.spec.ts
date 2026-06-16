@@ -133,18 +133,27 @@ test('the completion popup still accepts on Enter', async () => {
   await expect(editor()).toContainText('ch:intro')
 })
 
-test('drag-reorder moves a tab to the drop target’s slot', async () => {
+test('drag-reorder moves a tab to the hovered gap', async () => {
   expect(await tabNames()).toEqual(['main.tex', 'preamble.tex', 'refs.bib'])
-  // Drag the last tab (refs.bib) onto the first (main.tex).
-  await page.evaluate(() => {
-    const tabs = [...document.querySelectorAll('[data-testid="file-tab"]')]
-    const dt = new DataTransfer()
-    const fire = (el: Element, type: string): void => {
-      el.dispatchEvent(new DragEvent(type, { dataTransfer: dt, bubbles: true, cancelable: true }))
-    }
-    fire(tabs[tabs.length - 1], 'dragstart')
-    fire(tabs[0], 'dragover')
-    fire(tabs[0], 'drop')
-  })
+  // Drag the last tab (refs.bib) to the gap before the first (main.tex). The
+  // drop reads EditorPane's drag state, set across events, so fire them apart
+  // (a real native drag spreads dragstart → dragover → drop over time).
+  const fire = async (which: 'first' | 'last', type: string): Promise<void> => {
+    await page.evaluate(
+      (a) => {
+        const w = window as unknown as { __dt?: DataTransfer }
+        if (!w.__dt) w.__dt = new DataTransfer()
+        const tabs = [...document.querySelectorAll('[data-testid="file-tab"]')]
+        const el = a.which === 'last' ? tabs[tabs.length - 1] : tabs[0]
+        // clientX 0 sits left of the first tab's mid-x → insertion gap 0 (front).
+        el.dispatchEvent(new DragEvent(a.type, { dataTransfer: w.__dt, bubbles: true, cancelable: true, clientX: 0 }))
+      },
+      { which, type }
+    )
+    await page.waitForTimeout(80)
+  }
+  await fire('last', 'dragstart')
+  await fire('first', 'dragover')
+  await fire('first', 'drop')
   await expect.poll(tabNames).toEqual(['refs.bib', 'main.tex', 'preamble.tex'])
 })
