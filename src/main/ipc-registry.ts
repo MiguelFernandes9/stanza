@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { IpcChannels } from '@shared/ipc'
 import type {
   BlockSpan,
@@ -26,12 +26,28 @@ import { ClaudeService } from './services/ClaudeService'
 import { changedFilesInDiff } from './services/diffSpans'
 import { DocumentService } from './services/DocumentService'
 import { DocumentSession } from './session'
+import { mapRecents } from './recents'
 
 const runner = new DefaultProcessRunner()
 let store: Store
 let documents: DocumentService
 let session: DocumentSession | null = null
 let priming: AbortController | null = null
+/** Called after the store's project set changes (open/create) so the native
+ *  Open Recent menu rebuilds. Injected by index.ts to avoid a menu↔registry
+ *  import cycle. */
+let onRecentsChanged: (() => void) | undefined
+
+/** Register a listener fired whenever recents change (menu rebuild hook). */
+export function setRecentsListener(cb: () => void): void {
+  onRecentsChanged = cb
+}
+
+/** Recents for the native Open Recent menu — same mapping as document:recents.
+ *  Tolerates being called before the store exists (first menu build). */
+export function getRecentProjects(): RecentProject[] {
+  return store ? mapRecents(store.listProjects()) : []
+}
 
 /** The only place channels bind to services (spec §5). */
 export function registerIpcHandlers(): void {
@@ -59,6 +75,7 @@ export function registerIpcHandlers(): void {
 
     session = new DocumentSession(info, runner, store)
     await reEmitPendingProposals(session) // crash recovery (spec §7)
+    onRecentsChanged?.() // refresh Open Recent — this project just moved to top
     return info
   })
 
@@ -67,6 +84,7 @@ export function registerIpcHandlers(): void {
     const info = await primeWithCancel(created.root)
     if (!info) return null
     session = new DocumentSession(info, runner, store)
+    onRecentsChanged?.() // the new project should appear in Open Recent
     return info
   })
 
@@ -84,17 +102,7 @@ export function registerIpcHandlers(): void {
     BrowserWindow.getFocusedWindow()?.close()
   })
 
-  ipcMain.handle(IpcChannels.documentRecents, (): RecentProject[] =>
-    store
-      .listProjects()
-      .sort(([, a], [, b]) => (b.lastOpened ?? '').localeCompare(a.lastOpened ?? ''))
-      .map(([root, record]) => ({
-        root,
-        name: basename(root),
-        hasSession: Boolean(record.sessionId),
-        ...(record.blockCount !== undefined ? { blockCount: record.blockCount } : {}),
-      })),
-  )
+  ipcMain.handle(IpcChannels.documentRecents, (): RecentProject[] => getRecentProjects())
 
   ipcMain.handle(IpcChannels.documentHistory, () => requireSession().git.log(50))
 

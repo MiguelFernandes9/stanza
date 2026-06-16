@@ -1,6 +1,7 @@
 import { BrowserWindow, Menu } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
-import { IpcChannels } from '@shared/ipc'
+import { buildFileSubmenu } from './menuTemplate'
+import { getRecentProjects } from './ipc-registry'
 
 /** Stanza's application menu.
  *
@@ -11,24 +12,27 @@ import { IpcChannels } from '@shared/ipc'
  *  renderer. Force-reload and devtools stay available under non-conflicting
  *  accelerators as dev escape hatches.
  *
- *  ⌘W is rebound off the default close-window role to a "Close Tab" item: the
- *  accelerator fires regardless of focus and takes priority over the renderer
- *  keydown, so it drives the editor's tab close. The renderer falls back to
- *  closing the window when no tab is open (window:close). */
+ *  The File submenu (New document / Open folder / Open Recent / Settings /
+ *  Close Tab) sends a menu:* channel to the focused window; the renderer routes
+ *  it (App.tsx). ⌘W is rebound off the default close-window role to "Close Tab":
+ *  the accelerator fires regardless of focus and drives the editor's tab close;
+ *  the renderer falls back to window:close when no tab is open.
+ *
+ *  Re-runnable: rebuilt after each document open/create (registered via
+ *  setRecentsListener) so Open Recent reflects the current store. */
 export function buildAppMenu(): void {
   const isMac = process.platform === 'darwin'
+
+  const send = (channel: string, ...args: unknown[]): void => {
+    BrowserWindow.getFocusedWindow()?.webContents.send(channel, ...args)
+  }
 
   const template: MenuItemConstructorOptions[] = [
     ...(isMac ? ([{ role: 'appMenu' }] as MenuItemConstructorOptions[]) : []),
     {
       label: 'File',
       submenu: [
-        {
-          label: 'Close Tab',
-          accelerator: 'CmdOrCtrl+W',
-          click: () =>
-            BrowserWindow.getFocusedWindow()?.webContents.send(IpcChannels.editorCloseActiveTab)
-        },
+        ...buildFileSubmenu({ recents: getRecentProjects(), send }),
         ...(isMac ? [] : ([{ type: 'separator' }, { role: 'quit' }] as MenuItemConstructorOptions[]))
       ]
     },
