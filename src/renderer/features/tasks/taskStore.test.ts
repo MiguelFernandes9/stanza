@@ -107,6 +107,52 @@ describe('taskReducer — abandoned draft cleanup (BUG-27)', () => {
   })
 })
 
+describe('taskReducer — Read mode clears the live selection (BUG-49)', () => {
+  it('drops an empty compose selection and nulls activeTask when entering Read', () => {
+    let s = run(initialTaskState, { type: 'toggle-block', ids: ['p1'], additive: false })
+    expect(s.tasks).toHaveLength(1)
+    s = run(s, { type: 'set-view', view: 'read' })
+    expect(s.view).toBe('read')
+    expect(s.tasks).toHaveLength(0) // the empty selection (its wash) is torn down
+    expect(s.activeTask).toBeNull()
+  })
+
+  it('keeps a typed-but-unsubmitted draft but still nulls activeTask', () => {
+    let s = run(initialTaskState, { type: 'toggle-block', ids: ['p1'], additive: false })
+    const id = s.tasks[0].id
+    s = run(
+      s,
+      { type: 'update-instruction', taskId: id, instruction: 'tighten this' },
+      { type: 'set-view', view: 'read' }
+    )
+    expect(s.tasks).toHaveLength(1) // an intentional draft is kept (dropAbandonedDraft policy)
+    expect(s.activeTask).toBeNull()
+    expect(s.view).toBe('read')
+  })
+
+  it('leaves a busy task in place when entering Read, only nulling active', () => {
+    let s = run(
+      initialTaskState,
+      { type: 'toggle-block', ids: ['p1'], additive: false },
+      { type: 'update-instruction', taskId: 1, instruction: 'x' },
+      { type: 'submit', taskId: 1 }
+    )
+    expect(s.tasks[0].phase).toBe('busy')
+    s = run(s, { type: 'set-view', view: 'read' })
+    expect(s.tasks).toHaveLength(1)
+    expect(s.tasks[0].phase).toBe('busy')
+    expect(s.activeTask).toBeNull()
+  })
+
+  it('set-view to select keeps the selection untouched', () => {
+    const sel = run(initialTaskState, { type: 'toggle-block', ids: ['p1'], additive: false })
+    const s = run(sel, { type: 'set-view', view: 'select' })
+    expect(s.tasks).toEqual(sel.tasks)
+    expect(s.activeTask).toBe(sel.activeTask)
+    expect(s.view).toBe('select')
+  })
+})
+
 describe('taskReducer — lifecycle', () => {
   const composed = (): TaskState =>
     run(

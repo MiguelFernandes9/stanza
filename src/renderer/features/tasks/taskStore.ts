@@ -238,6 +238,13 @@ export function taskReducer(s: TaskState, a: TaskAction): TaskState {
     case 'set-adding':
       return { ...s, adding: a.adding }
     case 'set-view':
-      return { ...s, view: a.view }
+      // Selection is a Select-mode concept; Read carries none. Entering Read
+      // tears down the live selection: drop the abandoned compose draft (its
+      // wash) via the BUG-27 helper, and null activeTask (removeTask may have
+      // reassigned it). A typed-but-unsubmitted draft is kept per
+      // dropAbandonedDraft's policy. Select is a plain passthrough.
+      return a.view === 'read'
+        ? { ...dropAbandonedDraft(s), activeTask: null, view: 'read' }
+        : { ...s, view: a.view }
   }
 }
