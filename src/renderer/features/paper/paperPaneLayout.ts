@@ -78,6 +78,17 @@ export function stackTops(items: StackItem[], gap = CARD_GAP): Record<number, nu
   return out
 }
 
+/** Absolute top (px, PAD applied) for an open rail bubble — or null when its
+ *  collision-stacked top isn't resolved yet, in which case the bubble must NOT
+ *  render. Gate and position are the SAME value: `stackTops` fills `tops` in a
+ *  layout effect a frame after the bubble first opens, so reading
+ *  `pad + (tops[id] ?? 0)` placed the bubble at the pane top for that frame and
+ *  `transition: top` animated it down — the slide-from-top (M3-2). */
+export function railBubbleTop(tops: Record<number, number>, id: number, pad: number): number | null {
+  const top = tops[id]
+  return top == null ? null : pad + top
+}
+
 /** Bezier from the page's right edge (pageRightX, by) to the rail card
  *  (railLeft, cy), bowing through the horizontal midpoint. Matches the mock. */
 export function connectorPath(pageRightX: number, railLeft: number, by: number, cy: number): string {

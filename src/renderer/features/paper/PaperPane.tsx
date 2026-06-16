@@ -23,7 +23,7 @@ import type { TextToken } from './pdfTextTokens'
 import { buildOutlineNumbers } from './outlineNumbers'
 import { pageGraphics } from './pdfGraphics'
 import type { GraphicBox } from './pdfGraphics'
-import { BADGE, PAD, RAIL, RAIL_GUTTER, connectorPath, paneLayout, pdfScrollTop, phaseTone, stackTops } from './paperPaneLayout'
+import { BADGE, PAD, RAIL, RAIL_GUTTER, connectorPath, paneLayout, pdfScrollTop, phaseTone, railBubbleTop, stackTops } from './paperPaneLayout'
 
 const FALLBACK_PAGE_WIDTH = 564
 
@@ -559,9 +559,16 @@ export function PaperPane(props: Props): JSX.Element {
 
                 {/* open bubbles, each a TaskCard in the right rail (collision-stacked) */}
                 {openTasks.map((t) => {
-                  // No bubble until its block geometry resolves (BUG-32); a
-                  // null-anchor task isn't stacked, so it has no real top yet.
-                  if (anchorTops[t.id] == null) return null
+                  // Gate AND position on the SAME resolved value — the stacked
+                  // top. tops[t.id] is filled by the stacking layout effect a
+                  // frame after openIds first includes t.id; gating on anchorTops
+                  // but reading tops[t.id] ?? 0 let that frame render the bubble
+                  // at the pane top (top:0), which `transition: top` then animated
+                  // down — the slide-from-top (M3-2, also covers BUG-32). Now the
+                  // bubble mounts straight at its final top; transition only
+                  // animates later re-stacks (another bubble opening/closing).
+                  const top = railBubbleTop(tops, t.id, PAD)
+                  if (top == null) return null
                   return (
                     <div
                       key={t.id}
@@ -569,7 +576,7 @@ export function PaperPane(props: Props): JSX.Element {
                       style={{
                         position: 'absolute',
                         left: railLeft,
-                        top: PAD + (tops[t.id] ?? 0),
+                        top,
                         width: RAIL,
                         zIndex: 7,
                         pointerEvents: 'auto',
