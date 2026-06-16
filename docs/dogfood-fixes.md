@@ -2222,3 +2222,36 @@ the dev userData dir Electron→Stanza (one-time store relocation).
 
 **Lane.** `main/index.ts` + `package.json` + new `build/` assets. Self-contained,
 independent of all other lanes. Commit A (dev branding) first = immediate relief.
+
+## FEAT — native File menu + Settings panel (two parallel lanes)
+
+**Ask.** A top bar (native macOS menu): File ▸ New document / Open folder / Open Recent
+/ Settings. A Settings panel with editor font/size, UI theme, main-file selector, and
+compiler options; plus "what file is this window compiling" visible there.
+
+**Decisions (Miguel):** native macOS menu (not in-app dropdown); Settings v1 = all 4
+areas; scope split = fonts/theme app-global, compiler + main-file per-document.
+
+**Design + grounding:** **`docs/menu-and-settings.md`** (full file:line wiring).
+Splits into two PARALLEL lanes against a shared seam (channels + App `settingsOpen`
+state + `SettingsModal` props):
+- **Lane M** — native File menu + menu→action plumbing (menu.ts items firing
+  `webContents.send` events à la `editorCloseActiveTab`; Open Recent built in main from
+  the store; `buildAppMenu` made re-runnable; App listeners route New/Open/Recent to
+  the existing `documentOpen/Create` flows and Settings → `setSettingsOpen`). Owns the
+  seam state.
+- **Lane S** — Settings store + panel + wiring (global `<userData>/settings.json` +
+  per-doc `ProjectRecord` fields; 5 `settings:*` IPC; mainFile override honored at
+  `DocumentService.open` — single source of truth, rebuild session on change since
+  `CompileService` captures `doc` at ctor; compiler argv knobs limited to
+  paper-size/shell-escape/continue-on-errors/reruns — `--synctex` mandatory,
+  deterministic-mode/output-dir/engine BLOCKED; `SettingsModal` 4 sections; font/theme
+  applied live via CSS vars in App). Owns the modal + mount.
+
+**Collision.** Only `App.tsx` (M: state+listeners / S: modal mount+global-apply) and
+`channels.ts` (M: menu:* / S: settings:*) — distinct regions. Merge M first, S rebases.
+
+**Note.** UI theme: a real dark token set may be out of v1 scope — theme toggle could
+ship light-only + accent (flag in `docs/menu-and-settings.md`). The design fan-out's
+synthesis agent hung; the 4 recovered ground reports + direct reads back every cited
+site.
