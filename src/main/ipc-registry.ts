@@ -23,6 +23,7 @@ import { DefaultProcessRunner } from './infra/ProcessRunner'
 import { GitClient } from './infra/GitClient'
 import { Store } from './infra/Store'
 import { ClaudeService } from './services/ClaudeService'
+import { changedFilesInDiff } from './services/diffSpans'
 import { DocumentService } from './services/DocumentService'
 import { DocumentSession } from './session'
 
@@ -96,6 +97,13 @@ export function registerIpcHandlers(): void {
   )
 
   ipcMain.handle(IpcChannels.documentHistory, () => requireSession().git.log(50))
+
+  // HISTORY diff viewer: the unified diff of a past commit vs current HEAD,
+  // plus the files it touched (so the overlay can render one card per file).
+  ipcMain.handle(IpcChannels.documentDiffAt, async (_e, sha: string) => {
+    const diff = await requireSession().git.diffAt(sha)
+    return { diff, files: changedFilesInDiff(diff) }
+  })
 
   ipcMain.handle(IpcChannels.documentFiles, (): FileEntry[] =>
     listFiles(requireSession().info.root),

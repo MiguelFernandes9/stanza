@@ -32,6 +32,7 @@ import {
   type TabState
 } from '../editor/openFilesModel'
 import { PaperPane } from '../paper/PaperPane'
+import { HistoryDiffOverlay } from '../review/HistoryDiffOverlay'
 import type { PdfFlash } from '../paper/PaperPane'
 import { expandIds, flattenBlocks, spanLabel, taskSpans } from '../paper/paperModel'
 import { resolveToKnownFile } from '@renderer/lib/paths'
@@ -61,6 +62,15 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
   const [files, setFiles] = useState<FileEntry[]>([])
   const [blocks, setBlocks] = useState<BlockNode[]>([])
   const [history, setHistory] = useState<CommitInfo[]>([])
+  // HISTORY diff viewer: the loaded diff of a clicked commit vs current HEAD,
+  // shown full-page until closed (subject/iso for the header come from the
+  // commit row; diff/files from document:diffAt). null = no overlay.
+  const [historyDiff, setHistoryDiff] = useState<{
+    subject: string
+    iso: string
+    diff: string
+    files: string[]
+  } | null>(null)
   const [sourceOpen, setSourceOpen] = useState(false)
   const [chatOpen, setChatOpen] = useState(false)
   // Drag-resizable sidebar + editor widths (clamped, persisted); PaperPane
@@ -665,6 +675,15 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
               }
             )
           }}
+          onPickHistory={(hash) => {
+            const commit = history.find((c) => c.hash === hash)
+            if (!commit) return
+            // Load the past-version-vs-current diff, then open the overlay.
+            void client.documentDiffAt(hash).then(
+              ({ diff, files }) => setHistoryDiff({ subject: commit.subject, iso: commit.iso, diff, files }),
+              showErrToast
+            )
+          }}
           onOpenFile={openFile}
           onRename={onRenameFile}
           onDuplicate={onDuplicateFile}
@@ -734,6 +753,15 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
           />
         )}
       </div>
+      {historyDiff && (
+        <HistoryDiffOverlay
+          subject={historyDiff.subject}
+          iso={historyDiff.iso}
+          diff={historyDiff.diff}
+          files={historyDiff.files}
+          onClose={() => setHistoryDiff(null)}
+        />
+      )}
       {toast && (
         <div style={{ position: 'fixed', top: 50, right: 16, zIndex: 120 }}>
           <Toast title={toast.title} message={toast.message} tone={toast.tone} onDismiss={() => setToast(null)} />

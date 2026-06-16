@@ -46,6 +46,7 @@ const baseProps = {
   onCreateFolder: noop,
   onUpload: noop,
   onMove: noop,
+  onPickHistory: noop,
   lockedFiles: new Set<string>()
 }
 
@@ -76,7 +77,7 @@ describe('Sidebar — BUG-50 project icon stays square', () => {
 })
 
 describe('Sidebar — collapsible OUTLINE + HISTORY sections', () => {
-  const commit: CommitInfo = { subject: 'Initial commit', iso: '2026-06-16T00:00:00Z', kind: 'other' }
+  const commit: CommitInfo = { hash: 'c0ffee1', subject: 'Initial commit', iso: '2026-06-16T00:00:00Z', kind: 'other' }
 
   // Section headers are the only elements carrying aria-expanded.
   const sectionHeader = (title: string): HTMLElement =>
@@ -111,5 +112,18 @@ describe('Sidebar — collapsible OUTLINE + HISTORY sections', () => {
     expect(sectionHeader('Outline').getAttribute('aria-expanded')).toBe('false')
     expect(sectionHeader('History').getAttribute('aria-expanded')).toBe('true')
     expect(container.textContent).toContain('Initial commit')
+  })
+})
+
+describe('Sidebar — clickable HISTORY rows (history diff viewer)', () => {
+  const commit: CommitInfo = { hash: 'abc1234def', subject: 'Tighten abstract', iso: '2026-06-16T00:00:00Z', kind: 'claude' }
+
+  it('clicking a history row fires onPickHistory with the commit hash', () => {
+    const onPickHistory = vi.fn()
+    renderSidebar({ history: [commit], onPickHistory })
+    const row = container.querySelector('[data-testid="history:abc1234def"]') as HTMLElement
+    expect(row).not.toBeNull()
+    click(row)
+    expect(onPickHistory).toHaveBeenCalledWith('abc1234def')
   })
 })

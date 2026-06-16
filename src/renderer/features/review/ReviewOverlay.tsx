@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import type { JSX } from 'react'
 import { Check, Sparkles, X } from 'lucide-react'
-import { BlockTag, Button, DiffHunk, IconButton, Kbd, SegmentedControl } from '@renderer/components'
+import { BlockTag, Button, IconButton, Kbd, SegmentedControl } from '@renderer/components'
 import type { BlockTagKind } from '@renderer/components'
 import type { ReviewProposal } from '@shared/ipc'
+import { DiffView } from './DiffView'
 import { extractAffectedText, splitDiffByFile, wordSegments } from './wordDiff'
 import type { Seg } from './wordDiff'
 
@@ -198,11 +199,7 @@ export function ReviewOverlay({ proposal, note, blockTag, loadFileAt, onClose, o
               </div>
             )
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {fileChunks.map((c) => (
-                <DiffHunk key={c.file} file={c.file} diff={c.diff} />
-              ))}
-            </div>
+            <DiffView diff={proposal.diff} files={proposal.files} />
           )}
         </div>
 

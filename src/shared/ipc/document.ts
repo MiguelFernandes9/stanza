@@ -28,9 +28,18 @@ export interface RecentProject {
 }
 
 export interface CommitInfo {
+  /** Full commit SHA — lets the HISTORY viewer diff this version vs current. */
+  hash: string
   subject: string
   iso: string
   kind: 'claude' | 'wip' | 'other'
+}
+
+/** document:diffAt result — a past commit's unified diff vs the current HEAD
+ *  plus the files it touches (HISTORY diff viewer; `git diff <sha> HEAD`). */
+export interface HistoryDiff {
+  diff: string
+  files: string[]
 }
 
 export interface PrimeStep {
