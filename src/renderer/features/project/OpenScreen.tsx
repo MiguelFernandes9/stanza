@@ -6,6 +6,7 @@ import { client } from '@renderer/lib/client'
 import type { DocumentInfo, PrimeStep, RecentProject } from '@shared/ipc'
 import { foldPrimeSteps } from './primeSteps'
 import type { PrimeVariant } from './primeSteps'
+import { DragRegion } from './DragRegion'
 import { NewDocumentDialog } from './NewDocumentDialog'
 import { PrimingOverlay } from './PrimingOverlay'
 import { RecentRow } from './RecentRow'
@@ -60,14 +61,24 @@ export function OpenScreen({ onOpened }: Props): JSX.Element {
       style={{
         flex: 1,
         display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
+        flexDirection: 'column',
         background: 'var(--surface-canvas)',
-        padding: 40,
         height: '100vh'
       }}
     >
-      <div style={{ width: 480 }}>
+      {/* BUG-52: frameless window needs a grab strip — no TitleBar here. */}
+      <DragRegion />
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '0 40px 40px'
+        }}
+      >
+        <div style={{ width: 480 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 13, marginBottom: 8 }}>
           <StanzaMark size={40} />
           <div
@@ -148,6 +159,7 @@ export function OpenScreen({ onOpened }: Props): JSX.Element {
         <div style={{ font: 'var(--text-xs)/1.5 var(--font-sans)', color: 'var(--ink-400)', marginTop: 18 }}>
           Folders without a Claude session are set up on first open — blocks parsed, version
           control initialized, session primed.
+        </div>
         </div>
       </div>
 
