@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import type { ProcessRunner, ProcResult, RunSpec } from '../../infra/ProcessRunner'
-import { CompileService } from '../CompileService'
+import { CompileService, compileArgs } from '../CompileService'
 import type { DocumentInfo } from '../../../shared/ipc/document'
 
 const doc: DocumentInfo = {
@@ -368,5 +368,53 @@ describe('CompileService synctex queries', () => {
     expect(
       await service.forward({ file: 'main.tex', startLine: 1, endLine: 1 }),
     ).toEqual([])
+  })
+})
+
+describe('compileArgs — user knobs append after the mandatory flags (Lane S)', () => {
+  test('no options = the mandatory argv (--synctex --keep-logs preserved)', () => {
+    expect(compileArgs('main.tex')).toEqual(['-X', 'compile', '--synctex', '--keep-logs', 'main.tex'])
+  })
+
+  test('splices the v1 knobs in, target stays last, --synctex stays', () => {
+    const args = compileArgs('main.tex', {
+      paperSize: 'a4',
+      shellEscape: true,
+      continueOnErrors: true,
+      reruns: 3,
+    })
+    expect(args).toEqual([
+      '-X', 'compile', '--synctex', '--keep-logs',
+      '-Z', 'paper-size=a4',
+      '-Z', 'shell-escape',
+      '-Z', 'continue-on-errors',
+      '-r', '3',
+      'main.tex',
+    ])
+    expect(args).toContain('--synctex') // never dropped
+    expect(args[args.length - 1]).toBe('main.tex') // positional input last
+  })
+
+  test('omits flags for unset / falsy options', () => {
+    expect(compileArgs('m.tex', { shellEscape: false })).toEqual([
+      '-X', 'compile', '--synctex', '--keep-logs', 'm.tex',
+    ])
+  })
+})
+
+describe('CompileService.setOptions — live compiler config (Lane S)', () => {
+  test('a compiler-option change flows into the next compile argv', async () => {
+    const runner = new MockRunner(() => ok)
+    const service = new CompileService(runner, doc, () => null)
+    service.setOptions({ paperSize: 'letter', shellEscape: true })
+
+    await service.compile({})
+
+    expect(runner.calls[0]!.args).toEqual([
+      '-X', 'compile', '--synctex', '--keep-logs',
+      '-Z', 'paper-size=letter',
+      '-Z', 'shell-escape',
+      'main.tex',
+    ])
   })
 })

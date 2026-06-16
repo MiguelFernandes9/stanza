@@ -6,6 +6,8 @@ import { PrimingOverlay } from '@renderer/features/project/PrimingOverlay'
 import { foldPrimeSteps } from '@renderer/features/project/primeSteps'
 import type { PrimeVariant } from '@renderer/features/project/primeSteps'
 import { Workspace } from '@renderer/features/workspace/Workspace'
+import { SettingsModal } from '@renderer/features/settings/SettingsModal'
+import { applyGlobalSettings } from '@renderer/features/settings/applyGlobalSettings'
 import { client } from '@renderer/lib/client'
 import type { DocumentInfo, PrimeStep } from '@shared/ipc'
 
@@ -36,6 +38,22 @@ export default function App(): JSX.Element {
       },
       () => undefined
     )
+  }, [])
+
+  // Apply global settings (editor font + theme) at startup and on every change.
+  // Lives in App (above both screens) so it covers the home screen too; 'system'
+  // theme follows the OS preference live.
+  useEffect(() => {
+    const apply = (): void =>
+      void client.settingsGetGlobal().then((g) => applyGlobalSettings(g), () => undefined)
+    apply()
+    const offChanged = client.onSettingsChanged((p) => applyGlobalSettings(p.global))
+    const mq = window.matchMedia?.('(prefers-color-scheme: dark)')
+    mq?.addEventListener('change', apply)
+    return () => {
+      offChanged()
+      mq?.removeEventListener('change', apply)
+    }
   }, [])
 
   // Before a document opens there are no tabs, so ⌘W keeps its old meaning:
@@ -131,9 +149,14 @@ export default function App(): JSX.Element {
         />
       )}
 
-      {/* settingsOpen is consumed by Lane S's <SettingsModal> (mounted here when
-          it lands); Lane M only owns the state + setter. */}
-      {settingsOpen && null}
+      {/* Lane S: the Settings panel mounts here, driven by M's settingsOpen
+          state (the gear and File ▸ Settings both flip it). */}
+      <SettingsModal
+        open={settingsOpen}
+        doc={doc}
+        onClose={() => setSettingsOpen(false)}
+        onDocChanged={setDoc}
+      />
     </>
   )
 }

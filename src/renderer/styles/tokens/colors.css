@@ -102,3 +102,39 @@
   --hover-fill:  rgba(33, 30, 25, 0.045);
   --hover-edge:  rgba(33, 30, 25, 0.12);
 }
+
+/* ============================================================
+   Dark theme (Lane S, settings). Override the base ramps only — the semantic
+   aliases above reference them via var(), so surfaces/text/borders cascade.
+   v1 first pass: chrome goes dark (the PDF page stays white — it's paper);
+   clay/blue/diff accents are kept and may want per-token tuning later.
+   Toggled by data-theme='dark' on <html> (applyGlobalSettings).
+   ============================================================ */
+:root[data-theme='dark'] {
+  /* Ink ramp inverted: cream text → warm gray on dark. */
+  --ink-900: #f4efe6;
+  --ink-800: #e6e0d4;
+  --ink-700: #d3ccbd;
+  --ink-600: #b9b1a0;
+  --ink-500: #9a9182;
+  --ink-400: #7e7565;
+  --ink-300: #635b4d;
+  --ink-200: #4a4339;
+
+  /* Paper ramp → warm near-black surfaces (ascending as it lifts). */
+  --paper-sunken: #16140f;
+  --paper-base:   #1c1a16;
+  --paper-0:      #232019;
+  --paper-1:      #2a261f;
+  --paper-2:      #2f2b23;
+
+  /* Warm hairlines on dark. */
+  --line:        #3a352c;
+  --line-strong: #4a4339;
+  --line-ink:    #5c5345;
+  --border-faint: #2e2a22;
+
+  /* Hover wash flips to light ink on dark. */
+  --hover-fill: rgba(244, 239, 230, 0.06);
+  --hover-edge: rgba(244, 239, 230, 0.14);
+}

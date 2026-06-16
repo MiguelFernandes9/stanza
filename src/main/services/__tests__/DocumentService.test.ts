@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
 import { DocumentService } from '../DocumentService'
+import { Store } from '../../infra/Store'
 
 const service = new DocumentService()
 let roots: string[] = []
@@ -86,5 +87,32 @@ describe('DocumentService.open', () => {
     })
     const info = await service.open(root)
     expect(info?.texFiles).toEqual(['main.tex'])
+  })
+})
+
+describe('DocumentService.open — main-file override (Lane S)', () => {
+  const both =
+    '\\documentclass{article}\n\\begin{document}\nx\n\\end{document}\n'
+  const withStore = (store: Store): DocumentService =>
+    new DocumentService({
+      store,
+      makeGit: () => null as unknown as never,
+      primeSession: async () => undefined,
+    })
+
+  test('honors a saved mainFile override that still exists', async () => {
+    const root = makeProject({ 'a-main.tex': both, 'z-other.tex': both })
+    const store = new Store(join(root, '.store.json'))
+    store.setProject(root, { mainFile: 'z-other.tex' })
+    const info = await withStore(store).open(root)
+    expect(info?.mainFile).toBe('z-other.tex') // override beats alphabetical detection
+  })
+
+  test('ignores an override no longer in texFiles, falls back to detection', async () => {
+    const root = makeProject({ 'a-main.tex': both, 'z-other.tex': both })
+    const store = new Store(join(root, '.store.json'))
+    store.setProject(root, { mainFile: 'deleted.tex' })
+    const info = await withStore(store).open(root)
+    expect(info?.mainFile).toBe('a-main.tex') // detected (override invalid)
   })
 })
