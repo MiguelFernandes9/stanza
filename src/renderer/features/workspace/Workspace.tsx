@@ -15,6 +15,7 @@ import type {
 import { ChatPane } from '../chat/ChatPane'
 import type { ChatMessage, ComposeChip } from '../chat/ChatPane'
 import { saveActiveAndCompile, saveAllAndCompile } from './compileTriggers'
+import { filesToReloadAfterResolve } from './reviewReload'
 import { EditorPane } from '../editor/EditorPane'
 import type { EditorApi } from '../editor/EditorPane'
 import { EMPTY_CONTEXT, loadProjectContext } from '../editor/completion/projectContext'
@@ -556,6 +557,10 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
         }
         dispatch({ type: 'resolve', taskId })
         loadOps()
+        // Refresh stale editor buffers for the files this accept wrote to disk —
+        // blocks/PDF/history already refresh off compile-ok; the open editor
+        // buffer was the gap that kept showing the pre-edit text (M3-1).
+        void editorApi.current?.reloadFiles(filesToReloadAfterResolve(accept, resolution))
         if (accept) {
           runCompile()
           loadHistory()

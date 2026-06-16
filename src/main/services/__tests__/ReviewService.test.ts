@@ -114,7 +114,13 @@ describe('ReviewService.resolve', () => {
 
     const resolution = await review.resolve({ opId: 'op1', accept: true })
 
-    expect(resolution).toEqual({ committed: true, commitSubject: 'claude: rewrite line one' })
+    // changedFiles = the merged branch's diff — the renderer reloads their
+    // stale editor buffers (M3-1).
+    expect(resolution).toEqual({
+      committed: true,
+      commitSubject: 'claude: rewrite line one',
+      changedFiles: ['main.tex']
+    })
     expect(read('main.tex')).toBe('ACCEPTED\nline2\nline3\n')
     expect(await git.listBranches('stanza/op-*')).toEqual([])
   })

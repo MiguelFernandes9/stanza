@@ -41,6 +41,12 @@ export interface EditorApi {
   saveFile: (file: string) => Promise<void>
   /** Drop a buffer's unsaved edits so a reopen re-reads disk (⌘W "Discard"). */
   discard: (file: string) => void
+  /** Re-read the given files from disk, dropping their cached buffers — the seam
+   *  for "the file on disk changed under us" (a Claude op accepted, M3-1). The
+   *  active file's view is replaced immediately; non-active files are evicted so
+   *  their next open re-reads. A dirty buffer is skipped (never clobber unsaved
+   *  edits — the accept clean-tree precondition means this shouldn't occur). */
+  reloadFiles: (files: string[]) => Promise<void>
 }
 
 interface Props {
@@ -264,6 +270,22 @@ export function EditorPane({
       discard: (file) => {
         buffers.current.delete(file)
         markDirty(file, false)
+      },
+      reloadFiles: async (files) => {
+        for (const file of files) {
+          if (dirtyRef.current.has(file)) continue // never clobber unsaved edits
+          buffers.current.delete(file) // evict — a non-active reopen re-reads disk
+          if (file !== activeFileRef.current) continue
+          // The visible file changed on disk: pull it now and replace the view.
+          const content = await client.documentRead(file)
+          buffers.current.set(file, content)
+          const view = viewRef.current
+          if (view && activeFileRef.current === file) {
+            view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: content } })
+            setLineCount(view.state.doc.lines)
+            markDirty(file, false)
+          }
+        }
       }
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
