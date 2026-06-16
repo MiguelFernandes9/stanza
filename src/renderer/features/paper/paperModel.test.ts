@@ -51,6 +51,28 @@ const tree: BlockNode[] = [
   }
 ]
 
+// A container env (theorem) with its own children — the nested-block shape.
+const nestedTree: BlockNode[] = [
+  {
+    id: 'sec#x',
+    kind: 'section',
+    name: 'S',
+    span: span(1, 20),
+    children: [
+      {
+        id: 'thm#y',
+        kind: 'environment',
+        name: 'theorem',
+        span: span(2, 8),
+        children: [
+          { id: 'par#z', kind: 'paragraph', span: span(3, 3), children: [] },
+          { id: 'eq#w', kind: 'environment', name: 'equation', span: span(4, 6), children: [] }
+        ]
+      }
+    ]
+  }
+]
+
 describe('flattenBlocks', () => {
   it('skips the preamble and emits heading + children per section', () => {
     const flat = flattenBlocks(tree)
@@ -59,11 +81,40 @@ describe('flattenBlocks', () => {
     expect(flat[1]).toMatchObject({ kind: 'paragraph', sectionId: 'sec1#a' })
     expect(flat[2]).toMatchObject({ kind: 'environment', envName: 'equation' })
   })
+
+  it('recurses container envs: child rows carry parentId + depth', () => {
+    const flat = flattenBlocks(nestedTree)
+    expect(flat.map((b) => b.id)).toEqual(['sec#x', 'thm#y', 'par#z', 'eq#w'])
+    expect(flat.find((b) => b.id === 'thm#y')).toMatchObject({
+      kind: 'environment',
+      envName: 'theorem',
+      parentId: 'sec#x',
+      depth: 1,
+      sectionId: 'sec#x'
+    })
+    expect(flat.find((b) => b.id === 'par#z')).toMatchObject({ parentId: 'thm#y', depth: 2 })
+    expect(flat.find((b) => b.id === 'eq#w')).toMatchObject({
+      parentId: 'thm#y',
+      depth: 2,
+      sectionId: 'sec#x'
+    })
+  })
+
+  it('tags a top-level section row with depth 0 and null parent', () => {
+    const flat = flattenBlocks(nestedTree)
+    expect(flat[0]).toMatchObject({ id: 'sec#x', depth: 0, parentId: null })
+  })
 })
 
 describe('expandIds', () => {
   it('expands a section heading to the whole section', () => {
     expect(expandIds(tree, 'sec1#a')).toEqual(['sec1#a', 'p1#b', 'eq1#c'])
+  })
+  it('expands a container env to its subtree', () => {
+    expect(expandIds(nestedTree, 'thm#y')).toEqual(['thm#y', 'par#z', 'eq#w'])
+  })
+  it('expands a leaf child to itself', () => {
+    expect(expandIds(nestedTree, 'eq#w')).toEqual(['eq#w'])
   })
   it('returns a leaf id as-is', () => {
     expect(expandIds(tree, 'p1#b')).toEqual(['p1#b'])

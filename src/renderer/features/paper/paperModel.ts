@@ -21,8 +21,16 @@ export interface PageBlock {
   name?: string
   envName?: string
   span: BlockSpan
-  /** Owning section id (a heading row points at its own section). */
+  /** Nearest-ancestor section id (a heading row points at its own section);
+   *  null above the first section. */
   sectionId: string | null
+  /** Immediate parent block id — a child equation's theorem, a caption's figure,
+   *  a paragraph's section. null at the document root. Drives nested geometry
+   *  (parent box = union of own ∪ children) and innermost-wins selection. */
+  parentId: string | null
+  /** Nesting depth (0 at the document root) so the binner can pick the deepest
+   *  containing region for a rendered row. */
+  depth: number
   /** First content line of an environment when leading invisible macros
    *  (\label/…) push it past span.startLine+1 — environmentInteriorSpan starts
    *  the geometry query here so the box doesn't merge upward (M2-7). */
@@ -31,14 +39,21 @@ export interface PageBlock {
 
 /** Flatten the whole block tree to one row per selectable unit, in reading
  *  order. Walks to any depth: every section (chapter, section, subsection…)
- *  becomes a heading row; every leaf (paragraph/environment) at any depth
- *  becomes its own row, tagged with its nearest-ancestor section. A heading
- *  row's geometry spans only its heading line — selection expands to the
- *  whole section via expandIds, so the box doesn't blanket nested content
+ *  becomes a heading row; every paragraph/environment at any depth becomes its
+ *  own row, tagged with its nearest-ancestor section, immediate parent, and
+ *  depth. A CONTAINER environment (theorem⊃equation, figure⊃caption) recurses
+ *  too, so each descendant is its own selectable row parented to the container.
+ *  A heading row's geometry spans only its heading line — selection expands to
+ *  the whole section via expandIds, so the box doesn't blanket nested content
  *  (BUG-5/9). */
 export function flattenBlocks(roots: BlockNode[]): PageBlock[] {
   const out: PageBlock[] = []
-  const walk = (nodes: BlockNode[], sectionId: string | null): void => {
+  const walk = (
+    nodes: BlockNode[],
+    sectionId: string | null,
+    parentId: string | null,
+    depth: number
+  ): void => {
     for (const node of nodes) {
       if (node.kind === 'preamble') continue
       if (node.kind === 'section') {
@@ -47,9 +62,11 @@ export function flattenBlocks(roots: BlockNode[]): PageBlock[] {
           kind: 'heading',
           name: node.name,
           span: { ...node.span, endLine: node.span.startLine },
-          sectionId: node.id
+          sectionId: node.id,
+          parentId,
+          depth
         })
-        walk(node.children, node.id)
+        walk(node.children, node.id, node.id, depth + 1)
       } else {
         out.push({
           id: node.id,
@@ -57,18 +74,24 @@ export function flattenBlocks(roots: BlockNode[]): PageBlock[] {
           envName: node.kind === 'environment' ? node.name : undefined,
           span: node.span,
           sectionId,
+          parentId,
+          depth,
           contentStartLine: node.contentStartLine
         })
+        // A container env's children each become their own row, parented here.
+        if (node.children.length) walk(node.children, sectionId, node.id, depth + 1)
       }
     }
   }
-  walk(roots, null)
+  walk(roots, null, null, 0)
   return out
 }
 
-/** Section id → the section plus its entire descendant subtree (so the
- *  selection wash covers nested subsections and their content); any other
- *  id → itself. taskSpans separately scopes the edit to the section span. */
+/** A block with children (a section OR a container env like theorem/figure) →
+ *  that block plus its entire descendant subtree, so the selection wash covers
+ *  nested content; a leaf → itself. This is what makes "select the parent →
+ *  cover all descendants, select a child → just the child" fall out for every
+ *  level. taskSpans separately scopes the edit. */
 export function expandIds(roots: BlockNode[], blockId: string): string[] {
   const subtree = (node: BlockNode): string[] => [
     node.id,
@@ -83,7 +106,7 @@ export function expandIds(roots: BlockNode[], blockId: string): string[] {
     return null
   }
   const node = find(roots)
-  return node && node.kind === 'section' ? subtree(node) : [blockId]
+  return node && node.children.length > 0 ? subtree(node) : [blockId]
 }
 
 /** Do two boxes overlap as rectangles? (Page-agnostic — callers gate on page.) */
