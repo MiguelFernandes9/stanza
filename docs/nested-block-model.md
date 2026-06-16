@@ -15,6 +15,27 @@ generalised to every container by one predicate, no per-kind special cases
 (Miguel's root-cause rule). It also dissolves the figure/float geometry bugs as a
 *consequence* of the model (§3, §5.3).
 
+### Shape (one rule, every level)
+
+A node's children **mix kinds** and are **siblings** of each other. Concretely, for
+`\section{A}` with a paragraph, then a `\subsection`, then more text:
+
+```
+section A                       parent
+├── tex1        (paragraph)     ┐ siblings: two sons of A
+└── subsection  (section)       ┘
+        └── tex2  (paragraph)   son of the subsection (text after its heading)
+```
+
+`tex1` and `subsection` are **brothers** under A; `tex2` (content after the
+subsection heading) belongs to the subsection; any son that can hold content
+(a subsection, or a container environment) recurses to any depth, leaf sons stop.
+This is exactly how **sections** already behave (verified). The whole rework just
+makes **environments** behave the same way: a `theorem` is a parent whose sons are
+its prose paragraph + its `equation`; a `figure`'s sons are its caption + graphic.
+Same shape at every level — sections, subsections, and environments are all just
+"parents with sibling children."
+
 ### Locked product decisions
 
 1. **Depth:** fully recursive; list `\item`s are selectable child blocks.
