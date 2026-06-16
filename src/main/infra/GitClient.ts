@@ -148,8 +148,12 @@ export class GitClient {
     return res.code === 0 ? res.stdout : ''
   }
 
+  /** Document change history for the sidebar. Excludes `--no-merges`: the
+   *  accept flow merges every op `--no-ff`, so each accepted edit already shows
+   *  as its own `claude:`/`wip:` commit — the `Merge branch 'stanza/op-…'`
+   *  plumbing commit is a duplicate row with the same diff, never shown. */
   async log(count: number): Promise<CommitInfo[]> {
-    const res = await this.run(['log', '-n', String(count), '--format=%H%x09%s%x09%cI'])
+    const res = await this.run(['log', '-n', String(count), '--no-merges', '--format=%H%x09%s%x09%cI'])
     if (res.code !== 0) return []
     return res.stdout
       .split('\n')
