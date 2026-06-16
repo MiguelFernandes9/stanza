@@ -2158,3 +2158,46 @@ checkout).
 `ReviewOverlay.tsx`→`DiffView`. **Shares `Sidebar.tsx` HISTORY section with the
 sidebar-chrome task** → sequence after it, or same sibling (chrome = commit 1,
 history-diff = commit 2).
+
+## BUG-51 — home screen RECENT row: path overlaps the "session · N blocks" badge
+
+**Symptom.** On the launcher, a recent row's folder path runs over the right-side
+"session · N blocks" status (text overlap).
+
+**Root cause.** The path `<div>` (`RecentRow.tsx:66`) has no overflow control. It sits
+in a `flex:1; minWidth:0` column (`:53`) next to a `flex:0 0 auto` status column
+(`:70`). A filesystem path is an UNBREAKABLE string (no spaces), so it can't wrap;
+with `minWidth:0` the flex item shrinks below the string's width and the path
+**overflows visibly** (default `overflow:visible`) rightward over the status. Same
+class as BUG-50's icon — a flex child with no overflow/shrink discipline.
+
+**Fix.** Give the path `<div>` `whiteSpace:nowrap; overflow:hidden;
+textOverflow:ellipsis` (`RecentRow.tsx:66`) — the exact treatment the sidebar header
+path already uses (`Sidebar.tsx:536-543`). Apply the same to the name span (`:55`) for
+long names. Truncates with an ellipsis instead of overflowing.
+
+**Test.** RTL/live: a long path truncates with "…" and never overlaps the status.
+
+**Lane.** `RecentRow.tsx` only — trivial. Pairs with BUG-52 = "home-chrome" task.
+
+## BUG-52 — home screen window can't be dragged (no app-region in the frameless chrome)
+
+**Symptom.** The launcher / home window can't be moved by dragging — only the
+in-document workspace can.
+
+**Root cause.** The window is `titleBarStyle:'hiddenInset'` (`main/index.ts:22`) — a
+custom/frameless chrome, so a draggable region must be declared per screen. The
+workspace `TitleBar` declares one (`WebkitAppRegion:'drag'`, `TitleBar.tsx:51`, with
+interactive bits `'no-drag'`, `:83`), but the home screen (`OpenScreen.tsx`) declares
+none → nothing to grab.
+
+**Fix.** Add a top drag strip to `OpenScreen` with `WebkitAppRegion:'drag'` (height
+clearing the inset traffic lights, ~38px), and mark its buttons / RecentRows
+`'no-drag'` so they stay clickable. (Consider a tiny shared `<DragRegion>` so future
+top-level screens inherit it — composes with the menu/settings work.)
+
+**Test.** Live (Miguel): drag the empty top area of the home screen → the window
+moves; New document / Open folder / recents still click.
+
+**Lane.** `OpenScreen.tsx` (+ optional shared `DragRegion`). Pairs with BUG-51 =
+"home-chrome" task. Independent of the menu/settings lanes.
