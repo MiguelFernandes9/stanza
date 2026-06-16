@@ -6,7 +6,10 @@ import { OpenScreen } from './OpenScreen'
 // window had no drag region and couldn't be moved. It must mount one.
 describe('OpenScreen chrome', () => {
   it('mounts a draggable region so the home window can be moved', () => {
-    const html = renderToStaticMarkup(<OpenScreen onOpened={() => {}} />)
+    const noop = (): void => {}
+    const html = renderToStaticMarkup(
+      <OpenScreen onNewDocument={noop} onOpenFolder={noop} onOpenRecent={noop} error={null} />
+    )
     expect(html).toContain('-webkit-app-region:drag')
   })
 })

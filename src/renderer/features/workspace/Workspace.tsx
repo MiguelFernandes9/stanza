@@ -53,12 +53,14 @@ interface Props {
   /** Full main-file propagation: a rename/delete that changes the detected
    *  main file (or texFiles) returns a fresh DocumentInfo — lift it to App. */
   onDocChanged?: (doc: DocumentInfo) => void
+  /** Open the Settings panel (TitleBar's gear); App owns the state. */
+  onOpenSettings: () => void
 }
 
 /** Workspace — design §2: TitleBar, sidebar, paper pane with the margin-rail
  *  edit loop (FD4). Source editor (F4) and chat pane (FD6) still plug into
  *  placeholders. ⌘R compile · ⌘E source · ⌘J assistant. */
-export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
+export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Element {
   const [files, setFiles] = useState<FileEntry[]>([])
   const [blocks, setBlocks] = useState<BlockNode[]>([])
   const [history, setHistory] = useState<CommitInfo[]>([])
@@ -649,6 +651,7 @@ export function Workspace({ doc, onDocChanged }: Props): JSX.Element {
         chatOpen={chatOpen}
         chatUnread={unreadNotes > 0}
         onToggleChat={() => setChatOpen((v) => !v)}
+        onOpenSettings={onOpenSettings}
       />
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         <Sidebar

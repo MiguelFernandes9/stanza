@@ -21,6 +21,8 @@ interface Props {
   /** Unread Claude notes while the assistant is closed → badge dot. */
   chatUnread: boolean
   onToggleChat: () => void
+  /** Open the Settings panel (App owns the state; Lane S mounts the modal). */
+  onOpenSettings: () => void
 }
 
 /** Window chrome — design §2. Native macOS traffic lights (hiddenInset
@@ -34,7 +36,8 @@ export function TitleBar({
   onToggleSource,
   chatOpen,
   chatUnread,
-  onToggleChat
+  onToggleChat,
+  onOpenSettings
 }: Props): JSX.Element {
   return (
     <div
@@ -123,9 +126,11 @@ export function TitleBar({
             )}
           </span>
         </Tooltip>
-        <IconButton label="Settings">
-          <Settings size={17} />
-        </IconButton>
+        <Tooltip label="Settings" hint="⌘," side="bottom">
+          <IconButton label="Settings" onClick={onOpenSettings}>
+            <Settings size={17} />
+          </IconButton>
+        </Tooltip>
       </div>
     </div>
   )
