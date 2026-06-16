@@ -83,3 +83,78 @@ wire accept as the first emitter.
 `src/renderer/features/workspace/Workspace.tsx`, `src/shared/ipc/review.ts`,
 `src/main/services/ReviewService.ts` (+ tests / e2e). Dispatched to a sibling;
 Miguel merges.
+
+---
+
+## M3-2 — Claude rail bubble slides in from the top of the pane
+
+**Symptom.** Clicking a block to open its Claude bubble, the expanded bubble
+first appears at the **top of the PDF pane** and animates downward to the block,
+instead of appearing at the block.
+
+**Root cause.** In `PaperPane`, the open bubble is **gated** on
+`anchorTops[t.id]` ([PaperPane.tsx:561](src/renderer/features/paper/PaperPane.tsx#L561))
+but **positioned** from a different state, `tops[t.id]` (the collision-stacked
+value, [PaperPane.tsx:569](src/renderer/features/paper/PaperPane.tsx#L569)
+`top: PAD + (tops[t.id] ?? 0)`). `tops` is filled by the stacking
+`useLayoutEffect` ([~PaperPane.tsx:283](src/renderer/features/paper/PaperPane.tsx#L283))
+which runs *after* the render where `openIds` first includes the task — so for
+one frame `tops[t.id]` is undefined → `?? 0` → the bubble mounts at the pane top,
+and `transition: top` ([:573](src/renderer/features/paper/PaperPane.tsx#L573))
+animates the correction down. Classic React enter-transition: a `top:0` baseline
+gets committed, then changes.
+
+**Fix.** Gate and position on the **same** resolved value: render the open
+bubble only when `tops[t.id] != null` (replace the `anchorTops[t.id] == null`
+guard at :561) and use `top: PAD + tops[t.id]` (drop the `?? 0`). It mounts
+directly at its final stacked top with no `top:0` baseline, so `transition: top`
+only animates *later* re-stacks (another bubble opening/closing), which is the
+intended behaviour.
+
+**Test.** Component: opening a task emits no bubble until `tops[t.id]` is set,
+then renders at `PAD + tops[t.id]` (never `top:0`). E2E live gate: open a bubble
+for a block low on the page; it appears at the block, no top-anchored start.
+
+**Lane.** `src/renderer/features/paper/PaperPane.tsx` (+ test / e2e). Same rail
+lane as M3-3 — one sibling takes both.
+
+---
+
+## M3-3 — Whole-document chat op has no distinct icon or meaningful location
+
+**Symptom.** When the chat targets the **whole document** (not a selected
+block), the op's badge has no document-level home and no distinct icon — it reads
+like any block edit.
+
+**Root cause (design).** A whole-doc task carries `blockIds: []`
+([taskStore.ts:174](src/renderer/features/tasks/taskStore.ts#L174)); in
+`cardAnchorTops` the unscoped branch anchors it to the **current `scrollTop`**
+([paperModel.ts:459](src/renderer/features/paper/paperModel.ts#L459)). So its
+badge floats at wherever the viewport happens to be — a meaningless, scroll-
+dependent position — and uses the same `PenLine` icon as a block edit. The smell
+is the `scrollTop` fallback: the anchor should reflect the op's **scope**, not a
+viewport accident.
+
+**Fix (Miguel's calls: pane-pinned, FileText).** Split the rail into two anchor
+regimes by scope. Block-scoped tasks stay page-anchored (unchanged). Whole-doc
+(`blockIds.length === 0`) tasks route to a **pane-pinned** marker:
+- A distinct badge fixed to the PDF pane's **top-right**, always visible
+  regardless of scroll (rendered in a pane-relative layer, not page-scroll
+  coords), using the **FileText** (document) icon; keep the phase-tone colour.
+- Its bubble opens anchored to that fixed marker (top-right, pinned — does not
+  scroll with the page). Stack multiple whole-doc bubbles downward in that corner.
+- **Delete the `scrollTop` branch** in `cardAnchorTops`; whole-doc tasks are no
+  longer page-anchored. This composes: future scope kinds (section, multi-block)
+  get scope-appropriate anchors, never a fallback.
+
+**Test.** `cardAnchorTops`: a `blockIds: []` task no longer returns `scrollTop`
+(excluded / null). Component: a whole-doc task renders the FileText pinned badge
+top-right (pane layer, not page-anchored); opening it shows the bubble pinned;
+a block task still renders page-anchored. E2E live gate: run a whole-doc op on
+`/tmp/stanza-demo`, assert a distinct doc icon pinned top-right that stays put
+while scrolling, and its bubble opens there.
+
+**Lane.** `src/renderer/features/paper/PaperPane.tsx`,
+`src/renderer/features/paper/paperModel.ts`,
+`src/renderer/features/tasks/taskStore.ts` (helper, optional) (+ tests / e2e).
+Bundled with M3-2 (same rail lane); Miguel merges.
