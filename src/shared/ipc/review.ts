@@ -11,4 +11,7 @@ export interface ReviewResolution {
   committed: boolean
   commitSubject?: string
   conflicts?: string[]   // files; set when accept-merge conflicted
+  /** Files written to the working tree by a committed accept (the merged
+   *  branch's diff) — the renderer reloads their stale editor buffers (M3-1). */
+  changedFiles?: string[]
 }

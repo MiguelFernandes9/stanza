@@ -77,6 +77,10 @@ export class ReviewService {
       return { committed: false }
     }
     const subject = await this.git.subject(branch)
+    // The branch's diff vs HEAD = exactly the files the merge will write to the
+    // working tree, captured before the merge so the renderer can reload their
+    // stale editor buffers (M3-1).
+    const changedFiles = changedFilesInDiff(await this.git.diffRange('HEAD', branch))
     const merge = await this.git.mergeNoFF(branch)
     if (!merge.ok) {
       // keep the branch: the user can retry after resolving manually
@@ -84,7 +88,7 @@ export class ReviewService {
     }
     await this.git.deleteBranch(branch)
     this.pendingSpans.delete(decision.opId)
-    return { committed: true, commitSubject: subject }
+    return { committed: true, commitSubject: subject, changedFiles }
   }
 
   /** Throws SPANS_LOCKED when any requested span overlaps a span owned
