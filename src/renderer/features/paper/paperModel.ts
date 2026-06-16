@@ -476,25 +476,22 @@ export async function blockGeometryRects(
 /** Geometry-anchored ideal top (px, within the page-stack wrap) for each
  *  task's rail card — derived from the block's topmost synctex box, not the
  *  DOM, so a card stays beside its block even when the block's page is
- *  virtualized out of the render window. An unscoped whole-doc task (no
- *  blockIds) anchors at the current viewport scrollTop. A *scoped* task whose
- *  box isn't resolved yet (no rect, or no page geometry — e.g. on open before
- *  the PDF/synctex lands) returns `top: null` so the caller can hide it rather
- *  than park it at the screen top (BUG-32); scrollTop is reserved for unscoped
- *  tasks only. Caller applies collision-stacking on top of these ideals
- *  (BUG-17). */
+ *  virtualized out of the render window. A task whose box isn't resolved yet
+ *  (no block, no rect, or no page geometry — e.g. on open before the
+ *  PDF/synctex lands) returns `top: null` so the caller hides it rather than
+ *  parking it at the screen top (BUG-32). Whole-doc tasks (no blockIds) fall
+ *  through to `null` too — they are NOT page-anchored; their marker is pinned to
+ *  the pane (M3-3), so scope drives the anchor, never a viewport accident.
+ *  Caller applies collision-stacking on top of these ideals (BUG-17). */
 export function cardAnchorTops(
   tasks: { id: number; blockIds: string[] }[],
   rects: Map<string, PdfRect[]>,
   geo: { height: number; gap: number } | null,
-  zoom: number,
-  scrollTop: number
+  zoom: number
 ): { id: number; top: number | null }[] {
   return tasks.map((t) => {
-    // Unscoped whole-doc task: anchor at the current viewport.
-    if (t.blockIds.length === 0) return { id: t.id, top: scrollTop }
-    // Scoped task: needs both a resolved box and page geometry to be placed.
-    const rect = rects.get(t.blockIds[0])?.[0]
+    const blockId = t.blockIds[0]
+    const rect = blockId ? rects.get(blockId)?.[0] : undefined
     if (!rect || !geo) return { id: t.id, top: null }
     return { id: t.id, top: (rect.page - 1) * (geo.height + geo.gap) + rect.y * zoom }
   })

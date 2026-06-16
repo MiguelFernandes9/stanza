@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { dismissRoute, initialTaskState, taskReducer } from './taskStore'
+import { dismissRoute, initialTaskState, isWholeDocTask, taskReducer } from './taskStore'
 import type { EditTask, TaskAction, TaskPhase, TaskState } from './taskStore'
 import type { ReviewProposal } from '../../../shared/ipc'
+
+describe('isWholeDocTask', () => {
+  it('is true for a task with no block ids (whole-document op)', () => {
+    expect(isWholeDocTask({ blockIds: [] })).toBe(true)
+  })
+
+  it('is false for a block-scoped task', () => {
+    expect(isWholeDocTask({ blockIds: ['b1'] })).toBe(false)
+  })
+})
 
 const run = (state: TaskState, ...actions: TaskAction[]): TaskState =>
   actions.reduce(taskReducer, state)

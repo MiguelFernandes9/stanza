@@ -10,8 +10,10 @@ import { PdfPageStack } from '../pdf/PdfPageStack'
 import type { PageGeometry } from '../pdf/PdfPageStack'
 import { ReviewOverlay } from '../review/ReviewOverlay'
 import { blockLabel, TaskCard, tagKind } from '../tasks/TaskCard'
+import { isWholeDocTask } from '../tasks/taskStore'
 import type { PaneView, TaskPhase, TaskState } from '../tasks/taskStore'
 import { BlockOverlay } from './BlockOverlay'
+import { WholeDocRail } from './WholeDocRail'
 import { FillerPage } from './FillerPage'
 import { PaperToolbar } from './PaperToolbar'
 import { binContentToBlocks, blockGeometryRects, cardAnchorTops, combinedSpanLabel, expandIds, isMathEnvName, isTightAbove, spanLabel, washBoxes } from './paperModel'
@@ -274,9 +276,10 @@ export function PaperPane(props: Props): JSX.Element {
   // Anchor every task to its first block's box (geometry, not the DOM, so a
   // card stays aligned even when its page is virtualized out — BUG-17), then
   // collision-stack only the OPEN bubbles (design: 14px min gap). Whole-doc
-  // tasks with no block fall back to the current scrollTop.
+  // tasks have no block box → null anchor → skipped here; they get a pane-pinned
+  // marker instead (M3-3).
   useLayoutEffect(() => {
-    const anchors = cardAnchorTops(state.tasks, blockRects, geo, zoom, scrollRef.current?.scrollTop ?? 0)
+    const anchors = cardAnchorTops(state.tasks, blockRects, geo, zoom)
     const anchorById: Record<number, number | null> = {}
     for (const a of anchors) anchorById[a.id] = a.top
     setAnchorTops((prev) => (JSON.stringify(prev) === JSON.stringify(anchorById) ? prev : anchorById))
@@ -412,7 +415,7 @@ export function PaperPane(props: Props): JSX.Element {
     phase === 'review' ? 'Proposal ready' : phase === 'busy' ? 'Editing…' : phase === 'noop' ? 'No changes' : 'Draft edit'
 
   return (
-    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: 'var(--surface-canvas)' }}>
+    <div style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: 'var(--surface-canvas)' }}>
       <PaperToolbar
         mainFile={mainFile}
         taskCount={state.tasks.length}
@@ -629,6 +632,25 @@ export function PaperPane(props: Props): JSX.Element {
           </div>
         )}
       </div>
+
+      {/* Whole-doc ops: a pane-pinned rail (top-right), always visible — distinct
+          from the page-anchored block rail above (M3-3). */}
+      <WholeDocRail
+        tasks={state.tasks.filter(isWholeDocTask)}
+        openIds={openIds}
+        adding={state.adding}
+        onToggle={toggleOpen}
+        onToggleAdding={props.onToggleAdding}
+        onActivate={props.onActivateTask}
+        onUpdate={props.onUpdateInstruction}
+        onSubmit={props.onSubmitTask}
+        onDismiss={(taskId) => {
+          props.onDismissTask(taskId)
+          setOpenIds((s) => s.filter((x) => x !== taskId))
+        }}
+        onResolve={props.onResolveTask}
+        onOpenReview={setReviewId}
+      />
 
       {(() => {
         const reviewTask = state.tasks.find((t) => t.id === reviewId && t.phase === 'review')
