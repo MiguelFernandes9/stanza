@@ -3,6 +3,7 @@ import type { BlockSpan, PdfRect } from '../../../shared/ipc'
 import type { TaskPhase } from '../tasks/taskStore'
 import type { TextRow } from './pdfTextRows'
 import type { GraphicBox } from './pdfGraphics'
+import { isMathEnvName } from '../../../shared/blocks/container'
 
 /** Selection state a task stamps on a block — drives the edge bar, the
  *  selection wash and the hover/lock pill on both the PDF overlay and the
@@ -201,24 +202,10 @@ export function washBoxes(
   return ids.flatMap((id) => (rects.get(id) ?? []).map((b) => padBoxClamped(b, pad, neighbors)))
 }
 
-const MATH_ENV_NAMES = new Set([
-  'equation',
-  'align',
-  'gather',
-  'multline',
-  'split',
-  'eqnarray',
-  'displaymath',
-  'alignat',
-  'flalign',
-])
-
-/** Is this a display-math environment name (starred variants included)? Drives
- *  pill placement (a centered formula box parks its pill in the left margin,
- *  BUG-35); the box itself comes from the text-row union like any text block. */
-export function isMathEnvName(name: string | undefined): boolean {
-  return name !== undefined && MATH_ENV_NAMES.has(name.replace(/\*$/, ''))
-}
+// isMathEnvName now lives in src/shared/blocks/container.ts (one home for the
+// math-env knowledge, shared by parse + geometry). Re-exported so existing
+// renderer imports (`from './paperModel'`) keep working.
+export { isMathEnvName }
 
 /** Vertical gap (pt) above which two stacked text baselines belong to separate
  *  clusters when inferring the body text area. A body line is ~13.5pt; running
