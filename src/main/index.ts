@@ -1,10 +1,21 @@
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, nativeImage, shell } from 'electron'
 import { join } from 'node:path'
 import { currentDocRoot, registerIpcHandlers } from './ipc-registry'
 import { buildAppMenu } from './menu'
 import { handleDocProtocol, registerDocScheme } from './protocol'
 
 registerDocScheme() // must precede app ready
+
+// Brand the app "Stanza" before anything reads app.name (the appMenu, the About
+// panel, notifications) and before the first userData lookup. Note: setName also
+// moves the default userData dir Electron→Stanza, so existing dev recents/ops
+// look reset once (one-time; the STANZA_USER_DATA test seam below is unaffected).
+app.setName('Stanza')
+
+/** Stanza icon master (PNG) — repo `build/` resolved from `out/main` at runtime.
+ *  Drives the dev Dock (mac) and the window icon (win/linux). Packaged builds
+ *  take their icon from electron-builder's .icns/.ico instead. */
+const ICON_PATH = join(import.meta.dirname, '../../build/icon.png')
 
 // Test seam (T6 E2E): an isolated userData dir keeps Playwright runs
 // out of the real per-project store. No effect outside tests.
@@ -19,6 +30,7 @@ function createWindow(): void {
     minWidth: 960,
     minHeight: 620,
     show: false,
+    icon: ICON_PATH, // win/linux; macOS ignores the window icon (Dock set below)
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#F4EFE6',
     webPreferences: {
@@ -52,6 +64,13 @@ function createWindow(): void {
 }
 
 void app.whenReady().then(() => {
+  app.setAboutPanelOptions({ applicationName: 'Stanza', applicationVersion: app.getVersion() })
+  // macOS ignores the per-window icon, so the Dock is the dev lever. Skip when
+  // the asset is absent (e.g. a packaged build) so the bundle icon isn't cleared.
+  if (process.platform === 'darwin') {
+    const icon = nativeImage.createFromPath(ICON_PATH)
+    if (!icon.isEmpty()) app.dock?.setIcon(icon)
+  }
   buildAppMenu() // frees ⌘R from the default reload accelerator
   registerIpcHandlers()
   handleDocProtocol(currentDocRoot)
