@@ -2037,3 +2037,61 @@ select; Select mode click → block selects + PDF scrolls; outline reads "Figure
 map) + `paperModel.ts` (Part B extraction). **Branch off main AFTER BUG-47 merges** —
 shares `Workspace.tsx` + `Sidebar.tsx` with it. Part A lands first (own commit),
 Part B after Miguel confirms the number source. Owner: a free outline/paper sibling.
+
+## BUG-49 — a block stays selected (wash + active ring) after switching to Read mode
+
+**Symptom.** Select a block in Select mode, switch the PaperPane toggle to Read — the
+block's wash/selection stays painted and active. Read mode should carry no live
+selection.
+
+**Root cause (state-side, not the view layer).** The `set-view` reducer case is a bare
+passthrough — `taskStore.ts:240-241`: `case 'set-view': return { ...s, view: a.view }`.
+It swaps only `view`, leaving the live compose draft + `activeTask` intact. The wash
+keeps rendering because `taskWashes` is built from `state.tasks` filtered ONLY by
+`phase !== 'noop'`, with **no view gate** (`PaperPane.tsx:139-146`) — unlike the
+hover affordances, which ARE view-gated (`PaperPane.tsx:134,322`). So a selection
+(a `compose` task created by `toggleBlock`, `taskStore.ts:86-126`) survives the
+switch. Single dispatcher: `Workspace.tsx:719` (the Read/Select toggle) — fixing the
+reducer covers every path.
+
+**Invariant / durable fix.** *Selection is a Select-mode concept; Read carries none.*
+In `set-view`, when entering `'read'`, drop the active compose draft via the existing
+`dropAbandonedDraft` (`taskStore.ts:74-84`, the established BUG-27 selection-lifecycle
+rule) and force `activeTask: null` (since `removeTask` may reassign it,
+`taskStore.ts:67-72`). Reuse the helper — don't special-case. (A typed-but-unsubmitted
+draft is kept as a task per `dropAbandonedDraft`'s policy; only the empty selection
+wash is torn down. If Miguel wants typed drafts cleared too, that's a one-line policy
+change — confirm.)
+
+**Test.** Unit: `set-view 'read'` after a compose selection drops the draft + nulls
+`activeTask`; a busy/review task is untouched; `set-view 'select'` is unchanged. Live
+(Miguel): select a block → toggle to Read → wash gone.
+
+**Lane.** `taskStore.ts` (`set-view` case) only — small, self-contained. Also the
+step-1 prerequisite for the read-mode free-selection feature
+(`docs/read-mode-free-selection.md`). Owner: a free sibling (or cavecrew-builder —
+1-file edit + test).
+
+## FEAT — read-mode free-text selection → right-click → AI bubble (design ready; AWAITING SCOPE)
+
+Miguel's idea: in Read mode, select arbitrary rendered text (later an image region),
+right-click, create an AI bubble for exactly that selection — bypassing parsed blocks.
+
+**Feasibility (grounded, 5-subsystem fan-out + adversarial pass): yes; the op/data
+half is a near-pure superset of the existing pipeline.** Full design, MVP path, risks
+in `docs/read-mode-free-selection.md`. Headlines:
+- **Reuses** the block-agnostic op channel (`spans: BlockSpan[]`, no blockId across
+  IPC; `submitWholeDoc` already submits `[]`), read-mode `synctexInverse` for source
+  mapping, and rect-driven bubble anchoring (`Selection.getClientRects()` gives the
+  rects free). ~zero main/IPC change.
+- **One new prerequisite blocks never needed:** there is NO selectable pdf.js text
+  layer (canvas-only render) — must render a `TextLayer` DOM. This gates everything.
+- **Tolerance work** (synctex is line-granular): ragged spans → pass Claude the
+  VERBATIM selected text; `outsideSpanFiles` + `assertSpansFree` assume whole-unit
+  spans and false-positive on sub-line / boundary edits.
+- **Images deferred** — no synctex anchoring over non-text; separate, larger project.
+
+**Decision for Miguel:** approve text-only MVP **alongside** blocks (images excluded
+from v1) → then dispatch a sibling on the spec, AFTER BUG-49. Lane: `pdf/` (text
+layer) + `PaperPane.tsx`/`PdfPageStack.tsx` (gesture) + `taskStore.ts` (task union) +
+`Workspace.tsx` (span derivation) + `reanchor.ts` (free-task remap).
