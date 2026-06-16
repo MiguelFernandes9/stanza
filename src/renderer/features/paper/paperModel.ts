@@ -3,6 +3,7 @@ import type { BlockSpan, PdfRect } from '../../../shared/ipc'
 import type { TaskPhase } from '../tasks/taskStore'
 import type { TextRow } from './pdfTextRows'
 import type { GraphicBox } from './pdfGraphics'
+import { isMathEnvName } from '../../../shared/blocks/container'
 
 /** Selection state a task stamps on a block — drives the edge bar, the
  *  selection wash and the hover/lock pill on both the PDF overlay and the
@@ -20,8 +21,16 @@ export interface PageBlock {
   name?: string
   envName?: string
   span: BlockSpan
-  /** Owning section id (a heading row points at its own section). */
+  /** Nearest-ancestor section id (a heading row points at its own section);
+   *  null above the first section. */
   sectionId: string | null
+  /** Immediate parent block id — a child equation's theorem, a caption's figure,
+   *  a paragraph's section. null at the document root. Drives nested geometry
+   *  (parent box = union of own ∪ children) and innermost-wins selection. */
+  parentId: string | null
+  /** Nesting depth (0 at the document root) so the binner can pick the deepest
+   *  containing region for a rendered row. */
+  depth: number
   /** First content line of an environment when leading invisible macros
    *  (\label/…) push it past span.startLine+1 — environmentInteriorSpan starts
    *  the geometry query here so the box doesn't merge upward (M2-7). */
@@ -30,14 +39,21 @@ export interface PageBlock {
 
 /** Flatten the whole block tree to one row per selectable unit, in reading
  *  order. Walks to any depth: every section (chapter, section, subsection…)
- *  becomes a heading row; every leaf (paragraph/environment) at any depth
- *  becomes its own row, tagged with its nearest-ancestor section. A heading
- *  row's geometry spans only its heading line — selection expands to the
- *  whole section via expandIds, so the box doesn't blanket nested content
+ *  becomes a heading row; every paragraph/environment at any depth becomes its
+ *  own row, tagged with its nearest-ancestor section, immediate parent, and
+ *  depth. A CONTAINER environment (theorem⊃equation, figure⊃caption) recurses
+ *  too, so each descendant is its own selectable row parented to the container.
+ *  A heading row's geometry spans only its heading line — selection expands to
+ *  the whole section via expandIds, so the box doesn't blanket nested content
  *  (BUG-5/9). */
 export function flattenBlocks(roots: BlockNode[]): PageBlock[] {
   const out: PageBlock[] = []
-  const walk = (nodes: BlockNode[], sectionId: string | null): void => {
+  const walk = (
+    nodes: BlockNode[],
+    sectionId: string | null,
+    parentId: string | null,
+    depth: number
+  ): void => {
     for (const node of nodes) {
       if (node.kind === 'preamble') continue
       if (node.kind === 'section') {
@@ -46,9 +62,11 @@ export function flattenBlocks(roots: BlockNode[]): PageBlock[] {
           kind: 'heading',
           name: node.name,
           span: { ...node.span, endLine: node.span.startLine },
-          sectionId: node.id
+          sectionId: node.id,
+          parentId,
+          depth
         })
-        walk(node.children, node.id)
+        walk(node.children, node.id, node.id, depth + 1)
       } else {
         out.push({
           id: node.id,
@@ -56,18 +74,24 @@ export function flattenBlocks(roots: BlockNode[]): PageBlock[] {
           envName: node.kind === 'environment' ? node.name : undefined,
           span: node.span,
           sectionId,
+          parentId,
+          depth,
           contentStartLine: node.contentStartLine
         })
+        // A container env's children each become their own row, parented here.
+        if (node.children.length) walk(node.children, sectionId, node.id, depth + 1)
       }
     }
   }
-  walk(roots, null)
+  walk(roots, null, null, 0)
   return out
 }
 
-/** Section id → the section plus its entire descendant subtree (so the
- *  selection wash covers nested subsections and their content); any other
- *  id → itself. taskSpans separately scopes the edit to the section span. */
+/** A block with children (a section OR a container env like theorem/figure) →
+ *  that block plus its entire descendant subtree, so the selection wash covers
+ *  nested content; a leaf → itself. This is what makes "select the parent →
+ *  cover all descendants, select a child → just the child" fall out for every
+ *  level. taskSpans separately scopes the edit. */
 export function expandIds(roots: BlockNode[], blockId: string): string[] {
   const subtree = (node: BlockNode): string[] => [
     node.id,
@@ -82,7 +106,22 @@ export function expandIds(roots: BlockNode[], blockId: string): string[] {
     return null
   }
   const node = find(roots)
-  return node && node.kind === 'section' ? subtree(node) : [blockId]
+  return node && node.children.length > 0 ? subtree(node) : [blockId]
+}
+
+/** The id of `blockId`'s immediate parent in the tree, or null when it is
+ *  top-level (or absent). Drives repeat-click escalation: clicking an
+ *  already-selected block re-selects its parent, then grandparent (decision 3). */
+export function parentOf(roots: BlockNode[], blockId: string): string | null {
+  const find = (nodes: BlockNode[], parent: string | null): { p: string | null } | null => {
+    for (const node of nodes) {
+      if (node.id === blockId) return { p: parent }
+      const hit = find(node.children, node.id)
+      if (hit) return hit
+    }
+    return null
+  }
+  return find(roots, null)?.p ?? null
 }
 
 /** Do two boxes overlap as rectangles? (Page-agnostic — callers gate on page.) */
@@ -201,24 +240,10 @@ export function washBoxes(
   return ids.flatMap((id) => (rects.get(id) ?? []).map((b) => padBoxClamped(b, pad, neighbors)))
 }
 
-const MATH_ENV_NAMES = new Set([
-  'equation',
-  'align',
-  'gather',
-  'multline',
-  'split',
-  'eqnarray',
-  'displaymath',
-  'alignat',
-  'flalign',
-])
-
-/** Is this a display-math environment name (starred variants included)? Drives
- *  pill placement (a centered formula box parks its pill in the left margin,
- *  BUG-35); the box itself comes from the text-row union like any text block. */
-export function isMathEnvName(name: string | undefined): boolean {
-  return name !== undefined && MATH_ENV_NAMES.has(name.replace(/\*$/, ''))
-}
+// isMathEnvName now lives in src/shared/blocks/container.ts (one home for the
+// math-env knowledge, shared by parse + geometry). Re-exported so existing
+// renderer imports (`from './paperModel'`) keep working.
+export { isMathEnvName }
 
 /** Vertical gap (pt) above which two stacked text baselines belong to separate
  *  clusters when inferring the body text area. A body line is ~13.5pt; running
@@ -293,41 +318,85 @@ export interface BinnedContent {
   contentTopByPage: Map<number, number>
 }
 
-/** Build EVERY block's box as the union of everything it RENDERED — glyph rows
- *  AND graphic/image bboxes — within the region synctex locates it to. One rule
- *  for paragraphs, headings, math, lists, and figures/tables: synctex only says
- *  WHERE the block landed (page, x-band, top); the box extent comes from the
- *  rendered content. Replaces `mathBoxesByPage` (Tier 1), `blockBoxesByPage` +
- *  the reclaim pass (2a), and the figure crux (2b).
+/** Per-block structural metadata the binner needs to NEST boxes. A missing entry
+ *  defaults to a top-level, non-float, non-section block — which makes the binner
+ *  degenerate to the flat one-region-per-block partition (back-compat). */
+export interface BlockMeta {
+  parentId: string | null
+  isFloat: boolean
+  isSection: boolean
+}
+
+/** Build every block's box from what it RENDERED (glyph rows + graphic bboxes),
+ *  now NESTED. synctex only says WHERE a block landed; the extent comes from the
+ *  rendered content. Two passes:
  *
- *  Per page: each block's solid synctex rects, filtered to the content band,
- *  union to a region `{top, x-band}`. Regions sort by `top` and each takes a
- *  ceiling at the NEXT region's top (page bottom for the last) — so a block's
- *  box runs down to the next block and includes the wrapped last line synctex
- *  drops, with no reclaim pass. Each rendered item joins the region whose
- *  `[top-ε, ceiling)` holds its partition y — a row's BASELINE (synctex `v`
- *  basis, never the font-inflated `yTop` — a yTop ceiling leaks the next block's
- *  first row in, BUG-41), a graphic's TOP (where the float is anchored) — and
- *  whose x-band it overlaps; the box is the union of that region's items. A
- *  `figure`'s box thus covers `caption rows ∪ image bbox`, not the caption alone
- *  (the plot.pdf Form XObject has no text rows).
+ *  1. PARTITION (per page): rows/graphics bind to the DEEPEST containing block.
+ *     Each block's solid synctex rects union to a region `{top, x-band}`; regions
+ *     form a forest by `parentId`. An item joins the region whose `[top-ε,
+ *     sibling-ceiling) × x-band` holds its partition key — a row's BASELINE
+ *     (never the font-inflated `yTop`, BUG-41), a graphic's TOP — descending to
+ *     the deepest child that still contains it (innermost wins). The sibling
+ *     ceiling (next sibling's top, the parent's ceiling for the last) still
+ *     captures the wrapped last line synctex drops, now scoped per parent.
+ *     FLOAT regions are EXCLUDED from the partition: a float's interior synctex
+ *     (a \centering/\begin line) maps onto its galley origin, which can sit on a
+ *     different page and steal a sibling's prose — so a float owns no rows.
  *
- *  The content band first drops non-content rows (running head / folio / footer)
- *  and header-margin stray rects (a phantom \ref fragment that else binds the
- *  running head — BUG-30), so no furniture lands in a block and the bottom
- *  block's page-bottom ceiling can't swallow a footer folio (M2-6). Graphics are
- *  never furniture (folios/heads are text), so they bin by region alone. A page
- *  with rects but no rendered content falls back to the coarse synctex union
- *  (text layer unavailable) so a box is never lost. Pure; inputs untouched. */
+ *  2. COMPOSE (bottom-up): a block's box per page = its own items (skipped for a
+ *     FLOAT) unioned with its children's boxes (skipped for a SECTION). So an env
+ *     container encloses its descendants, a FLOAT = exactly its children (no
+ *     source-site phantom — the page-4 region of a page-5 figure simply has no
+ *     children there and yields no box), a SECTION = its heading line only
+ *     (selection expands via expandIds), and a leaf = its own rows. A block that
+ *     binds nothing AND has no child boxes yields no box (BUG-30, generalised).
+ *
+ *  The content band drops furniture (running head / folio) and header-margin
+ *  stray rects before binning (BUG-30, M2-6). A page with rects but no rendered
+ *  content falls back to the coarse synctex union so a box is never lost. Pure;
+ *  inputs untouched. */
 export function binContentToBlocks(
   rectsById: Map<string, PdfRect[]>,
   rowsByPage: Map<number, TextRow[]>,
   graphicsByPage: Map<number, GraphicBox[]> = new Map(),
-  envNames: Map<string, string> = new Map()
+  envNames: Map<string, string> = new Map(),
+  meta: Map<string, BlockMeta> = new Map()
 ): BinnedContent {
+  const metaOf = (id: string): BlockMeta =>
+    meta.get(id) ?? { parentId: null, isFloat: false, isSection: false }
+
   const band = contentBand(rowsByPage)
   const inBand = (yTop: number, yBottom: number): boolean =>
     !band || (yBottom >= band.top - BAND_EPS && yTop <= band.bottom + BAND_EPS)
+
+  // A float's RENDER page = where the bulk of its own synctex rects land (the
+  // page LaTeX placed it on); its thin source-site rect on the origin page is the
+  // minority. A float DESCENDANT (graphic / caption) ALSO leaves a source-site
+  // rect on the origin page (its \begin line maps to the galley) — anchor every
+  // descendant to the float's render page and drop its origin-page region, so it
+  // can only own rows where the float really is and never steals the origin
+  // page's prose (live-gate fix; float exclusion alone is one level too shallow).
+  const floatRenderPage = new Map<string, number>()
+  for (const [id, rects] of rectsById) {
+    if (!metaOf(id).isFloat) continue
+    const heightByPage = new Map<number, number>()
+    for (const r of rects) {
+      if (r.width <= 0 || r.height <= 0) continue
+      heightByPage.set(r.page, (heightByPage.get(r.page) ?? 0) + r.height)
+    }
+    let best: number | undefined
+    let bestH = -1
+    for (const [p, h] of heightByPage) if (h > bestH) { bestH = h; best = p }
+    if (best !== undefined) floatRenderPage.set(id, best)
+  }
+  const floatPageFor = (id: string): number | null => {
+    let pid = metaOf(id).parentId
+    while (pid) {
+      if (metaOf(pid).isFloat) return floatRenderPage.get(pid) ?? null
+      pid = metaOf(pid).parentId
+    }
+    return null
+  }
 
   interface Region {
     id: string
@@ -338,6 +407,7 @@ export function binContentToBlocks(
   }
   const regionsByPage = new Map<number, Region[]>()
   for (const [id, rects] of rectsById) {
+    const floatPage = floatPageFor(id)
     const byPage = new Map<number, PdfRect[]>()
     for (const r of rects) {
       if (r.width <= 0 || r.height <= 0) continue
@@ -347,6 +417,9 @@ export function binContentToBlocks(
       else byPage.set(r.page, [r])
     }
     for (const [page, rs] of byPage) {
+      // A float descendant lives only on the float's render page; drop its
+      // origin-page source-site rect (it would otherwise steal that page's prose).
+      if (floatPage !== null && page !== floatPage) continue
       const region: Region = {
         id,
         top: Math.min(...rs.map((r) => r.y)),
@@ -360,15 +433,31 @@ export function binContentToBlocks(
     }
   }
 
-  const boxesById = new Map<string, PdfRect[]>()
-  const pushBox = (id: string, box: PdfRect): void => {
-    const arr = boxesById.get(id)
-    if (arr) arr.push(box)
-    else boxesById.set(id, [box])
+  interface Item {
+    key: number
+    xLeft: number
+    xRight: number
+    yTop: number
+    yBottom: number
+  }
+  // Own rendered items per (id, page): what the block itself painted, before its
+  // children's boxes are composed in.
+  const ownItems = new Map<string, Map<number, Item[]>>()
+  const addOwn = (id: string, page: number, item: Item): void => {
+    let pm = ownItems.get(id)
+    if (!pm) {
+      pm = new Map()
+      ownItems.set(id, pm)
+    }
+    const arr = pm.get(page)
+    if (arr) arr.push(item)
+    else pm.set(page, [item])
   }
 
   for (const [page, regions] of regionsByPage) {
     const rows = (rowsByPage.get(page) ?? []).filter((r) => inBand(r.baseline, r.baseline))
+    const graphics = graphicsByPage.get(page) ?? []
+
     // M2-9: snap each math env region's top to its rendered ink BEFORE ordering,
     // so a display equation whose synctex top sits ~a line off the glyphs can't
     // steal the partition boundary from the paragraph above (orphaning its last
@@ -386,50 +475,119 @@ export function binContentToBlocks(
       }
       if (inkTop !== Infinity) reg.top = inkTop
     }
-    regions.sort((a, b) => a.top - b.top)
-    const graphics = graphicsByPage.get(page) ?? []
+
     if (!rows.length && !graphics.length) {
-      // No rendered content measured for this page → coarse synctex union, never lost.
+      // No rendered content measured for this page → coarse synctex union as each
+      // region's own item; composition (float → children, etc.) still applies.
       for (const reg of regions)
-        pushBox(reg.id, { page, x: reg.xLeft, y: reg.top, width: reg.xRight - reg.xLeft, height: reg.bottom - reg.top })
+        addOwn(reg.id, page, { key: reg.top, xLeft: reg.xLeft, xRight: reg.xRight, yTop: reg.top, yBottom: reg.bottom })
       continue
     }
-    // One renderable item = an x-extent at a partition y; rows partition on the
-    // baseline (BUG-41), graphics on their top (the float anchor).
-    interface Item {
-      key: number
-      xLeft: number
-      xRight: number
-      yTop: number
-      yBottom: number
-    }
-    const itemsByRegion = new Map<number, Item[]>()
-    const bin = (item: Item): void => {
-      for (let i = 0; i < regions.length; i++) {
-        const reg = regions[i]!
-        const ceiling = i + 1 < regions.length ? regions[i + 1]!.top : Infinity
-        if (item.key >= reg.top - BAND_EPS && item.key < ceiling && item.xRight > reg.xLeft && item.xLeft < reg.xRight) {
-          const arr = itemsByRegion.get(i)
-          if (arr) arr.push(item)
-          else itemsByRegion.set(i, [item])
+
+    // Floats own no rows (their source-site region would steal a sibling's prose,
+    // possibly on another page). Exclude them; their box is composed from children.
+    const partRegions = regions.filter((reg) => !metaOf(reg.id).isFloat)
+    const regionById = new Map(partRegions.map((reg) => [reg.id, reg] as const))
+    // Forest parent = nearest ancestor that is a non-float region present on this
+    // page (skip floats and absent ancestors); else top-level.
+    const forestChildren = new Map<string, Region[]>()
+    const topLevel: Region[] = []
+    for (const reg of partRegions) {
+      let pid = metaOf(reg.id).parentId
+      let parent: Region | undefined
+      while (pid) {
+        const cand = regionById.get(pid)
+        if (cand && !metaOf(pid).isFloat) {
+          parent = cand
           break
         }
+        pid = metaOf(pid).parentId
       }
+      if (parent) {
+        const arr = forestChildren.get(parent.id)
+        if (arr) arr.push(reg)
+        else forestChildren.set(parent.id, [reg])
+      } else topLevel.push(reg)
     }
-    for (const r of rows) bin({ key: r.baseline, xLeft: r.xLeft, xRight: r.xRight, yTop: r.yTop, yBottom: r.yBottom })
-    for (const g of graphics) bin({ key: g.yTop, xLeft: g.xLeft, xRight: g.xRight, yTop: g.yTop, yBottom: g.yBottom })
-    regions.forEach((reg, i) => {
-      const its = itemsByRegion.get(i)
-      if (!its) return // a phantom region bins nothing → no box (BUG-30)
-      const x = Math.min(...its.map((t) => t.xLeft))
-      const right = Math.max(...its.map((t) => t.xRight))
-      const top = Math.min(...its.map((t) => t.yTop))
-      const bottom = Math.max(...its.map((t) => t.yBottom))
-      pushBox(reg.id, { page, x, y: top, width: right - x, height: bottom - top })
-    })
+    const byTop = (a: Region, b: Region): number => a.top - b.top
+    topLevel.sort(byTop)
+    for (const arr of forestChildren.values()) arr.sort(byTop)
+
+    // Assign an item to the DEEPEST region whose [top-ε, sibling-ceiling) × x-band
+    // contains its partition key: siblings give the ceiling (the dropped last line
+    // lands in its own block), children win over parents (innermost).
+    const descend = (item: Item, siblings: Region[], parentCeiling: number): Region | null => {
+      for (let i = 0; i < siblings.length; i++) {
+        const reg = siblings[i]!
+        const ceiling = i + 1 < siblings.length ? siblings[i + 1]!.top : parentCeiling
+        if (item.key >= reg.top - BAND_EPS && item.key < ceiling && item.xRight > reg.xLeft && item.xLeft < reg.xRight) {
+          const deeper = descend(item, forestChildren.get(reg.id) ?? [], ceiling)
+          return deeper ?? reg
+        }
+      }
+      return null
+    }
+    const assign = (item: Item): void => {
+      const owner = descend(item, topLevel, Infinity)
+      if (owner) addOwn(owner.id, page, item)
+    }
+    for (const r of rows) assign({ key: r.baseline, xLeft: r.xLeft, xRight: r.xRight, yTop: r.yTop, yBottom: r.yBottom })
+    for (const g of graphics) assign({ key: g.yTop, xLeft: g.xLeft, xRight: g.xRight, yTop: g.yTop, yBottom: g.yBottom })
   }
 
-  for (const boxes of boxesById.values()) boxes.sort((a, b) => a.page - b.page)
+  // Compose final boxes bottom-up: box(page) = own items (skip if float) ∪ child
+  // boxes (skip if section). Env container → encloses descendants; float → exactly
+  // its children; section → heading line only; leaf → own rows. Memoised.
+  const childrenOf = new Map<string, string[]>()
+  for (const id of rectsById.keys()) {
+    const pid = metaOf(id).parentId
+    if (pid) {
+      const arr = childrenOf.get(pid)
+      if (arr) arr.push(id)
+      else childrenOf.set(pid, [id])
+    }
+  }
+  interface Acc {
+    x: number
+    y: number
+    right: number
+    bottom: number
+  }
+  const grow = (acc: Map<number, Acc>, page: number, x: number, y: number, right: number, bottom: number): void => {
+    const cur = acc.get(page)
+    if (!cur) acc.set(page, { x, y, right, bottom })
+    else {
+      cur.x = Math.min(cur.x, x)
+      cur.y = Math.min(cur.y, y)
+      cur.right = Math.max(cur.right, right)
+      cur.bottom = Math.max(cur.bottom, bottom)
+    }
+  }
+  const boxCache = new Map<string, Map<number, PdfRect>>()
+  const boxesFor = (id: string): Map<number, PdfRect> => {
+    const cached = boxCache.get(id)
+    if (cached) return cached
+    const m = metaOf(id)
+    const acc = new Map<number, Acc>()
+    if (!m.isFloat) {
+      const pm = ownItems.get(id)
+      if (pm) for (const [page, items] of pm) for (const it of items) grow(acc, page, it.xLeft, it.yTop, it.xRight, it.yBottom)
+    }
+    if (!m.isSection) {
+      for (const child of childrenOf.get(id) ?? [])
+        for (const [page, b] of boxesFor(child)) grow(acc, page, b.x, b.y, b.x + b.width, b.y + b.height)
+    }
+    const out = new Map<number, PdfRect>()
+    for (const [page, b] of acc) out.set(page, { page, x: b.x, y: b.y, width: b.right - b.x, height: b.bottom - b.y })
+    boxCache.set(id, out)
+    return out
+  }
+
+  const boxesById = new Map<string, PdfRect[]>()
+  for (const id of rectsById.keys()) {
+    const perPage = boxesFor(id)
+    if (perPage.size) boxesById.set(id, [...perPage.values()].sort((a, b) => a.page - b.page))
+  }
 
   const contentTopByPage = new Map<number, number>()
   for (const boxes of boxesById.values())
@@ -547,20 +705,33 @@ export function combinedSpanLabel(spans: BlockSpan[]): string {
     .join(', ')
 }
 
-/** Spans for claude:run. A fully-selected section contributes its own span;
- *  its children are then covered and dropped. */
+/** Spans for claude:run. A fully-selected section contributes its own span; its
+ *  children are then covered and dropped. A LONE child of a container environment
+ *  (an equation/caption/item whose enclosing env is NOT itself selected) widens
+ *  to that env's `\begin..\end` span, so the edit Claude receives stays valid
+ *  LaTeX and carries the surrounding context (decision 2). Section children do not
+ *  widen — a paragraph under a section edits as itself. Deduped by source block. */
 export function taskSpans(blockIds: string[], roots: BlockNode[]): BlockSpan[] {
   const ids = new Set(blockIds)
   const spans: BlockSpan[] = []
-  const walk = (nodes: BlockNode[]): void => {
+  const pushed = new Set<string>()
+  const push = (id: string, span: BlockSpan): void => {
+    if (pushed.has(id)) return
+    pushed.add(id)
+    spans.push(span)
+  }
+  const walk = (nodes: BlockNode[], parent: BlockNode | null): void => {
     for (const node of nodes) {
       if (ids.has(node.id)) {
-        spans.push(node.span)
+        // Widen a lone container-env child to its wrapper; the env parent is never
+        // in `ids` here (a selected env stops the walk before reaching its child).
+        if (parent && parent.kind === 'environment' && !ids.has(parent.id)) push(parent.id, parent.span)
+        else push(node.id, node.span)
         continue // children are covered by this span
       }
-      walk(node.children)
+      walk(node.children, node)
     }
   }
-  walk(roots)
+  walk(roots, null)
   return spans
 }

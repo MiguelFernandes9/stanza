@@ -13,6 +13,7 @@ import {
   isMathEnvName,
   isTightAbove,
   padBoxClamped,
+  parentOf,
   PILL_MARGIN_GAP,
   pillPlacement,
   selectionBounds,
@@ -20,7 +21,7 @@ import {
   taskSpans,
   washBoxes
 } from './paperModel'
-import type { PageBlock } from './paperModel'
+import type { BlockMeta, PageBlock } from './paperModel'
 import type { TextRow } from './pdfTextRows'
 import type { GraphicBox } from './pdfGraphics'
 
@@ -51,6 +52,28 @@ const tree: BlockNode[] = [
   }
 ]
 
+// A container env (theorem) with its own children — the nested-block shape.
+const nestedTree: BlockNode[] = [
+  {
+    id: 'sec#x',
+    kind: 'section',
+    name: 'S',
+    span: span(1, 20),
+    children: [
+      {
+        id: 'thm#y',
+        kind: 'environment',
+        name: 'theorem',
+        span: span(2, 8),
+        children: [
+          { id: 'par#z', kind: 'paragraph', span: span(3, 3), children: [] },
+          { id: 'eq#w', kind: 'environment', name: 'equation', span: span(4, 6), children: [] }
+        ]
+      }
+    ]
+  }
+]
+
 describe('flattenBlocks', () => {
   it('skips the preamble and emits heading + children per section', () => {
     const flat = flattenBlocks(tree)
@@ -59,11 +82,40 @@ describe('flattenBlocks', () => {
     expect(flat[1]).toMatchObject({ kind: 'paragraph', sectionId: 'sec1#a' })
     expect(flat[2]).toMatchObject({ kind: 'environment', envName: 'equation' })
   })
+
+  it('recurses container envs: child rows carry parentId + depth', () => {
+    const flat = flattenBlocks(nestedTree)
+    expect(flat.map((b) => b.id)).toEqual(['sec#x', 'thm#y', 'par#z', 'eq#w'])
+    expect(flat.find((b) => b.id === 'thm#y')).toMatchObject({
+      kind: 'environment',
+      envName: 'theorem',
+      parentId: 'sec#x',
+      depth: 1,
+      sectionId: 'sec#x'
+    })
+    expect(flat.find((b) => b.id === 'par#z')).toMatchObject({ parentId: 'thm#y', depth: 2 })
+    expect(flat.find((b) => b.id === 'eq#w')).toMatchObject({
+      parentId: 'thm#y',
+      depth: 2,
+      sectionId: 'sec#x'
+    })
+  })
+
+  it('tags a top-level section row with depth 0 and null parent', () => {
+    const flat = flattenBlocks(nestedTree)
+    expect(flat[0]).toMatchObject({ id: 'sec#x', depth: 0, parentId: null })
+  })
 })
 
 describe('expandIds', () => {
   it('expands a section heading to the whole section', () => {
     expect(expandIds(tree, 'sec1#a')).toEqual(['sec1#a', 'p1#b', 'eq1#c'])
+  })
+  it('expands a container env to its subtree', () => {
+    expect(expandIds(nestedTree, 'thm#y')).toEqual(['thm#y', 'par#z', 'eq#w'])
+  })
+  it('expands a leaf child to itself', () => {
+    expect(expandIds(nestedTree, 'eq#w')).toEqual(['eq#w'])
   })
   it('returns a leaf id as-is', () => {
     expect(expandIds(tree, 'p1#b')).toEqual(['p1#b'])
@@ -96,6 +148,34 @@ describe('taskSpans', () => {
   it('lists leaf spans for an ad-hoc selection', () => {
     const spans = taskSpans(['p1#b', 'p2#e'], tree)
     expect(spans).toEqual([span(14, 20), span(44, 52)])
+  })
+
+  it('widens a lone container-env child to its enclosing wrapper (decision 2)', () => {
+    // a theorem (4-9) ⊃ equation (6-8): selecting only the equation edits the
+    // whole theorem span so the snippet keeps its \begin{theorem}..\end{theorem}.
+    const t: BlockNode[] = [
+      {
+        id: 'sec',
+        kind: 'section',
+        name: 'S',
+        span: span(1, 10),
+        children: [
+          {
+            id: 'thm',
+            kind: 'environment',
+            name: 'theorem',
+            span: span(4, 9),
+            children: [{ id: 'eq', kind: 'environment', name: 'equation', span: span(6, 8), children: [] }]
+          }
+        ]
+      }
+    ]
+    expect(taskSpans(['eq'], t)).toEqual([span(4, 9)]) // lone equation → theorem wrapper
+    expect(taskSpans(['thm', 'eq'], t)).toEqual([span(4, 9)]) // whole theorem selected → its span
+  })
+
+  it('does NOT widen a section child — a paragraph edits as itself', () => {
+    expect(taskSpans(['p1#b'], tree)).toEqual([span(14, 20)])
   })
 })
 
@@ -175,6 +255,22 @@ describe('expandIds — full subtree (BUG-8)', () => {
   })
   it('a leaf stays itself', () => {
     expect(expandIds(deep, 'eq1')).toEqual(['eq1'])
+  })
+})
+
+describe('parentOf — repeat-click escalation (nested-block model)', () => {
+  it('returns the immediate parent id of a nested block', () => {
+    expect(parentOf(deep, 'eq1')).toBe('sec-mot') // equation → its subsection
+    expect(parentOf(deep, 'p-mot')).toBe('sec-mot')
+    expect(parentOf(deep, 'sec-mot')).toBe('ch1') // subsection → chapter
+  })
+  it('returns null for a top-level block or an absent id', () => {
+    expect(parentOf(deep, 'ch1')).toBeNull()
+    expect(parentOf(deep, 'nope')).toBeNull()
+  })
+  it('finds the env parent of a child block', () => {
+    expect(parentOf(nestedTree, 'eq#w')).toBe('thm#y') // equation → theorem
+    expect(parentOf(nestedTree, 'thm#y')).toBe('sec#x')
   })
 })
 
@@ -451,6 +547,92 @@ describe('binContentToBlocks — one row-union builder for every text block', ()
     const graphics = new Map<number, GraphicBox[]>([[1, [{ yTop: 40, yBottom: 80, xLeft: 90, xRight: 390 }]]])
     const { boxesById } = binContentToBlocks(rects, rows, graphics)
     expect(boxesById.get('p#1')![0]!.y).toBeGreaterThan(90) // box from rows (~97), graphic at y40 excluded
+  })
+})
+
+describe('binContentToBlocks — nested boxes + float rule (nested-block model)', () => {
+  it('a container env box ENCLOSES its child equation; the equation box is the subset', () => {
+    // theorem (prose 110/123 wide) ⊃ equation (row 145, centered x 200–410).
+    const rects = new Map<string, PdfRect[]>([
+      ['thm#1', [prect(1, 90, 99, 432, 50)]], // theorem interior region 99–149
+      ['eq#1', [prect(1, 200, 134, 210, 12)]] // equation child region 134–146
+    ])
+    const rows = [
+      trow(99, 110, 90, 522), // theorem prose
+      trow(112, 123, 90, 522), // theorem prose
+      trow(134, 145, 200, 410) // the equation
+    ]
+    const meta = new Map<string, BlockMeta>([
+      ['thm#1', { parentId: null, isFloat: false, isSection: false }],
+      ['eq#1', { parentId: 'thm#1', isFloat: false, isSection: false }]
+    ])
+    const { boxesById } = binContentToBlocks(rects, new Map([[1, rows]]), new Map(), new Map(), meta)
+    const thm = boxesById.get('thm#1')![0]!
+    const eq = boxesById.get('eq#1')![0]!
+    // equation box is the centered subset
+    expect(eq.x).toBeCloseTo(200, 1)
+    expect(eq.x + eq.width).toBeCloseTo(410, 1)
+    // theorem encloses the equation AND its own prose (top at prose, full width)
+    expect(thm.y).toBeLessThanOrEqual(eq.y)
+    expect(boxBottom(thm)).toBeGreaterThanOrEqual(boxBottom(eq))
+    expect(thm.x).toBeLessThanOrEqual(eq.x)
+    expect(thm.x + thm.width).toBeGreaterThanOrEqual(eq.x + eq.width)
+    expect(thm.y).toBeCloseTo(99, 1) // includes the prose above the equation
+  })
+
+  it('a page-breaking float gets ONE box (its children) and steals no sibling prose (FIG2)', () => {
+    // figure floats: source-site region on page 1 (over the sibling paragraph),
+    // real content (tikz + caption) on page 2. The float owns no rows, so the
+    // page-1 phantom never forms and the paragraph keeps its prose.
+    const rects = new Map<string, PdfRect[]>([
+      ['fig#1', [prect(1, 150, 600, 300, 24), prect(2, 150, 73, 330, 183)]], // source p1 + content p2
+      // the tikz child ALSO leaves a thin source-site rect on p1 (its \begin maps
+      // to the galley) — the real bug the live gate caught; the fix must drop it.
+      ['tikz#1', [prect(1, 90, 612, 432, 11), prect(2, 159, 79, 330, 125)]], // source p1 + content p2 (79–204)
+      ['cap#1', [prect(2, 159, 245, 330, 11)]], // caption child p2 (245–256)
+      ['para#1', [prect(1, 90, 600, 432, 24)]] // sibling prose on p1
+    ])
+    const rowsByPage = new Map<number, TextRow[]>([
+      [1, [trow(601, 612, 90, 522), trow(611, 622, 90, 522)]], // the sibling paragraph
+      [2, [trow(79, 90, 159, 489), trow(190, 201, 159, 489), trow(245, 254, 200, 400)]] // tikz + caption
+    ])
+    const meta = new Map<string, BlockMeta>([
+      ['fig#1', { parentId: null, isFloat: true, isSection: false }],
+      ['tikz#1', { parentId: 'fig#1', isFloat: false, isSection: false }],
+      ['cap#1', { parentId: 'fig#1', isFloat: false, isSection: false }],
+      ['para#1', { parentId: null, isFloat: false, isSection: false }]
+    ])
+    const { boxesById } = binContentToBlocks(rects, rowsByPage, new Map(), new Map(), meta)
+    const figBoxes = boxesById.get('fig#1')!
+    expect(figBoxes).toHaveLength(1) // no phantom page-1 box
+    expect(figBoxes[0]!.page).toBe(2)
+    expect(figBoxes[0]!.y).toBeCloseTo(79, 1) // graphic top
+    expect(boxBottom(figBoxes[0]!)).toBeCloseTo(254, 1) // caption bottom
+    // the sibling paragraph keeps its two prose rows on page 1 (not stolen)
+    const para = boxesById.get('para#1')!
+    expect(para).toHaveLength(1)
+    expect(para[0]!.page).toBe(1)
+    expect(boxBottom(para[0]!)).toBeCloseTo(622, 1)
+  })
+
+  it('a section box stays its heading line only; it does NOT enclose its children', () => {
+    const rects = new Map<string, PdfRect[]>([
+      ['sec#1', [prect(1, 90, 100, 300, 12)]], // heading line region
+      ['par#1', [prect(1, 90, 120, 300, 40)]] // a paragraph under the section
+    ])
+    const rows = [
+      trow(100, 110, 90, 300), // heading
+      trow(120, 131, 90, 522), // prose
+      trow(133, 144, 90, 522) // prose
+    ]
+    const meta = new Map<string, BlockMeta>([
+      ['sec#1', { parentId: null, isFloat: false, isSection: true }],
+      ['par#1', { parentId: 'sec#1', isFloat: false, isSection: false }]
+    ])
+    const { boxesById } = binContentToBlocks(rects, new Map([[1, rows]]), new Map(), new Map(), meta)
+    const sec = boxesById.get('sec#1')![0]!
+    expect(boxBottom(sec)).toBeCloseTo(110, 1) // heading row only — NOT down to the prose at 144
+    expect(boxBottom(boxesById.get('par#1')![0]!)).toBeCloseTo(144, 1)
   })
 })
 

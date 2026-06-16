@@ -43,6 +43,27 @@ describe('buildOutline', () => {
     expect(out[0]!.label).toBe('Introduction')
     expect(out[0]!.children[0]!.label).toBe('figure')
   })
+
+  it('keeps a named env a LEAF — its interior blocks are not surfaced (shallow)', () => {
+    const nested: BlockNode[] = [
+      node({
+        id: 'sec',
+        kind: 'section',
+        name: 'S',
+        children: [
+          node({
+            id: 'thm',
+            kind: 'environment',
+            name: 'theorem',
+            children: [node({ id: 'eq', kind: 'environment', name: 'equation' })]
+          })
+        ]
+      })
+    ]
+    const out = buildOutline(nested)
+    expect(out[0]!.children.map((n) => n.id)).toEqual(['thm']) // theorem kept
+    expect(out[0]!.children[0]!.children).toEqual([]) // equation NOT surfaced in the outline
+  })
 })
 
 describe('outlineLabel', () => {

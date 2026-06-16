@@ -34,7 +34,7 @@ import {
 import { PaperPane } from '../paper/PaperPane'
 import { HistoryDiffOverlay } from '../review/HistoryDiffOverlay'
 import type { PdfFlash } from '../paper/PaperPane'
-import { expandIds, flattenBlocks, spanLabel, taskSpans } from '../paper/paperModel'
+import { expandIds, flattenBlocks, parentOf, spanLabel, taskSpans } from '../paper/paperModel'
 import { resolveToKnownFile } from '@renderer/lib/paths'
 import { blockLabel, tagKind } from '../tasks/TaskCard'
 import { dismissRoute, initialTaskState, taskReducer } from '../tasks/taskStore'
@@ -733,9 +733,29 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           revealBlock={revealSignal}
           onForwardSearch={forwardSearch}
           onNumbers={setOutlineNumbers}
-          onToggleBlock={(id, additive) =>
-            dispatch({ type: 'toggle-block', ids: expandIds(blocks, id), additive })
-          }
+          onToggleBlock={(id, additive) => {
+            const subtree = expandIds(blocks, id)
+            // Repeat-click escalation: a plain click on the block that is ALREADY
+            // the sole compose selection re-selects its parent (then grandparent),
+            // instead of just deselecting — so a child can reach its container
+            // (decision 3). Implemented as deselect-then-select-parent, two
+            // dispatches the reducer applies in order; a top-level block (no
+            // parent) falls through to the normal toggle (deselect).
+            if (!additive) {
+              const active = state.tasks.find((t) => t.id === state.activeTask)
+              const isSole =
+                active?.phase === 'compose' &&
+                active.blockIds.length === subtree.length &&
+                subtree.every((x) => active.blockIds.includes(x))
+              const parent = isSole ? parentOf(blocks, id) : null
+              if (parent) {
+                dispatch({ type: 'toggle-block', ids: subtree, additive: false })
+                dispatch({ type: 'toggle-block', ids: expandIds(blocks, parent), additive: false })
+                return
+              }
+            }
+            dispatch({ type: 'toggle-block', ids: subtree, additive })
+          }}
           onActivateTask={(taskId) => dispatch({ type: 'activate', taskId })}
           onToggleAdding={() => dispatch({ type: 'set-adding', adding: !state.adding })}
           onRemoveBlock={(taskId, blockId) => dispatch({ type: 'remove-block', taskId, blockId })}
