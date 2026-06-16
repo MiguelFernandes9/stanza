@@ -7,6 +7,7 @@ import {
   pdfScrollTop,
   phaseTone,
   RAIL,
+  railBubbleTop,
   stackTops
 } from './paperPaneLayout'
 
@@ -59,6 +60,23 @@ describe('stackTops', () => {
   it('orders by anchor before stacking', () => {
     const out = stackTops([{ id: 2, top: 50, height: 50 }, { id: 1, top: 0, height: 100 }])
     expect(out).toEqual({ 1: 0, 2: 114 })
+  })
+})
+
+describe('railBubbleTop — gate + position the open bubble on the resolved stacked top (M3-2)', () => {
+  it('returns null until the stacked top is resolved — the bubble is not rendered', () => {
+    expect(railBubbleTop({}, 1, PAD)).toBeNull()
+  })
+
+  it('positions at PAD + the stacked top once resolved', () => {
+    expect(railBubbleTop({ 1: 250 }, 1, PAD)).toBe(PAD + 250)
+  })
+
+  it('regression: an unresolved top must NOT fall back to the pane top (the slide)', () => {
+    // The bug rendered the bubble at PAD + (tops[id] ?? 0) = PAD for one frame
+    // before the stacking effect ran, then `transition: top` animated it down.
+    // The gate must suppress the bubble until tops is set, never place it at PAD.
+    expect(railBubbleTop({}, 1, PAD)).not.toBe(PAD)
   })
 })
 
