@@ -2095,3 +2095,66 @@ in `docs/read-mode-free-selection.md`. Headlines:
 from v1) → then dispatch a sibling on the spec, AFTER BUG-49. Lane: `pdf/` (text
 layer) + `PaperPane.tsx`/`PdfPageStack.tsx` (gesture) + `taskStore.ts` (task union) +
 `Workspace.tsx` (span derivation) + `reanchor.ts` (free-task remap).
+
+## BUG-50 — sidebar project icon is squished (flex child with no flex-shrink:0)
+
+**Symptom.** The folder icon in the top-left sidebar header renders squished —
+narrower than tall, distorted.
+
+**Root cause.** The icon `<span>` (`Sidebar.tsx:518-531`, fixed `width:26 height:26`,
+`<Folder size={15}/>`) is a flex child of the header row (`:515-516`,
+`display:flex`). The header also holds the project name + the long `doc.root` path
+(`:532-547`). When the path makes the row overflow, flexbox shrinks EVERY shrinkable
+item (default `flex-shrink:1`) — including the icon — so its width drops below 26 while
+height stays 26 → squished. The text wrapper already has `minWidth:0` to absorb
+shrink, but the icon doesn't opt out.
+
+**Fix.** Add `flexShrink: 0` (or `flex: '0 0 auto'`) to the icon `<span>` at
+`Sidebar.tsx:518`. One line; the text wrapper keeps `minWidth:0` + ellipsis so the
+path still truncates. (Audit the other fixed-size flex chips in the header for the
+same omission.)
+
+**Test.** Live (Miguel): long project path → icon stays a 26×26 square.
+
+**Lane.** `Sidebar.tsx` only — trivial. Fold into the sidebar-chrome task below (or
+cavecrew-builder).
+
+## FEAT — collapsible OUTLINE + HISTORY sidebar sections
+
+**Ask.** The OUTLINE and HISTORY sidebar sections should collapse/expand.
+
+**Now.** `SectionLabel` (`Sidebar.tsx:84-100`) is a static label; its section body
+always renders (Outline `:586-589`, History `:591-602`).
+
+**Durable fix.** Replace `SectionLabel` with a reusable `CollapsibleSection`
+(`{title, icon, children}`): a clickable header with a chevron (Chevron Down/Right,
+already imported pattern in OutlineTree) + local `useState(open=true)`; render
+`children` only when open. Wrap Outline + History (and optionally Files for parity).
+One component, no per-section flags. Persisting open-state (localStorage) is a
+nice-to-have — defer.
+
+**Test.** RTL: clicking a section header toggles its body; default open. Live: Outline
++ History collapse.
+
+**Lane.** `Sidebar.tsx` only. Pairs with BUG-50 = the "sidebar-chrome" task.
+
+## FEAT — history diff viewer (click a commit → full-page diff vs current)
+
+**Ask.** Make HISTORY a real history system: click an entry → a page opens showing the
+diff between the current version and the selected version. (Restore/"redo" button =
+later, not v1.)
+
+**Feasible — reuses existing infra.** `GitClient.diffRange` (`GitClient.ts:134`) +
+the full-page diff overlay `ReviewOverlay` (`review/ReviewOverlay.tsx:90`,
+`splitDiffByFile`+`DiffHunk`). Full design, gaps, and the durable `DiffView`
+extraction: **`docs/history-diff-viewer.md`**. Gaps: `CommitInfo` has no sha
+(`document.ts:30`; `git log` lacks `%H`); no `document:diffAt(sha)` IPC; history rows
+(`Sidebar.tsx:593-601`) aren't clickable; no overlay/state in Workspace. Extract a
+shared `DiffView` from ReviewOverlay; new `HistoryDiffOverlay` (source diff only, no
+resolve buttons v1). Restore deferred (must go through the review pipeline, not a raw
+checkout).
+
+**Lane.** git/IPC + `Sidebar.tsx` (clickable rows) + `Workspace.tsx` (overlay) +
+`ReviewOverlay.tsx`→`DiffView`. **Shares `Sidebar.tsx` HISTORY section with the
+sidebar-chrome task** → sequence after it, or same sibling (chrome = commit 1,
+history-diff = commit 2).
