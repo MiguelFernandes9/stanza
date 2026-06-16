@@ -324,3 +324,49 @@ Commits: imperative ≤72-char subjects, specific `git add`, no `--no-verify`, n
   re-anchor of new child ids). `sectionId` is unread (safe to drop).
 - **Nested figure on another page** (FIG2) — children carry their own render page;
   the figure block stays a child of its section regardless of page.
+
+## 8. Implementation outcome (landed on this branch)
+
+Shipped as ordered TDD commits; full unit suite green at each step (618 tests).
+
+- **`isContainer`/`isAtomicEnv`/`isListEnv`/`isFloatEnv`** — one shared predicate
+  module (`src/shared/blocks/container.ts`); `isMathEnvName` moved there.
+- **Parser** recurses container envs into children — but only **distinct
+  sub-blocks** (nested envs, list `\item`s, `\caption`, `\includegraphics`);
+  prose is absorbed into its container (decision 0). `\centering`/`\raggedright`
+  are transparent. Items reuse the `paragraph` kind (id-stable).
+- **flatten/expand** carry `parentId`+`depth`; `expandIds` covers any has-children
+  block; `parentOf` added for escalation.
+- **Geometry** (`binContentToBlocks`): deepest-containing bin + bottom-up compose
+  (parent = own ∪ children; **float = children only**; section = heading line).
+  Float **descendants** are anchored to the float's render page (their origin-page
+  source-site rect is dropped) — the live-gate fix; float exclusion alone was one
+  level too shallow.
+- **Selection**: innermost-wins falls out of DOM paint order (child overlay paints
+  over parent); repeat-click escalates to the parent (decision 3).
+- **Edit scope**: a lone container-env child widens to its `\begin..\end` wrapper
+  (decision 2). **Outline** stays shallow — named envs are leaves (decision 4).
+
+### Live gate (real doc, through the real `blockGeometryRects → binContentToBlocks`)
+
+Measured on `~/Documents/Projects/test/main.tex`:
+- **FIG2** (pgfplots, floats p4→p5): before = TWO boxes incl. a page-4 phantom
+  (611.6–636.0) that erased the paragraph above; **after = ONE box, page 5
+  (73.9–256.4)**; the paragraph 277–279 regains its page-4 box (2 prose rows).
+- **FIG1** (tikz, p4): one correct box ~445–559, caption enclosed.
+- **theorem 109–118 / definition 75–82**: box encloses its interior equation;
+  the equation is its own smaller box.
+
+### Known / deferred (out of scope here)
+
+- **Pre-existing**: prose blocks @94 and @304 in the demo render with no box
+  (their rows bin into a neighbour region — confirmed present on `origin/main`,
+  not caused by this work). Tracked as a separate task.
+- **Cosmetic**: the rail `TaskCard`/`BlockTag` glyph for a multi-block *container*
+  selection (e.g. theorem+equation) reads as a section/per-child tag rather than a
+  single container badge. Renders fine; polish only.
+- **Native TikZ bbox** in `pdfGraphics` (path ops) is still not captured, so a
+  pure-drawing figure's box comes from its text rows (labels/caption) — adequate
+  on the demo; a future enhancement for caption-less, text-less figures.
+- **Item interiors** are not yet recursed (an equation inside a list item is part
+  of the item, not its own block) — rare; deferrable.
