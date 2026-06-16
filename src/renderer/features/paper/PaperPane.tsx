@@ -198,7 +198,10 @@ export function PaperPane(props: Props): JSX.Element {
       const { boxesById, contentTopByPage } = binContentToBlocks(
         new Map(perBlock.map(({ b, rects }) => [b.id, rects])),
         rowsByPage,
-        graphicsByPage
+        graphicsByPage,
+        // env name per block so the binner can snap a MATH region's top to its
+        // rendered ink (synctex is ~a line off for display math) — M2-9.
+        new Map(perBlock.flatMap(({ b }) => (b.envName ? [[b.id, b.envName] as const] : [])))
       )
       // Boxes are unions of a disjoint row/graphic partition, so they can't
       // overlap — the synctex-overlap resolve pass (BUG-19) is gone (verified

@@ -234,6 +234,24 @@ const FURNITURE_SHARE = 0.25
  *  text-row baseline (the bullet measured 719.86 vs 717.7 on the demo). */
 const BAND_EPS = 2
 
+/** M2-9: a display equation's synctex region top is unreliable — it can sit ~a
+ *  line ABOVE the rendered glyphs (a tall \big| box's v−H reaches up) or below
+ *  them. Snap a math region's top to its real ink: the topmost text row that
+ *  starts within the region's x-band and renders within this many line-heights
+ *  of the synctex span. */
+const MATH_INK_SLACK = 1.5
+/** A row counts as the equation's ink only if it STARTS at/after the region's
+ *  left edge — the indented/numbered formula — not at the full-width prose
+ *  margin. That x-test separates the formula from the paragraph line above it. */
+const MATH_INK_X_EPS = 1
+
+/** Median row height (≈ the body em) — the unit for MATH_INK_SLACK. */
+function medianRowHeight(rows: TextRow[]): number {
+  if (!rows.length) return 12
+  const hs = rows.map((r) => r.yBottom - r.yTop).sort((a, b) => a - b)
+  return hs[Math.floor(hs.length / 2)]!
+}
+
 /** The document's body text-area vertical band `{top, bottom}` (PDF pt),
  *  inferred from the pdf.js text rows of EVERY page overlaid: the body is the
  *  single contiguous baseline cluster, while running heads and page-number
@@ -304,7 +322,8 @@ export interface BinnedContent {
 export function binContentToBlocks(
   rectsById: Map<string, PdfRect[]>,
   rowsByPage: Map<number, TextRow[]>,
-  graphicsByPage: Map<number, GraphicBox[]> = new Map()
+  graphicsByPage: Map<number, GraphicBox[]> = new Map(),
+  envNames: Map<string, string> = new Map()
 ): BinnedContent {
   const band = contentBand(rowsByPage)
   const inBand = (yTop: number, yBottom: number): boolean =>
@@ -349,8 +368,25 @@ export function binContentToBlocks(
   }
 
   for (const [page, regions] of regionsByPage) {
-    regions.sort((a, b) => a.top - b.top)
     const rows = (rowsByPage.get(page) ?? []).filter((r) => inBand(r.baseline, r.baseline))
+    // M2-9: snap each math env region's top to its rendered ink BEFORE ordering,
+    // so a display equation whose synctex top sits ~a line off the glyphs can't
+    // steal the partition boundary from the paragraph above (orphaning its last
+    // line) or reach up over it. Only the region top moves; the box extent still
+    // comes from the binned rows.
+    const lineH = medianRowHeight(rows)
+    for (const reg of regions) {
+      if (!isMathEnvName(envNames.get(reg.id))) continue
+      const slack = MATH_INK_SLACK * lineH
+      let inkTop = Infinity
+      for (const r of rows) {
+        if (r.xLeft < reg.xLeft - MATH_INK_X_EPS) continue // full-width prose, not the formula
+        if (r.baseline < reg.top - slack || r.baseline > reg.bottom + slack) continue
+        inkTop = Math.min(inkTop, r.baseline)
+      }
+      if (inkTop !== Infinity) reg.top = inkTop
+    }
+    regions.sort((a, b) => a.top - b.top)
     const graphics = graphicsByPage.get(page) ?? []
     if (!rows.length && !graphics.length) {
       // No rendered content measured for this page → coarse synctex union, never lost.

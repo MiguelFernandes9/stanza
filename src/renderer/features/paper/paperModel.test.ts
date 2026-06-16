@@ -349,6 +349,35 @@ describe('binContentToBlocks — one row-union builder for every text block', ()
     expect(boxBottom(box!)).toBeCloseTo(150, 1)
   })
 
+  it('snaps a math region top to its ink so the prose keeps its last line (M2-9)', () => {
+    // Measured ~/Documents/Projects/test page 2: the equation's synctex region top
+    // (250.1 = v−H of a tall box) sits ~13pt ABOVE its first ink row (263.7) and
+    // lands exactly on the prose paragraph's wrapped last-line baseline (250.1).
+    // That orphans the prose line — excluded from prose (baseline == ceiling) and
+    // from the equation (its x-band is the right-shifted formula, not the prose).
+    // Snapping the math region top down to the ink returns the line to the prose.
+    const rects = new Map<string, PdfRect[]>([
+      ['par1#a', [prect(2, 72, 229.0, 468, 23.2)]], // prose region 229.0–252.2, x[72,540]
+      ['env2#b', [prect(2, 254, 250.1, 286, 24.6)]], // eqn synctex top 250.1 (above its ink), x[254,540]
+      ['par3#c', [prect(2, 72, 282.2, 468, 7.5)]] // next paragraph
+    ])
+    const rows = [
+      trow(227.8, 236.6, 89, 540), // prose line 1
+      trow(241.4, 250.1, 72, 226), // prose line 2 "value inequality gives the bound" (the orphan)
+      trow(254.9, 263.7, 254, 540), // equation formula
+      trow(261.6, 273.1, 282, 354), // equation subscript
+      trow(281.0, 289.5, 72, 297) // next paragraph
+    ]
+    const envNames = new Map([['env2#b', 'equation']])
+    const { boxesById } = binContentToBlocks(rects, new Map([[2, rows]]), new Map(), envNames)
+    // the prose paragraph regains its wrapped last line (was clipped/orphaned)
+    expect(boxBottom(boxesById.get('par1#a')![0]!)).toBeCloseTo(250.1, 1)
+    // the equation box hugs the formula ink and does not reach up over the prose
+    const eq = boxesById.get('env2#b')![0]!
+    expect(eq.y).toBeCloseTo(254.9, 1)
+    expect(eq.y).toBeGreaterThan(boxBottom(boxesById.get('par1#a')![0]!)) // no overlap at the seam
+  })
+
   it('excludes a footer folio from the bottom block (M2-6)', () => {
     // chapter-opening plain page: the page-bottom ceiling would bin the centred
     // folio into the last block; the band drops it first (ch1 page 4).
