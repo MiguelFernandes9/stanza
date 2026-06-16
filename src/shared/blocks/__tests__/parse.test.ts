@@ -306,6 +306,82 @@ describe('display math joins the paragraph; \\begin envs stay blocks (BUG-45)', 
   })
 })
 
+describe('nested environments (recursive block model)', () => {
+  // line numbers:                              1
+  const NESTED = [
+    '\\documentclass{article}', //              1
+    '\\begin{document}', //                     2
+    '\\section{S}', //                          3
+    '\\begin{theorem}', //                      4
+    'Prose line.', //                           5
+    '\\begin{equation}', //                     6
+    'a = b', //                                 7
+    '\\end{equation}', //                       8
+    '\\end{theorem}', //                        9
+    '\\begin{figure}', //                      10
+    '\\centering', //                          11
+    '\\begin{tikzpicture}', //                 12
+    '\\draw (0,0) -- (1,1);', //               13
+    '\\end{tikzpicture}', //                   14
+    '\\caption{A caption}', //                 15
+    '\\label{fig:x}', //                       16
+    '\\end{figure}', //                        17
+    '\\begin{enumerate}', //                   18
+    '\\item one', //                           19
+    '\\item two', //                           20
+    '\\end{enumerate}', //                     21
+    '\\begin{verbatim}', //                    22
+    'raw code', //                             23
+    '\\end{verbatim}', //                      24
+    '\\end{document}', //                      25
+  ].join('\n')
+
+  test('theorem nests prose + equation as children; equation stays a leaf', () => {
+    const s = parseBlocks(FILE, NESTED)[1]! // [preamble, section S]
+    const theorem = s.children[0]!
+    expect(theorem).toMatchObject({ kind: 'environment', name: 'theorem' })
+    expect(theorem.children.map((c) => c.kind)).toEqual(['paragraph', 'environment'])
+    expect(theorem.children[0]!.span).toMatchObject({ startLine: 5, endLine: 5 })
+    expect(theorem.children[1]!).toMatchObject({
+      name: 'equation',
+      span: { startLine: 6, endLine: 8 },
+    })
+    expect(theorem.children[1]!.children).toEqual([]) // equation is atomic
+  })
+
+  test('figure nests tikzpicture (atomic leaf) + caption; \\centering is not a block', () => {
+    const figure = parseBlocks(FILE, NESTED)[1]!.children[1]!
+    expect(figure).toMatchObject({ kind: 'environment', name: 'figure' })
+    expect(figure.children.map((c) => c.kind)).toEqual(['environment', 'paragraph'])
+    const tikz = figure.children[0]!
+    expect(tikz.name).toBe('tikzpicture')
+    expect(tikz.children).toEqual([]) // drawing env is atomic
+    // caption block starts at the \caption line, NOT the \centering line above
+    expect(figure.children[1]!.span.startLine).toBe(15)
+  })
+
+  test('enumerate nests one child block per \\item', () => {
+    const list = parseBlocks(FILE, NESTED)[1]!.children[2]!
+    expect(list).toMatchObject({ kind: 'environment', name: 'enumerate' })
+    expect(list.children.map((c) => c.kind)).toEqual(['paragraph', 'paragraph'])
+    expect(list.children[0]!.span).toMatchObject({ startLine: 19, endLine: 19 })
+    expect(list.children[1]!.span).toMatchObject({ startLine: 20, endLine: 20 })
+  })
+
+  test('verbatim stays an atomic leaf (string content, no children, no crash)', () => {
+    const vrb = parseBlocks(FILE, NESTED)[1]!.children[3]!
+    expect(vrb).toMatchObject({ kind: 'environment', name: 'verbatim' })
+    expect(vrb.children).toEqual([])
+  })
+
+  test('nested child ids are unique and stable across reparses', () => {
+    const ids1 = collectIds(parseBlocks(FILE, NESTED))
+    const ids2 = collectIds(parseBlocks(FILE, NESTED))
+    expect(ids1).toEqual(ids2)
+    expect(new Set(ids1).size).toBe(ids1.length)
+  })
+})
+
 describe('environment content-start line — skip a leading \\label (M2-7)', () => {
   test('an equation whose first interior line is \\label starts content at the math line', () => {
     // \label forward-maps to the END of the prose line ABOVE (BUG-11/20), so an

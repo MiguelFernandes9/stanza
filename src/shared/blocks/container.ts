@@ -55,3 +55,11 @@ export function isAtomicEnv(name: string | undefined, content: unknown): boolean
 export function isContainerEnv(name: string | undefined, content: unknown): boolean {
   return !isAtomicEnv(name, content)
 }
+
+const LIST_ENVS = new Set(['itemize', 'enumerate', 'description'])
+
+/** A list environment whose `\item` macros delimit its child item blocks — so
+ *  recursion splits on `\item` positions rather than walking a sub-stream. */
+export function isListEnv(name: string | undefined): boolean {
+  return name !== undefined && LIST_ENVS.has(name)
+}

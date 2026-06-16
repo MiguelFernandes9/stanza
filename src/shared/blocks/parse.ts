@@ -1,6 +1,7 @@
 import { parse } from '@unified-latex/unified-latex-util-parse'
 import type * as Ast from '@unified-latex/unified-latex-types'
 import type { BlockNode } from './types'
+import { isContainerEnv, isListEnv } from './container'
 
 const SECTION_LEVELS: Record<string, number> = {
   chapter: 1,
@@ -88,6 +89,12 @@ const TRANSPARENT_MACROS = new Set([
   'upshape',
   'em',
   'normalfont',
+  // Alignment declarations — invisible, emit nothing. Must not start a paragraph,
+  // else a container's leading \centering (a figure's first line) becomes a
+  // phantom child block. Absorbed into an open paragraph like the others.
+  'centering',
+  'raggedright',
+  'raggedleft',
 ])
 
 /** First interior line of an environment that carries visible content — the
@@ -156,12 +163,25 @@ export function parseProjectBlocks(
 
 function walkBody(file: string, nodes: Ast.Node[]): BlockNode[] {
   const roots: BlockNode[] = []
+  walkScope(file, nodes, roots)
+  return roots
+}
+
+/** Process one flat node stream, attaching blocks to `out`. Two nesting axes:
+ *  sections nest via a local stack (document-body axis); a CONTAINER environment
+ *  recurses its content into its own children (containment axis) — a theorem's
+ *  equation, a figure's caption/graphic become child blocks. Atomic envs
+ *  (math/cells/drawing/verbatim) stay leaves. Each scope keeps its own
+ *  paragraph/section state; a brace group still recurses IN-scope so an internal
+ *  parbreak splits the outer paragraph (BUG-22). See docs/nested-block-model.md
+ *  §5.1. */
+function walkScope(file: string, nodes: Ast.Node[], out: BlockNode[]): void {
   const sectionStack: { block: BlockNode; level: number }[] = []
   let paragraph: { startLine: number; endLine: number } | null = null
 
-  const attach = (block: BlockNode) => {
+  const attach = (b: BlockNode) => {
     const parent = sectionStack[sectionStack.length - 1]
-    ;(parent ? parent.block.children : roots).push(block)
+    ;(parent ? parent.block.children : out).push(b)
   }
 
   const flushParagraph = () => {
@@ -219,13 +239,22 @@ function walkBody(file: string, nodes: Ast.Node[]): BlockNode[] {
 
       if (ENVIRONMENT_TYPES.has(node.type)) {
         flushParagraph()
-        const env = block('environment', file, start.line, end.line, envName(node as Ast.Environment))
+        const env = node as Ast.Environment
+        const name = envName(env)
+        const envBlock = block('environment', file, start.line, end.line, name)
         // Record the first real content line only when leading invisible macros
         // push it past the line after \begin; every ordinary env keeps the
         // existing startLine+1 geometry (M2-7).
-        const contentStart = envContentStartLine(node as Ast.Environment)
-        if (contentStart !== undefined && contentStart > start.line + 1) env.contentStartLine = contentStart
-        attach(env)
+        const contentStart = envContentStartLine(env)
+        if (contentStart !== undefined && contentStart > start.line + 1) envBlock.contentStartLine = contentStart
+        attach(envBlock)
+        // Recurse a container env into its own children (containment axis): a list
+        // splits on \item, every other container walks its content as a sub-stream
+        // with the env as the new attach root. Atomic envs stay leaves.
+        if (isContainerEnv(name, env.content)) {
+          if (isListEnv(name)) parseItems(file, env, envBlock)
+          else walkScope(file, env.content as Ast.Node[], envBlock.children)
+        }
         continue
       }
 
@@ -248,7 +277,26 @@ function walkBody(file: string, nodes: Ast.Node[]): BlockNode[] {
 
   walkNodes(nodes)
   flushParagraph()
-  return roots
+}
+
+/** A list environment's `\item` macros delimit its child blocks: each item spans
+ *  from its `\item` line to the line before the next `\item` (or the `\end`).
+ *  Items are leaf paragraph blocks — reusing the paragraph kind keeps ids stable
+ *  (ID_PREFIX has no item slot). Item interiors are not yet recursed (rare; see
+ *  docs §7). */
+function parseItems(file: string, env: Ast.Environment, listBlock: BlockNode): void {
+  const content = env.content
+  if (!Array.isArray(content)) return
+  const items = content.filter(
+    (n): n is Ast.Macro => n.type === 'macro' && n.content === 'item' && !!n.position,
+  )
+  const endLine = env.position ? env.position.end.line : 0
+  for (let i = 0; i < items.length; i++) {
+    const startLine = items[i]!.position!.start.line
+    const next = items[i + 1]
+    const itemEnd = next ? next.position!.start.line - 1 : endLine - 1
+    listBlock.children.push(block('paragraph', file, startLine, Math.max(startLine, itemEnd)))
+  }
 }
 
 function preambleBlock(file: string, nodes: Ast.Node[]): BlockNode | null {

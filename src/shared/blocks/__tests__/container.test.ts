@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { isAtomicEnv, isContainerEnv, isMathEnvName } from '../container'
+import { isAtomicEnv, isContainerEnv, isListEnv, isMathEnvName } from '../container'
 
 describe('isMathEnvName', () => {
   test('display-math envs, starred variants included', () => {
@@ -52,5 +52,18 @@ describe('isAtomicEnv / isContainerEnv', () => {
 
   test('an unknown environment defaults to container (maximise nesting)', () => {
     expect(isContainerEnv('myCustomEnv', body)).toBe(true)
+  })
+})
+
+describe('isListEnv', () => {
+  test('list envs', () => {
+    expect(isListEnv('itemize')).toBe(true)
+    expect(isListEnv('enumerate')).toBe(true)
+    expect(isListEnv('description')).toBe(true)
+  })
+  test('non-lists and undefined', () => {
+    expect(isListEnv('figure')).toBe(false)
+    expect(isListEnv('theorem')).toBe(false)
+    expect(isListEnv(undefined)).toBe(false)
   })
 })
