@@ -96,7 +96,15 @@ export const api = {
   onPrimeStatus: on<PrimeStep>(IpcChannels.primeStatus),
   /** ⌘W fired from the app menu — the renderer closes the active tab (or
    *  invokes windowClose when none is open). */
-  onEditorCloseActiveTab: on<void>(IpcChannels.editorCloseActiveTab)
+  onEditorCloseActiveTab: on<void>(IpcChannels.editorCloseActiveTab),
+  /** File ▸ New document (⌘N) — App opens the New-document dialog. */
+  onMenuNewDocument: on<void>(IpcChannels.menuNewDocument),
+  /** File ▸ Open folder… (⌘O) — App runs the folder-picker open. */
+  onMenuOpenFolder: on<void>(IpcChannels.menuOpenFolder),
+  /** File ▸ Open Recent ▸ <root> — App opens that project (payload = root). */
+  onMenuOpenRecent: on<string>(IpcChannels.menuOpenRecent),
+  /** File ▸ Settings (⌘,) — App opens the Settings panel. */
+  onMenuOpenSettings: on<void>(IpcChannels.menuOpenSettings)
 }
 
 export type StanzaClient = typeof api

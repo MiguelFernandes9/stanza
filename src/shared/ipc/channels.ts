@@ -30,6 +30,10 @@ export const IpcChannels = {
   documentCreateFolder: 'document:createFolder', // invoke {dir: string; name: string} → FileMutationResult
   documentUpload: 'document:upload',             // invoke {dir: string} → FileMutationResult (main shows OS picker)
   editorCloseActiveTab: 'editor:closeActiveTab', // main→renderer event: ⌘W from the menu (renderer closes the active tab)
-  windowClose: 'window:close'                    // invoke → void — close the focused window (⌘W with no tabs open)
+  windowClose: 'window:close',                   // invoke → void — close the focused window (⌘W with no tabs open)
+  menuNewDocument: 'menu:newDocument',   // main→renderer event: File ▸ New document (⌘N)
+  menuOpenFolder: 'menu:openFolder',     // main→renderer event: File ▸ Open folder… (⌘O)
+  menuOpenRecent: 'menu:openRecent',     // main→renderer event: File ▸ Open Recent ▸ (payload root: string)
+  menuOpenSettings: 'menu:openSettings'  // main→renderer event: File ▸ Settings (⌘,)
 } as const
 export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels]

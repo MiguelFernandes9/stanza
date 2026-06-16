@@ -1,6 +1,6 @@
 import { app, BrowserWindow, nativeImage, shell } from 'electron'
 import { join } from 'node:path'
-import { currentDocRoot, registerIpcHandlers } from './ipc-registry'
+import { currentDocRoot, registerIpcHandlers, setRecentsListener } from './ipc-registry'
 import { buildAppMenu } from './menu'
 import { handleDocProtocol, registerDocScheme } from './protocol'
 
@@ -71,8 +71,12 @@ void app.whenReady().then(() => {
     const icon = nativeImage.createFromPath(ICON_PATH)
     if (!icon.isEmpty()) app.dock?.setIcon(icon)
   }
-  buildAppMenu() // frees ⌘R from the default reload accelerator
+  // Handlers first: they create the store the Open Recent menu reads. Then
+  // build the menu (also frees ⌘R from the default reload accelerator) and
+  // register the rebuild hook so opens/creates refresh Open Recent.
   registerIpcHandlers()
+  setRecentsListener(buildAppMenu)
+  buildAppMenu()
   handleDocProtocol(currentDocRoot)
   createWindow()
 
