@@ -2255,3 +2255,20 @@ state + `SettingsModal` props):
 ship light-only + accent (flag in `docs/menu-and-settings.md`). The design fan-out's
 synthesis agent hung; the 4 recovered ground reports + direct reads back every cited
 site.
+
+## DEFERRED (backlog) — block→bubble connector re-anchor
+
+**Ask (Miguel, on hold).** The edit icon should sit at the block's TOP-RIGHT, and the
+connector line should start THERE (over the PDF) rather than at the page's right edge,
+so the line overlaps the PDF a bit before reaching the Claude bubble.
+
+**Grounded shape (small — re-anchor, not new infra).** A connector already exists:
+badge + `connectorPath(pageRightX, …)` start at the page's right edge
+(`PaperPane.tsx:511,521`; `paperPaneLayout.ts:94`). Change: move the badge/icon to the
+block's top-right (`blockRightX, blockTop` in zoomed coords) and give `connectorPath`
+a `startX/startY` = that corner; the SVG layer already spans the page (`cW` from x=0)
+so it can draw over it. Open nuance: math blocks park the pill in the left margin
+(BUG-19/35) and equation numbers `(1)` sit at the right — a top-right icon may overlap
+them (decide uniform vs math-special). Collision: `PaperPane.tsx`/`paperModel.ts`
+(was in flight with the nested-block work, #103 merged) — branch off post-#103 main.
+**Status: parked at Miguel's request.**
