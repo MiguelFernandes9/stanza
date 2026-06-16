@@ -36,6 +36,8 @@ interface Props {
   files: FileEntry[]
   blocks: BlockNode[]
   history: CommitInfo[]
+  /** Rendered figure/equation numbers by block id, shown in the outline (Part B). */
+  outlineNumbers?: Map<string, string>
   activeBlock: string | null
   onPickBlock: (id: string) => void
   // v0.2 file management — actions live in Workspace (like onPickBlock); the
@@ -353,6 +355,7 @@ export function Sidebar({
   files,
   blocks,
   history,
+  outlineNumbers,
   activeBlock,
   onPickBlock,
   onOpenFile,
@@ -565,7 +568,7 @@ export function Sidebar({
 
         <SectionLabel icon={<List size={12} />}>Outline</SectionLabel>
         <div style={{ marginBottom: 18 }}>
-          <OutlineTree blocks={blocks} activeBlock={activeBlock} onPick={onPickBlock} />
+          <OutlineTree blocks={blocks} activeBlock={activeBlock} onPick={onPickBlock} numbers={outlineNumbers} />
         </div>
 
         <SectionLabel icon={<History size={12} />}>History</SectionLabel>

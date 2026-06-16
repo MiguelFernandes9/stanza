@@ -10,10 +10,13 @@ export interface OutlineNode {
   children: OutlineNode[]
 }
 
-/** A short outline label: a section or named environment by its name, else a
- *  kind fallback (BlockNode carries no prose, so plain paragraphs have none —
- *  buildOutline drops those). */
-export function outlineLabel(node: BlockNode): string {
+/** A short outline label: the rendered figure/equation number when one is known
+ *  ("Figure 1", "Equation 2" — keyed by block id in `numbers`), else a section
+ *  or named environment by its name, else a kind fallback (BlockNode carries no
+ *  prose, so plain paragraphs have none — buildOutline drops those). */
+export function outlineLabel(node: BlockNode, numbers?: Map<string, string>): string {
+  const rendered = numbers?.get(node.id)
+  if (rendered) return rendered
   if (node.name && node.name.trim()) return node.name
   return node.kind === 'section' ? 'Untitled section' : node.kind
 }
@@ -21,17 +24,17 @@ export function outlineLabel(node: BlockNode): string {
 /** Filter the block tree to the outline: every section (kept and recursed)
  *  and every NAMED leaf (figures, equations, labeled environments). Preamble
  *  and unnamed plain paragraphs are dropped; nesting and order are preserved.
- *  Pure — unit-tested. */
-export function buildOutline(roots: BlockNode[]): OutlineNode[] {
+ *  `numbers` (block id → rendered "Figure 1") drives the label. Pure — unit-tested. */
+export function buildOutline(roots: BlockNode[], numbers?: Map<string, string>): OutlineNode[] {
   const out: OutlineNode[] = []
   for (const node of roots) {
     if (node.kind === 'preamble') continue
     if (node.kind === 'section' || node.name) {
       out.push({
         id: node.id,
-        label: outlineLabel(node),
+        label: outlineLabel(node, numbers),
         kind: node.kind,
-        children: buildOutline(node.children)
+        children: buildOutline(node.children, numbers)
       })
     }
   }
@@ -42,14 +45,16 @@ interface Props {
   blocks: BlockNode[]
   activeBlock: string | null
   onPick: (id: string) => void
+  /** Rendered figure/equation numbers by block id (Part B). */
+  numbers?: Map<string, string>
 }
 
 /** Nested file outline (v0.4): the full section/named-leaf tree, indented and
  *  collapsible. Replaces the top-level-only OUTLINE list. */
-export function OutlineTree({ blocks, activeBlock, onPick }: Props): JSX.Element {
+export function OutlineTree({ blocks, activeBlock, onPick, numbers }: Props): JSX.Element {
   return (
     <div>
-      {buildOutline(blocks).map((n) => (
+      {buildOutline(blocks, numbers).map((n) => (
         <OutlineRow key={n.id} node={n} depth={0} activeBlock={activeBlock} onPick={onPick} />
       ))}
     </div>
