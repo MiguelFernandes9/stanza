@@ -1,0 +1,18 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Stanza app icon: the in-app StanzaMark (rounded square + three stanza
+       lines) as a filled tile. Tile = clay (the brand accent); lines = cream so
+       they read on the clay. Glyph proportions match StanzaMark.tsx (viewBox 32,
+       rect 4..28, lines y 11.5/16/20.5, x from 9.5) scaled onto the 800 tile. -->
+  <defs>
+    <linearGradient id="clay" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#d07e58"/>
+      <stop offset="1" stop-color="#a94b2e"/>
+    </linearGradient>
+  </defs>
+  <rect x="112" y="112" width="800" height="800" rx="184" fill="url(#clay)"/>
+  <g stroke="#f8f4ec" stroke-width="70" stroke-linecap="round">
+    <line x1="295" y1="362" x2="728" y2="362"/>
+    <line x1="295" y1="512" x2="612" y2="512"/>
+    <line x1="295" y1="662" x2="745" y2="662"/>
+  </g>
+</svg>

@@ -2,6 +2,7 @@
   "name": "stanza",
   "version": "0.1.0",
   "description": "Local macOS LaTeX editor with live PDF and diff-gated Claude block editing",
+  "productName": "Stanza",
   "private": true,
   "type": "module",
   "main": "out/main/index.js",
@@ -9,11 +10,21 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
+    "dist": "electron-vite build && electron-builder",
     "typecheck": "tsc --noEmit --composite false -p tsconfig.node.json && tsc --noEmit --composite false -p tsconfig.web.json",
     "test": "vitest run --project shared --project main --project renderer --project tests",
     "test:watch": "vitest",
     "test:integration": "bash scripts/test-integration.sh",
     "test:e2e": "electron-vite build && playwright test"
+  },
+  "build": {
+    "appId": "com.miguelfernandes.stanza",
+    "productName": "Stanza",
+    "directories": { "buildResources": "build" },
+    "files": ["out/**"],
+    "mac": { "icon": "build/icon.icns", "category": "public.app-category.productivity" },
+    "win": { "icon": "build/icon.ico" },
+    "linux": { "icon": "build/icon.png" }
   },
   "dependencies": {
     "@codemirror/lint": "^6.9.7",
@@ -35,6 +46,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.2.0",
     "electron": "^42.4.0",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "jsdom": "^26.1.0",
     "typescript": "^6.0.3",
