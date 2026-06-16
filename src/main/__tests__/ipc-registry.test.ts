@@ -356,21 +356,17 @@ describe('document:diffAt (history diff viewer)', () => {
     return root
   }
 
-  test('returns the sha..HEAD diff + changed files; empty for HEAD itself', async () => {
+  test('returns the change introduced by a commit (its own diff), including the newest one', async () => {
     const root = await openProject()
-    const c0 = ((await invoke('document:history')) as CommitInfo[])[0]!.hash
     // a later commit on top of the opened (and auto-committed) project
     const git = new GitClient(runner, root)
     writeFileSync(join(root, 'main.tex'), ARTICLE.replace('hi', 'hello world'))
     await git.commitAll('wip: edit')
 
-    const past = (await invoke('document:diffAt', c0)) as HistoryDiff
-    expect(past.diff).toContain('+hello world')
-    expect(past.files).toContain('main.tex')
-
+    // The newest commit's OWN change — not blank, not a cumulative vs-HEAD diff.
     const head = ((await invoke('document:history')) as CommitInfo[])[0]!.hash
-    const self = (await invoke('document:diffAt', head)) as HistoryDiff
-    expect(self.diff.trim()).toBe('')
-    expect(self.files).toEqual([])
+    const res = (await invoke('document:diffAt', head)) as HistoryDiff
+    expect(res.diff).toContain('+hello world')
+    expect(res.files).toContain('main.tex')
   })
 })

@@ -200,16 +200,39 @@ describe('GitClient history hash + diffAt (history diff viewer)', () => {
     expect(log[0]!.hash).not.toBe(log[1]!.hash)
   })
 
-  test('diffAt(sha) shows changes from that commit up to HEAD; empty for HEAD itself', async () => {
-    await initWithCommit() // C0: main.tex = 'hello\n'
+  test('diffAt(sha) is the change introduced BY that commit; root commit shows its additions', async () => {
+    await initWithCommit() // C0 (root): adds main.tex = 'hello\n'
     const c0 = (await git.log(1))[0]!.hash
     write('main.tex', 'goodbye\n')
-    await git.commitAll('wip: edit') // HEAD
-    const diff = await git.diffAt(c0)
-    expect(diff).toContain('-hello')
-    expect(diff).toContain('+goodbye')
-    const head = (await git.log(1))[0]!.hash
-    expect((await git.diffAt(head)).trim()).toBe('')
+    await git.commitAll('wip: edit') // C1
+    const c1 = (await git.log(1))[0]!.hash
+    // C1's OWN change — not a cumulative diff vs HEAD.
+    const atC1 = await git.diffAt(c1)
+    expect(atC1).toContain('-hello')
+    expect(atC1).toContain('+goodbye')
+    // Root commit has no parent → diff against the empty tree (its additions).
+    expect(await git.diffAt(c0)).toContain('+hello')
+  })
+
+  test('diffAt shows the change even when the commit was accepted via a --no-ff merge', async () => {
+    // Mirrors the review accept flow: a claude op on its own branch, merged
+    // --no-ff. The merge's tree equals the op commit's tree, so the old
+    // `git diff <sha> HEAD` was empty and the HISTORY diff rendered blank.
+    await initWithCommit() // C0: hello
+    write('main.tex', 'goodbye\n')
+    await git.switchCreate('stanza/op-x')
+    await git.commitAll('claude: edit')
+    const claude = (await git.log(1))[0]!.hash
+    await git.switchBack()
+    expect((await git.mergeNoFF('stanza/op-x')).ok).toBe(true)
+    const merge = (await git.log(1))[0]!.hash // the --no-ff merge = HEAD
+
+    // The claude commit's own change is visible (was blank before the fix).
+    const atClaude = await git.diffAt(claude)
+    expect(atClaude).toContain('-hello')
+    expect(atClaude).toContain('+goodbye')
+    // The merge commit shows the merged change (first-parent diff), not empty.
+    expect(await git.diffAt(merge)).toContain('+goodbye')
   })
 })
 

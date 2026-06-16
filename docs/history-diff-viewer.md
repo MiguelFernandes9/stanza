@@ -34,9 +34,18 @@ restore/"redo" button on that page is explicitly **later** work — not v1.)
 2. **No "diff at commit" IPC.** → add `document:diffAt(sha)` (channel in
    `channels.ts`, handler in `ipc-registry.ts` beside `documentHistory`) →
    `requireSession().git.diffAt(sha)` returning a unified diff string +
-   `changedFilesInDiff`. Semantics: **`git diff <sha> HEAD`** ("what changed from the
-   selected version up to the current one"). Add `GitClient.diffAt(sha)` =
-   `must(['diff', sha, 'HEAD'])`.
+   `changedFilesInDiff`. Semantics: **the change the commit introduced** =
+   `git diff <sha>^ <sha>` (its diff vs its parent; root commit → vs the empty
+   tree). Clicking a HISTORY row shows the edit that row represents.
+
+   > **Why not `git diff <sha> HEAD` ("selected vs current").** Shipped first,
+   > but the accept flow merges every op `--no-ff`, so the newest commit's tree
+   > equals HEAD's → `diff <sha> HEAD` was empty and the just-made change
+   > rendered **blank**; older rows showed a cumulative since-then diff,
+   > mis-attributed to the row's subject. "The commit's own change" is the
+   > intuitive model and non-empty for every real commit (claude / wip / merge).
+   > A future "restore to this version" can compute `diff <sha> HEAD` itself for
+   > its revert preview.
 3. **History rows aren't clickable.** → `Sidebar.tsx:593-601`: add `onClick` →
    `onPickHistory(c.hash)` (new prop), cursor:pointer, active styling for the
    selected sha.

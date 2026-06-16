@@ -2,6 +2,9 @@ import { realpathSync } from 'node:fs'
 import type { CommitInfo } from '../../shared/ipc/document'
 import type { ProcessRunner, ProcResult } from './ProcessRunner'
 
+/** Git's canonical empty tree — the diff base for a root commit (no parent). */
+const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+
 /** Git plumbing for the DOCUMENT repo (the user's paper folder),
  *  built on ProcessRunner. Used by ReviewService for the
  *  proposal-branch flow: capture op → temp branch, accept → merge
@@ -162,10 +165,17 @@ export class GitClient {
       })
   }
 
-  /** Unified diff from a past commit up to the current HEAD ("what changed
-   *  from the selected version to now"). Empty when sha === HEAD. */
+  /** The change introduced BY a commit — its diff against its first parent —
+   *  so a HISTORY row always shows the edit it represents. Diffing against
+   *  HEAD instead rendered the newest change blank: the accept flow merges
+   *  each op `--no-ff`, so the latest commit's tree equals HEAD's and
+   *  `diff <sha> HEAD` was empty. The root commit has no parent, so it diffs
+   *  against the empty tree (everything it added). For a merge commit `^` is
+   *  the first parent, yielding the change the merge brought into mainline. */
   async diffAt(sha: string): Promise<string> {
-    return (await this.must(['diff', sha, 'HEAD'])).stdout
+    const hasParent = (await this.run(['rev-parse', '--verify', '--quiet', `${sha}^`])).code === 0
+    const base = hasParent ? `${sha}^` : EMPTY_TREE
+    return (await this.must(['diff', base, sha])).stdout
   }
 
   private async untrackedFiles(): Promise<string[]> {

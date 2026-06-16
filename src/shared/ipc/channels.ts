@@ -3,7 +3,7 @@ export const IpcChannels = {
   documentCreate: 'document:create',  // invoke {name: string; dir: string} → DocumentInfo (article template)
   documentRecents: 'document:recents', // invoke → RecentProject[]
   documentHistory: 'document:history', // invoke → CommitInfo[] (sidebar HISTORY)
-  documentDiffAt: 'document:diffAt',  // invoke sha → HistoryDiff ({diff, files}: sha vs HEAD)
+  documentDiffAt: 'document:diffAt',  // invoke sha → HistoryDiff ({diff, files}: the change that commit introduced)
   documentSave: 'document:save',      // invoke (relPath, content) → void (F4)
   documentRead: 'document:read',      // invoke relPath → string (working-tree content; F4 editor — contract addition, flagged at gate)
   documentFiles: 'document:files',    // invoke → FileEntry[] (sidebar FILES tree)
