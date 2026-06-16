@@ -63,3 +63,13 @@ const LIST_ENVS = new Set(['itemize', 'enumerate', 'description'])
 export function isListEnv(name: string | undefined): boolean {
   return name !== undefined && LIST_ENVS.has(name)
 }
+
+const FLOAT_ENVS = new Set(['figure', 'table'])
+
+/** A float environment (figure/table, starred too): LaTeX may place it on a
+ *  different page than its source. Its geometry box comes from its rendered
+ *  CHILDREN (graphic + caption), not its source-site synctex — so the binner
+ *  gives it no own rows and drops any source-page phantom (docs §5.3). */
+export function isFloatEnv(name: string | undefined): boolean {
+  return name !== undefined && FLOAT_ENVS.has(name.replace(/\*$/, ''))
+}
