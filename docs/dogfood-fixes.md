@@ -2201,3 +2201,24 @@ moves; New document / Open folder / recents still click.
 
 **Lane.** `OpenScreen.tsx` (+ optional shared `DragRegion`). Pairs with BUG-51 =
 "home-chrome" task. Independent of the menu/settings lanes.
+
+## FEAT — app name + icon = Stanza (not Electron)
+
+**Ask.** Stop showing the Electron name + icon; brand the app as Stanza everywhere
+(Dock, menu bar, window, About).
+
+**Root cause.** The app is never named or given an icon, and isn't packaged:
+`package.json` has `name:"stanza"` but no `productName`/build config (electron-vite
+only); `main/index.ts` has no `app.setName`/window icon; no icon assets exist (brand
+mark lives only as the in-app `StanzaMark.tsx` SVG). Dev runs the raw `Electron.app`.
+
+**Fix.** Full spec: **`docs/app-branding.md`**. Two halves: (A) dev branding —
+`app.setName('Stanza')` early in `index.ts:7`, `app.dock.setIcon` (mac dev), window
+`icon` (win/linux), About panel; (B) icon assets generated from `StanzaMark` (icns/
+ico/png under `build/`); (C) electron-builder packaging (`productName:"Stanza"` +
+`build` config + `dist` script) for a real `Stanza.app`. Code-signing/notarization
+deferred (needs Apple cert; unsigned still shows the name+icon). Note: `setName` moves
+the dev userData dir Electron→Stanza (one-time store relocation).
+
+**Lane.** `main/index.ts` + `package.json` + new `build/` assets. Self-contained,
+independent of all other lanes. Commit A (dev branding) first = immediate relief.
