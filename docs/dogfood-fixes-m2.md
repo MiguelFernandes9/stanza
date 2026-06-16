@@ -505,3 +505,72 @@ off latest main.
 
 **Status.** Diagnosed + code-confirmed (row model + the headroom/clip
 discriminator). Not pixel-measured. Not dispatched.
+
+---
+
+## M2-9 — Display-math block box eats the paragraph line above (synctex v sits ~a line below the rendered ink)
+
+**Symptom.** A numbered display equation's block box reaches **up** and covers the
+last line of the paragraph above it. Reproduced on a real doc
+(`~/Documents/Projects/test/main.tex`, the Lipschitz `\sup` equation,
+`main.tex:68-71`): the box for the equation covers "value inequality gives the
+bound" (the prose line above).
+
+**Not the parser, not the `\label` (both measured clean).** The parser gives
+separate blocks — `paragraph 66-67`, `environment(equation) 68-71 [contentStart
+70]` — so M2-7's `\label`-skip is applied. synctex forward is internally ordered
+(prose 67 → v=98.6, math line 70 → v=121). So this is **not** the M2-7 class
+(region top dragged up by a `\label`).
+
+**Root cause (measured — text layer vs synctex).** Page-2 text-layer rows
+(rendered ink) vs what synctex reports:
+
+| rendered row (text layer) | baseline | yTop | synctex |
+|---|---|---|---|
+| "The smallest such L … cons…" | 83.0 | 72.0 | line 66 → v=85 |
+| "value inequality gives the bound ∥∥" | 100.8 | 85.6 | line 67 → v=98.6 |
+| "∥∥ L=sup ∇f(x) , (2)" (equation) | **110.1** | 96.4 | line 70 → **v=121** |
+| "₂ ₙ x∈R" (`\sup` subscript + `_2`) | 119.5 | 106.4 | — |
+| "which we will invoke…" | 136.1 | 125.2 | line 72 → v=136 |
+
+The equation's glyphs render at baseline **110–119**, but synctex reports its line
+at **v=121** — ~11 pt **below** the real ink. `binContentToBlocks` derives the
+equation's **region top from synctex (121)** and bins text-layer rows by that
+boundary (a row bins to region R where `R.top - ε ≤ baseline < nextRegion.top`).
+Because the equation's real glyph rows (110, 119) sit **above** their own synctex
+region top (121), they fall into the **preceding paragraph's** region (whose
+ceiling is the equation's synctex top, 121). The block boundary is drawn ~a line
+too low, so the box straddles the prose↔equation gap.
+
+Aggravated by the tall `\big\|` norm bars: the text-row clustering
+([pdfTextRows.ts:textRows](src/renderer/features/paper/pdfTextRows.ts)) splits
+"∥∥" across **both** the prose row (100.8) and the equation row (110.1) — see the
+table — blurring the boundary further.
+
+**Class.** The Tier-1/2 thesis again: synctex is unreliable for display math. We
+fixed the box *extent* (M2-8) and the `\label` *region start* (M2-7), but the
+**region top of a display-math env still comes from raw synctex `v`**, which is
+~a line off from the ink.
+
+**Fix (durable).** Snap a math env's region top to its **rendered ink**, not the
+raw synctex `v`: bind the equation region to the cluster of math glyph rows in
+its page/x-neighbourhood (the text layer already has them) so the region boundary
+matches where the math actually is. Then the prose row stays with the paragraph
+and the equation rows stay with the equation. Touches `binContentToBlocks` region
+derivation in `paperModel.ts`. Consider also tightening the row-clustering so a
+tall `\big\|` delimiter doesn't merge into the row above (the `∥∥`-on-the-prose-row
+artifact).
+
+**Test.** Live on `~/Documents/Projects/test` (or a fixture reproducing it):
+the equation box covers only the equation (incl. its number), the paragraph above
+keeps its last line, no overlap. Unit: a synthetic region whose synctex top is
+below its text rows still bins those rows to itself, not the block above.
+
+**Lane.** `paperModel.ts` (`binContentToBlocks` region derivation) + possibly
+`pdfTextRows.ts` (clustering) — `pensive-allen`'s Stage-2b geometry lane.
+Coordinate; branch off latest main. **Confirm the exact per-region arithmetic on
+the live harness** (the enclosing `definition` env + norm-bar clustering add
+wrinkles) before finalizing.
+
+**Status.** Diagnosed + **measured** (text-layer vs synctex table above). Exact
+box arithmetic to be confirmed on the harness. Not dispatched.
