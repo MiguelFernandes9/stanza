@@ -2296,3 +2296,47 @@ per-window `documentCurrent`; dispose session on `closed`. Crash-restore (L6) su
 
 **Lane.** Mostly `ipc-registry.ts` + `index.ts` + light `App.tsx`/`OpenScreen.tsx`.
 Single focused sibling; other work should avoid `ipc-registry.ts` while it's in flight.
+
+## BUG-53 — stale document model after a Claude op: multi-file blocks + new dirs/files don't appear until restart
+
+**Symptoms.** (A, big) With sections split per file (`\input{sections/foundations}`
+…), block overlays don't work for the subfile content — **but they work after an app
+restart**. (B) When the model (Claude) creates a dir + file, the sidebar doesn't update
+until close/reopen.
+
+**Root cause (one class — NOT geometry; the restart proves parse+geometry are
+correct).** The session's `info.texFiles` is computed once at `DocumentService.open`
+and **never re-derived after a Claude op changes the file set**. `runClaudeOp`
+(`ipc-registry.ts:300`) runs Claude (which writes/creates/renames files with its own
+tools), captures the proposal, and returns — it never re-runs `documents.open`.
+`document:projectBlocks` then parses the **cached** `requireSession().info.texFiles`
+(`ipc-registry.ts:129`), so newly-added subfiles aren't in the set → no blocks for them
+(A). And the accept path (`Workspace.resolveTask`, `Workspace.tsx:555-580`) refreshes
+editor buffers (M3-1) + history + compile, but never calls `loadFiles` (sidebar) — so
+Claude-created dirs/files don't surface (B). Restart re-runs `documents.open` → fresh
+`texFiles` + fresh sidebar → both work. **App-driven file ops already do the right
+thing** via `fileMutationResult` (`ipc-registry.ts:330`, re-derives DocumentInfo +
+returns fresh) — Claude ops are the gap.
+
+**Fix (durable — give Claude ops the same treatment as app file ops).** After a Claude
+op's writes settle / on accept, **re-derive `session.info` via `documents.open(root)`**
+(texFiles + mainFile) and emit the fresh `DocumentInfo` back to the renderer (same
+contract as `fileMutationResult.doc` → `onDocChanged`/`setDoc`); renderer `resolveTask`
+accept then also `loadFiles()` + `loadBlocks()`. This dissolves both A and B (any
+file-set change — app OR Claude — re-derives the model) and composes with multi-file,
+renames, and a Claude-added main. (Even more robust option: make `document:projectBlocks`
+/ `document:files` authoritative on the live fs by re-scanning `listTexFiles(root)` each
+read — no caching window at all.)
+
+**⚠️ Collision / sequencing.** The main-side fix is in `ipc-registry.ts` (`runClaudeOp`
+/ reviewResolve / `session.info`) — **LOCKED by the multi-window task** (competent-neumann
+owns `ipc-registry.ts`; it also restructures `session`). Do NOT dispatch a second
+sibling into that file now. Either fold the re-derive into the multi-window PR, or
+sequence this **after multi-window merges**. The renderer half (`loadFiles`+`loadBlocks`
+on accept, `Workspace.tsx`) is independent and fixes B's sidebar alone, but A needs the
+main-side re-derive. **Tell funny-cartwright: this is staleness, not geometry — stop
+chasing multi-file geometry for it.**
+
+**Test.** Live (Miguel): ask Claude to create `sections/x.tex` + `\input` it → blocks
+appear without restart; ask Claude to make a dir+file → sidebar updates immediately.
+Unit: after a Claude op that adds a .tex, `document:projectBlocks` includes it.
