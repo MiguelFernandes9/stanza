@@ -225,7 +225,8 @@ describe('GitClient history hash + diffAt (history diff viewer)', () => {
     const claude = (await git.log(1))[0]!.hash
     await git.switchBack()
     expect((await git.mergeNoFF('stanza/op-x')).ok).toBe(true)
-    const merge = (await git.log(1))[0]!.hash // the --no-ff merge = HEAD
+    // HEAD is the --no-ff merge; read it directly (git.log omits merges).
+    const merge = (await runner.run({ cmd: 'git', args: ['rev-parse', 'HEAD'], cwd: root })).stdout.trim()
 
     // The claude commit's own change is visible (was blank before the fix).
     const atClaude = await git.diffAt(claude)
@@ -233,6 +234,19 @@ describe('GitClient history hash + diffAt (history diff viewer)', () => {
     expect(atClaude).toContain('+goodbye')
     // The merge commit shows the merged change (first-parent diff), not empty.
     expect(await git.diffAt(merge)).toContain('+goodbye')
+  })
+
+  test('log omits merge commits — a --no-ff accept must not duplicate its claude row', async () => {
+    await initWithCommit()
+    write('main.tex', 'op\n')
+    await git.switchCreate('stanza/op-y')
+    await git.commitAll('claude: do thing')
+    await git.switchBack()
+    expect((await git.mergeNoFF('stanza/op-y')).ok).toBe(true) // creates a merge commit
+    const log = await git.log(10)
+    // The 'Merge branch …' plumbing commit must not appear alongside its op.
+    expect(log.some((c) => c.subject.startsWith('Merge branch'))).toBe(false)
+    expect(log.some((c) => c.subject === 'claude: do thing')).toBe(true)
   })
 })
 
