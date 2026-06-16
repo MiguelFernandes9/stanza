@@ -2272,3 +2272,27 @@ so it can draw over it. Open nuance: math blocks park the pill in the left margi
 them (decide uniform vs math-special). Collision: `PaperPane.tsx`/`paperModel.ts`
 (was in flight with the nested-block work, #103 merged) — branch off post-#103 main.
 **Status: parked at Miguel's request.**
+
+## FEAT — multi-window: open a document → its own window
+
+**Ask.** Opening a document opens it in a new window (multiple papers open at once).
+
+**Decision (Miguel):** macOS doc-app convention — first open from the launcher REUSES
+that window; once a window has a doc, File ▸ Open/New/Open Recent spawn a NEW window;
+duplicate open focuses the existing window.
+
+**Why a refactor.** Today `session` is a module singleton (`ipc-registry.ts:39`); 21
+`requireSession()` sites + `sendToAll` (`:424`) broadcasts to all windows. Good news:
+`DocumentSession` (`session.ts:13`) owns no long-lived watcher/process, so per-window
+sessions are cheap.
+
+**Design:** **`docs/multi-window.md`** (full). `session` → `Map<webContents.id,
+DocumentSession>`; `requireSession()` → `sessionFor(event)` (21 sites); split
+`sendToAll` (per-doc events → owning window; global `settingsChanged` → all); main owns
+the reuse-vs-new-window decision in `documentOpen/Create/openRecent` (returns
+DocumentInfo to reuse, or spawns a window + returns null); new window learns its doc via
+per-window `documentCurrent`; dispose session on `closed`. Crash-restore (L6) survives
+(same webContents id on reload).
+
+**Lane.** Mostly `ipc-registry.ts` + `index.ts` + light `App.tsx`/`OpenScreen.tsx`.
+Single focused sibling; other work should avoid `ipc-registry.ts` while it's in flight.
