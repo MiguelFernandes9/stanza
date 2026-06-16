@@ -35,8 +35,8 @@ export interface CommitInfo {
   kind: 'claude' | 'wip' | 'other'
 }
 
-/** document:diffAt result — a past commit's unified diff vs the current HEAD
- *  plus the files it touches (HISTORY diff viewer; `git diff <sha> HEAD`). */
+/** document:diffAt result — the change a commit introduced (its unified diff
+ *  vs its parent) plus the files it touches (HISTORY diff viewer). */
 export interface HistoryDiff {
   diff: string
   files: string[]

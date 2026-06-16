@@ -98,8 +98,8 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IpcChannels.documentHistory, () => requireSession().git.log(50))
 
-  // HISTORY diff viewer: the unified diff of a past commit vs current HEAD,
-  // plus the files it touched (so the overlay can render one card per file).
+  // HISTORY diff viewer: the change a commit introduced (its diff vs its
+  // parent) + the files it touched (so the overlay renders one card per file).
   ipcMain.handle(IpcChannels.documentDiffAt, async (_e, sha: string) => {
     const diff = await requireSession().git.diffAt(sha)
     return { diff, files: changedFilesInDiff(diff) }

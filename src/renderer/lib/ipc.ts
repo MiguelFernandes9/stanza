@@ -43,7 +43,7 @@ export const api = {
     invoke<DocumentInfo>(IpcChannels.documentCreate, req),
   documentRecents: () => invoke<RecentProject[]>(IpcChannels.documentRecents),
   documentHistory: () => invoke<CommitInfo[]>(IpcChannels.documentHistory),
-  /** Unified diff of a past commit (by sha) vs the current HEAD — HISTORY viewer. */
+  /** The change a commit (by sha) introduced — its diff vs its parent (HISTORY viewer). */
   documentDiffAt: (sha: string) => invoke<HistoryDiff>(IpcChannels.documentDiffAt, sha),
   documentSave: (req: { relPath: string; content: string }) =>
     invoke<void>(IpcChannels.documentSave, req.relPath, req.content),
