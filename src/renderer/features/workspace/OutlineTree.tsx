@@ -21,21 +21,26 @@ export function outlineLabel(node: BlockNode, numbers?: Map<string, string>): st
   return node.kind === 'section' ? 'Untitled section' : node.kind
 }
 
-/** Filter the block tree to the outline: every section (kept and recursed)
- *  and every NAMED leaf (figures, equations, labeled environments). Preamble
- *  and unnamed plain paragraphs are dropped; nesting and order are preserved.
- *  `numbers` (block id → rendered "Figure 1") drives the label. Pure — unit-tested. */
+/** Filter the block tree to the outline: every section (kept and recursed) and
+ *  every NAMED environment (figures, equations, theorems…). Preamble and unnamed
+ *  plain paragraphs are dropped; nesting and order are preserved. A named env is
+ *  an outline LEAF — only sections recurse — so a container's interior blocks
+ *  (a theorem's equation, a figure's caption, list items) stay PDF-selection only
+ *  and the outline stays shallow (nested-block model, decision 4). `numbers`
+ *  (block id → rendered "Figure 1") drives the label. Pure — unit-tested. */
 export function buildOutline(roots: BlockNode[], numbers?: Map<string, string>): OutlineNode[] {
   const out: OutlineNode[] = []
   for (const node of roots) {
     if (node.kind === 'preamble') continue
-    if (node.kind === 'section' || node.name) {
+    if (node.kind === 'section') {
       out.push({
         id: node.id,
         label: outlineLabel(node, numbers),
         kind: node.kind,
         children: buildOutline(node.children, numbers)
       })
+    } else if (node.name) {
+      out.push({ id: node.id, label: outlineLabel(node, numbers), kind: node.kind, children: [] })
     }
   }
   return out
