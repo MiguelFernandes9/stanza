@@ -12,7 +12,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { IpcChannels } from '../../shared/ipc'
 import type { ClaudeResult } from '../../shared/ipc/claude'
-import type { FileMutationResult, PrimeStep } from '../../shared/ipc/document'
+import type { CommitInfo, FileMutationResult, HistoryDiff, PrimeStep } from '../../shared/ipc/document'
 import { DefaultProcessRunner } from '../infra/ProcessRunner'
 import { GitClient } from '../infra/GitClient'
 
@@ -345,5 +345,32 @@ describe('document:upload (v0.4)', () => {
     expect(res.newRelPath).toBe('pic.png')
     expect(res.files.map((f) => f.relPath)).toContain('pic.png')
     expect(existsSync(join(root, 'pic.png'))).toBe(true)
+  })
+})
+
+describe('document:diffAt (history diff viewer)', () => {
+  const openProject = async (): Promise<string> => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', makeClaudeStub(`echo '{"result":"primed"}'`))
+    const root = makeProject()
+    await invoke('document:open', root)
+    return root
+  }
+
+  test('returns the sha..HEAD diff + changed files; empty for HEAD itself', async () => {
+    const root = await openProject()
+    const c0 = ((await invoke('document:history')) as CommitInfo[])[0]!.hash
+    // a later commit on top of the opened (and auto-committed) project
+    const git = new GitClient(runner, root)
+    writeFileSync(join(root, 'main.tex'), ARTICLE.replace('hi', 'hello world'))
+    await git.commitAll('wip: edit')
+
+    const past = (await invoke('document:diffAt', c0)) as HistoryDiff
+    expect(past.diff).toContain('+hello world')
+    expect(past.files).toContain('main.tex')
+
+    const head = ((await invoke('document:history')) as CommitInfo[])[0]!.hash
+    const self = (await invoke('document:diffAt', head)) as HistoryDiff
+    expect(self.diff.trim()).toBe('')
+    expect(self.files).toEqual([])
   })
 })

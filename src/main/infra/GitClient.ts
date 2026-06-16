@@ -146,20 +146,26 @@ export class GitClient {
   }
 
   async log(count: number): Promise<CommitInfo[]> {
-    const res = await this.run(['log', '-n', String(count), '--format=%s%x09%cI'])
+    const res = await this.run(['log', '-n', String(count), '--format=%H%x09%s%x09%cI'])
     if (res.code !== 0) return []
     return res.stdout
       .split('\n')
       .filter((line) => line.trim() !== '')
       .map((line) => {
-        const [subject = '', iso = ''] = line.split('\t')
+        const [hash = '', subject = '', iso = ''] = line.split('\t')
         const kind = subject.startsWith('claude:')
           ? 'claude'
           : subject.startsWith('wip:')
             ? 'wip'
             : 'other'
-        return { subject, iso, kind }
+        return { hash, subject, iso, kind }
       })
+  }
+
+  /** Unified diff from a past commit up to the current HEAD ("what changed
+   *  from the selected version to now"). Empty when sha === HEAD. */
+  async diffAt(sha: string): Promise<string> {
+    return (await this.must(['diff', sha, 'HEAD'])).stdout
   }
 
   private async untrackedFiles(): Promise<string[]> {

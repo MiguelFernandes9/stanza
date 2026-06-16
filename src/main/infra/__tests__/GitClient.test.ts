@@ -189,6 +189,30 @@ describe('GitClient branch operations (proposal-branch review)', () => {
   })
 })
 
+describe('GitClient history hash + diffAt (history diff viewer)', () => {
+  test('log tags each commit with its full hash', async () => {
+    await initWithCommit()
+    write('a.tex', '1\n')
+    await git.commitAll('claude: edit')
+    const log = await git.log(2)
+    expect(log).toHaveLength(2)
+    for (const c of log) expect(c.hash).toMatch(/^[0-9a-f]{40}$/)
+    expect(log[0]!.hash).not.toBe(log[1]!.hash)
+  })
+
+  test('diffAt(sha) shows changes from that commit up to HEAD; empty for HEAD itself', async () => {
+    await initWithCommit() // C0: main.tex = 'hello\n'
+    const c0 = (await git.log(1))[0]!.hash
+    write('main.tex', 'goodbye\n')
+    await git.commitAll('wip: edit') // HEAD
+    const diff = await git.diffAt(c0)
+    expect(diff).toContain('-hello')
+    expect(diff).toContain('+goodbye')
+    const head = (await git.log(1))[0]!.hash
+    expect((await git.diffAt(head)).trim()).toBe('')
+  })
+})
+
 describe('GitClient file-management plumbing (v0.2)', () => {
   test('mv moves a tracked file in the tree and index', async () => {
     await initWithCommit()
