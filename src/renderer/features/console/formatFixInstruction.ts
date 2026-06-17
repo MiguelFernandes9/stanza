@@ -6,11 +6,17 @@ import type { CompileError } from '@shared/ipc'
 export const LOG_TAIL_MAX_LINES = 150
 export const LOG_TAIL_MAX_BYTES = 8000
 
-/** One compile error as a bullet: `file:line — message`, degrading gracefully
- *  when the line (some `!` errors have none) or the file (tectonic-missing, raw
- *  stderr) is absent. */
+/** An error's source location as `file:line`, degrading to `file` (no line —
+ *  some `!` errors have none) or `''` (no file — tectonic-missing, raw stderr).
+ *  Shared by the console's error rows and the fix-instruction list so one rule
+ *  governs the format everywhere. */
+export function errorLocation(e: CompileError): string {
+  return e.file ? (e.line != null ? `${e.file}:${e.line}` : e.file) : ''
+}
+
+/** One compile error as a bullet: `file:line — message`. */
 function errorLine(e: CompileError): string {
-  const where = e.file ? (e.line != null ? `${e.file}:${e.line}` : e.file) : ''
+  const where = errorLocation(e)
   return where ? `- ${where} — ${e.message}` : `- ${e.message}`
 }
 

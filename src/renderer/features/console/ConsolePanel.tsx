@@ -1,12 +1,22 @@
 import { useState } from 'react'
 import type { JSX } from 'react'
+import { X } from 'lucide-react'
 import type { CompileError } from '@shared/ipc'
 import type { CompileState } from '@renderer/components'
+import type { StatusTone } from '../../components/feedback/StatusDot'
 import { Badge } from '../../components/feedback/Badge'
 import { Button } from '../../components/forms/Button'
 import { IconButton } from '../../components/forms/IconButton'
 import { SegmentedControl } from '../../components/data/SegmentedControl'
 import { StatusDot } from '../../components/feedback/StatusDot'
+import { errorLocation } from './formatFixInstruction'
+
+/** Compile phase → status-dot tone (default neutral for idle). */
+const STATE_TONE: Partial<Record<CompileState, StatusTone>> = {
+  failed: 'error',
+  ok: 'ok',
+  running: 'busy'
+}
 
 interface Props {
   errors: CompileError[]
@@ -57,11 +67,7 @@ export function ConsolePanel({ errors, log, state, height, onJump, onFix, onClos
           borderBottom: '1px solid var(--border-subtle)'
         }}
       >
-        <StatusDot
-          tone={state === 'failed' ? 'error' : state === 'ok' ? 'ok' : state === 'running' ? 'busy' : 'neutral'}
-          pulse={state === 'running'}
-          label="Problems"
-        />
+        <StatusDot tone={STATE_TONE[state] ?? 'neutral'} pulse={state === 'running'} label="Problems" />
         {count > 0 && (
           <Badge tone="del" size="sm">
             {count} {count === 1 ? 'error' : 'errors'}
@@ -88,7 +94,7 @@ export function ConsolePanel({ errors, log, state, height, onJump, onFix, onClos
           Fix with Claude
         </Button>
         <IconButton label="Close console" size="sm" onClick={onClose}>
-          <CloseIcon />
+          <X size={15} />
         </IconButton>
       </header>
 
@@ -112,7 +118,7 @@ export function ConsolePanel({ errors, log, state, height, onJump, onFix, onClos
 function ErrorRow({ error, onJump }: { error: CompileError; onJump: (file: string, line: number) => void }): JSX.Element {
   const [hover, setHover] = useState(false)
   const jumpable = error.file !== '' && error.line != null
-  const where = error.file ? (error.line != null ? `${error.file}:${error.line}` : error.file) : ''
+  const where = errorLocation(error)
 
   return (
     <li
@@ -186,10 +192,3 @@ function Centered({ children }: { children: React.ReactNode }): JSX.Element {
   )
 }
 
-function CloseIcon(): JSX.Element {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-      <path d="M18 6 6 18M6 6l12 12" />
-    </svg>
-  )
-}
