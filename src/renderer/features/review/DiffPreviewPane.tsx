@@ -2,128 +2,150 @@ import { useEffect, useState } from 'react'
 import type { JSX } from 'react'
 import { Loader2, Minus, Plus } from 'lucide-react'
 import { IconButton } from '@renderer/components'
-import type { RenderBlockRequest, RenderBlockResult } from '@shared/ipc'
+import type { PreviewItem, PreviewRequest, PreviewResult } from '@shared/ipc'
 import { getDocument } from '../pdf/pdfjsSetup'
 import type { PDFPageProxy } from '../pdf/pdfjsSetup'
 
 interface Props {
   opId: string
-  index: number
-  /** review:renderBlock — the marked (latexdiff) render of the block. */
-  renderBlock: (req: RenderBlockRequest) => Promise<RenderBlockResult>
+  /** review:preview — the marked (latexdiff) render(s) of the complete edit. */
+  fetchPreview: (req: PreviewRequest) => Promise<PreviewResult>
 }
 
-type State = { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'ready'; data: Uint8Array }
+type State = { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'ready'; items: PreviewItem[] }
 
 const ZOOM_MIN = 0.6
 const ZOOM_MAX = 4
 const TRIM_PAD = 6
 const INK = 250 // channel value below which a pixel counts as ink
 
-/** The shared Preview pane: the selected block rendered with its change marked
- *  inline (latexdiff), cropped to the block's ink (no full-page whitespace),
- *  zoomable + scrollable. Fetched per (opId, index) — usually instant since the
- *  proposal primes every block's render eagerly on capture; a spinner covers a
- *  still-compiling block, an error (e.g. latexdiff missing) shows its message. */
-export function DiffPreviewPane({ opId, index, renderBlock }: Props): JSX.Element {
+/** The Preview tab: the complete edit rendered as one marked document (latexdiff
+ *  — additions blue/underlined, deletions red/struck), cropped to the edited
+ *  region's ink, zoom + scroll. Fetched once per op; the proposal primes the
+ *  render eagerly on capture, so this is usually instant. */
+export function DiffPreviewPane({ opId, fetchPreview }: Props): JSX.Element {
   const [state, setState] = useState<State>({ kind: 'loading' })
-  const [zoom, setZoom] = useState(1.4)
+  const [zoom, setZoom] = useState(1.9)
 
   useEffect(() => {
     let alive = true
     setState({ kind: 'loading' })
-    renderBlock({ opId, index }).then(
-      (res) => {
-        if (!alive) return
-        setState('pdf' in res ? { kind: 'ready', data: base64ToBytes(res.pdf) } : { kind: 'error', message: res.error })
-      },
+    fetchPreview({ opId }).then(
+      (res) => alive && setState({ kind: 'ready', items: res.items }),
       (e: unknown) => alive && setState({ kind: 'error', message: e instanceof Error ? e.message : String(e) })
     )
     return () => {
       alive = false
     }
-  }, [opId, index, renderBlock])
+  }, [opId, fetchPreview])
 
+  const ready = state.kind === 'ready' && state.items.length > 0
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, height: '100%' }}>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, height: '100%' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderBottom: '1px solid var(--border-faint)' }}>
         <span style={{ font: 'var(--weight-bold) var(--text-2xs)/1 var(--font-sans)', letterSpacing: 'var(--tracking-caps)', textTransform: 'uppercase', color: 'var(--ink-400)' }}>
           Preview
         </span>
         <div style={{ flex: 1 }} />
-        <IconButton size="sm" label="Zoom out" onClick={() => setZoom((z) => clamp(z - 0.2))} disabled={state.kind !== 'ready'}>
+        <IconButton size="sm" label="Zoom out" onClick={() => setZoom((z) => clamp(z - 0.2))} disabled={!ready}>
           <Minus size={14} />
         </IconButton>
-        <IconButton size="sm" label="Zoom in" onClick={() => setZoom((z) => clamp(z + 0.2))} disabled={state.kind !== 'ready'}>
+        <IconButton size="sm" label="Zoom in" onClick={() => setZoom((z) => clamp(z + 0.2))} disabled={!ready}>
           <Plus size={14} />
         </IconButton>
       </div>
       {state.kind === 'ready' ? (
-        <PdfView data={state.data} zoom={zoom} />
+        state.items.length > 0 ? (
+          <PreviewBody items={state.items} zoom={zoom} />
+        ) : (
+          <Centered>This change has no rendered preview (preamble-only — see the Changes tab).</Centered>
+        )
+      ) : state.kind === 'loading' ? (
+        <Centered>
+          <Loader2 size={20} style={{ color: 'var(--ink-300)', animation: 'stz-spin 0.9s linear infinite' }} />
+        </Centered>
       ) : (
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center' }}>
-          {state.kind === 'loading' ? (
-            <Loader2 size={20} style={{ color: 'var(--ink-300)', animation: 'stz-spin 0.9s linear infinite' }} />
-          ) : (
-            <span style={{ font: 'var(--text-sm)/1.5 var(--font-sans)', color: 'var(--ink-400)' }}>{state.message}</span>
-          )}
-        </div>
+        <Centered>{state.message}</Centered>
       )}
     </div>
   )
 }
 
-/** Renders every page of the marked block, each cropped to its ink box, stacked
- *  — so the preview is just the block (no page margins) and scrolls for a tall /
- *  multi-page block. Re-rasterizes on zoom for crisp output. Loads from in-memory
- *  bytes (not a blob URL) to avoid renderer CSP/transport issues. */
-function PdfView({ data, zoom }: { data: Uint8Array; zoom: number }): JSX.Element {
-  const [shots, setShots] = useState<{ url: string; w: number; h: number }[]>([])
+function Centered({ children }: { children: React.ReactNode }): JSX.Element {
+  return (
+    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center', font: 'var(--text-sm)/1.5 var(--font-sans)', color: 'var(--ink-400)' }}>
+      {children}
+    </div>
+  )
+}
+
+/** Loads every item's marked PDF, crops each page to its ink, and stacks them in
+ *  one scroll container; error items render their message inline. Re-rasterizes
+ *  on zoom. Loads from in-memory bytes (not a blob URL) to dodge renderer CSP. */
+function PreviewBody({ items, zoom }: { items: PreviewItem[]; zoom: number }): JSX.Element {
+  const [shots, setShots] = useState<(Shot | { error: string })[]>([])
 
   useEffect(() => {
     let alive = true
     const dpr = Math.min(typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1, 2)
-    const task = getDocument({ data: data.slice() })
     void (async () => {
-      try {
-        const pdf = await task.promise
-        const out: { url: string; w: number; h: number }[] = []
-        for (let n = 1; n <= pdf.numPages; n++) {
-          const page = await pdf.getPage(n)
-          const shot = await cropPageToInk(page, zoom * dpr, dpr)
-          if (shot) out.push(shot)
+      const out: (Shot | { error: string })[] = []
+      for (const item of items) {
+        if ('error' in item) {
+          out.push({ error: item.error })
+          continue
         }
-        if (alive) setShots(out)
-      } catch {
-        if (alive) setShots([])
+        try {
+          const task = getDocument({ data: base64ToBytes(item.pdf) })
+          const pdf = await task.promise
+          for (let n = 1; n <= pdf.numPages; n++) {
+            const shot = await cropPageToInk(await pdf.getPage(n), zoom * dpr, dpr)
+            if (shot) out.push(shot)
+          }
+          void task.destroy()
+        } catch {
+          out.push({ error: 'Could not render this change.' })
+        }
       }
+      if (alive) setShots(out)
     })()
     return () => {
       alive = false
-      void task.destroy()
     }
-  }, [data, zoom])
+  }, [items, zoom])
 
   return (
     <div style={{ flex: 1, overflow: 'auto', background: 'var(--surface-app)', padding: 16 }}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
-        {shots.map((s, i) => (
-          <img
-            key={i}
-            src={s.url}
-            width={s.w}
-            height={s.h}
-            style={{ display: 'block', background: 'var(--paper-1)', border: '1px solid var(--border-default)', borderRadius: 4 }}
-          />
-        ))}
+        {shots.map((s, i) =>
+          'error' in s ? (
+            <span key={i} style={{ font: 'var(--text-xs)/1.5 var(--font-sans)', color: 'var(--ink-400)' }}>
+              {s.error}
+            </span>
+          ) : (
+            <img
+              key={i}
+              src={s.url}
+              width={s.w}
+              height={s.h}
+              style={{ display: 'block', background: 'var(--paper-1)', border: '1px solid var(--border-default)', borderRadius: 4 }}
+            />
+          )
+        )}
       </div>
     </div>
   )
 }
 
-/** Render a page to an offscreen canvas, trim to its ink bounding box, return a
- *  PNG data URL + CSS size (backing px ÷ dpr). null for a blank page. */
-async function cropPageToInk(page: PDFPageProxy, scale: number, dpr: number): Promise<{ url: string; w: number; h: number } | null> {
+interface Shot {
+  url: string
+  w: number
+  h: number
+}
+
+/** Render a page to an offscreen canvas, trim to its ink box, return a PNG data
+ *  URL + CSS size (backing px ÷ dpr). null for a blank page. */
+async function cropPageToInk(page: PDFPageProxy, scale: number, dpr: number): Promise<Shot | null> {
   const viewport = page.getViewport({ scale })
   const canvas = document.createElement('canvas')
   canvas.width = Math.ceil(viewport.width)
@@ -136,7 +158,7 @@ async function cropPageToInk(page: PDFPageProxy, scale: number, dpr: number): Pr
   return trimCanvas(canvas, ctx, dpr)
 }
 
-function trimCanvas(src: HTMLCanvasElement, ctx: CanvasRenderingContext2D, dpr: number): { url: string; w: number; h: number } | null {
+function trimCanvas(src: HTMLCanvasElement, ctx: CanvasRenderingContext2D, dpr: number): Shot | null {
   const { width, height } = src
   const { data } = ctx.getImageData(0, 0, width, height)
   let minX = width

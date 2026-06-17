@@ -47,7 +47,7 @@ test.afterAll(async () => {
   await app?.close()
 })
 
-test('proposal review shows block cards + a marked latexdiff preview of the selected block', async () => {
+test('review opens on the Preview tab (marked latexdiff render) with a Changes diff tab', async () => {
   // Whole-doc op that edits the equation (no PDF-click selection needed).
   await page.keyboard.press('Meta+j')
   const composer = page.getByPlaceholder('Edit the whole document…')
@@ -65,21 +65,15 @@ test('proposal review shows block cards + a marked latexdiff preview of the sele
   await expect(bubble).toBeVisible()
   await bubble.getByRole('button', { name: 'Review' }).click()
 
-  // Left pane (default Blocks): an "Equation" card, marked Modified, word-diffing
-  // the source — the new \varepsilon term shows.
+  // Opens on the Preview tab: the complete edit rendered as one marked document
+  // (latexdiff), cropped to the edited region — compiled eagerly, shown as an
+  // image, no spinner left hanging.
   const overlay = page.getByTestId('review-overlay')
   await expect(overlay).toBeVisible()
-  await expect(overlay.getByTestId('block-card').first()).toBeVisible()
-  await expect(overlay.getByText('Equation').first()).toBeVisible()
-  await expect(overlay.getByText('Modified').first()).toBeVisible()
-  await expect(overlay).toContainText('varepsilon')
-
-  // Right pane: the selected block's marked latexdiff render is compiled eagerly
-  // and shown in the preview (a cropped page image), no spinner left hanging.
   await expect(overlay.locator('img').first()).toBeVisible({ timeout: 30000 })
 
-  // Source toggle shows the raw unified diff on the left.
-  await overlay.getByText('Source', { exact: true }).click()
+  // Changes tab shows the expanded unified LaTeX diff.
+  await overlay.getByText('Changes', { exact: true }).click()
   await expect(overlay).toContainText('varepsilon')
 
   // Accept commits and recompiles cleanly.
