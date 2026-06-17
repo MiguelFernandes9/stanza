@@ -24,7 +24,6 @@ import type {
   SettingsChanged,
 } from '@shared/ipc'
 import { parseProjectBlocks } from '@shared/blocks/parse'
-import { splitPreamble } from '@shared/blocks/changes'
 import { isHiddenInSidebar } from '../shared/files/artifacts'
 import { armSettleWatcher, watchSettled } from './infra/FileWatcher'
 import { DefaultProcessRunner } from './infra/ProcessRunner'
@@ -205,6 +204,7 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IpcChannels.reviewResolve, async (event, decision: ReviewDecision) => {
     const doc = sessionFor(event)
     const resolution = await doc.review.resolve(decision)
+    doc.diffPreview.invalidate(decision.opId) // free the op's cached block previews
     if (resolution.committed || !decision.accept) {
       patchOpRecord(doc.info.root, decision.opId, { accepted: decision.accept })
     }
@@ -230,16 +230,9 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IpcChannels.reviewRenderBlock, async (event, req: RenderBlockRequest) => {
     const doc = sessionFor(event)
-    // before = HEAD (pre-op), after = the op branch — so the preamble matches the
-    // block's revision (a package the proposed block needs is present on after).
-    const rev = req.side === 'before' ? 'HEAD' : `stanza/op-${req.opId}`
-    try {
-      const mainText = await doc.git.show(rev, doc.info.mainFile)
-      const result = await doc.snippets.render(splitPreamble(mainText), req.text)
-      return 'pdf' in result ? { pdf: result.pdf.toString('base64') } : { error: result.error }
-    } catch (err) {
-      return { error: String(err) }
-    }
+    // Eager build (primed at capture) usually means this resolves from cache.
+    const result = await doc.diffPreview.get(req.opId, req.index)
+    return 'pdf' in result ? { pdf: result.pdf.toString('base64') } : { error: result.error }
   })
 
   // v0.2 sidebar file management — each op mutates the doc repo (commit-per-op
@@ -460,6 +453,9 @@ async function runClaudeOp(
   }
 
   const proposal = await doc.review.capture(op.opId, req.instruction, req.spans)
+  // Eager: start compiling every changed block's marked preview now, so opening
+  // Review is instant (the renders are cached by the time the user clicks).
+  if (proposal) doc.diffPreview.prime(proposal.opId, proposal.branch, proposal.blocks)
   appendOpRecord(doc.info.root, {
     opId: op.opId,
     ts: new Date().toISOString(),

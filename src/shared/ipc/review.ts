@@ -10,16 +10,15 @@ export interface ReviewProposal {
   diff: string           // unified diff text
   blocks: BlockChange[]  // per-block changes for the review cards (Source = diff)
 }
-/** review:renderBlock — typeset one changed block in isolation for the preview.
- *  `side` selects the revision for the preamble (before = HEAD, after = op
- *  branch); `text` is the block's own source (already clipped of nested cards by
- *  computeBlockChanges) so the render shows exactly what the card shows. */
+/** review:renderBlock — the marked (latexdiff) render of one changed block,
+ *  identified by its index in `ReviewProposal.blocks`. Compiled eagerly when the
+ *  proposal is captured, so this usually resolves instantly from cache. */
 export interface RenderBlockRequest {
   opId: string
-  side: 'before' | 'after'
-  text: string
+  index: number
 }
-/** Page-1 PDF of the isolated block as base64, or a short compile error. */
+/** Page PDF of the marked block as base64, or a short compile/error message
+ *  (e.g. latexdiff missing, or a preamble block with no rendered preview). */
 export type RenderBlockResult = { pdf: string } | { error: string }
 
 export interface ReviewDecision { opId: string; accept: boolean }

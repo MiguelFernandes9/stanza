@@ -4,24 +4,26 @@ import { parseCompileLog } from '../../shared/latex/log'
 import type { ProcessRunner } from '../infra/ProcessRunner'
 
 const TECTONIC_HINT = 'tectonic not found — install with: brew install tectonic'
+const LATEXDIFF_HINT = 'latexdiff not found — install with: brew install latexdiff'
 
 /** Throwaway wrapper prefix for an isolated-block compile. Mirrors
  *  CompileService's `.stanza-scope` convention so the doc .gitignore
  *  (`.stanza-snippet*`) covers it and it never dirties the tree. Each render
- *  gets a unique numbered base so the before/after compiles a card fires
- *  concurrently never collide on the same files; all are cleaned up after. */
+ *  gets a unique numbered base so concurrent renders never collide on the same
+ *  files; all (old/new/marked + build artifacts) are cleaned up after. */
 const SNIPPET_PREFIX = '.stanza-snippet'
 const SNIPPET_EXTS = ['tex', 'pdf', 'log', 'aux', 'synctex.gz']
 
 export type SnippetResult = { pdf: Buffer } | { error: string }
 
-/** Compiles one block in isolation so the review overlay can show what it
- *  typesets to — `<preamble>\begin{document}<block>\end{document}`. Compiling
- *  the block alone (vs cropping the document PDF) means no neighbouring content
- *  bleeds in and no float migrates onto another page: the snippet page IS the
- *  block. Runs in the project root so relative \input/graphics/.sty/.bib
- *  resolve. Numbering/refs reset in isolation — this is a visual preview, not
- *  the final placement. */
+/** Renders one changed block in isolation with its change marked inline. Builds
+ *  two snippets — `<preamble>\begin{document}<before|after>\end{document}` — runs
+ *  latexdiff between them (so additions are underlined/blue and deletions
+ *  struck/red), and compiles the marked result. The identical preamble on both
+ *  sides means latexdiff marks ONLY the block body. Compiling the block alone
+ *  (vs the whole document) keeps the preview to just the change, in the project
+ *  root so relative \input/graphics/.sty/.bib resolve. Numbering/refs reset in
+ *  isolation — a visual preview, not the final placement. */
 export class SnippetCompiler {
   private root: string
   private seq = 0
@@ -34,23 +36,30 @@ export class SnippetCompiler {
     this.root = safeRealpath(root)
   }
 
-  /** Assemble + compile the wrapper. Returns the page-1 PDF bytes, or a short
-   *  error (tectonic missing, or the block can't stand alone — e.g. it needs a
-   *  macro defined mid-document). Always removes the wrapper + its build files. */
-  async render(preamble: string, blockText: string): Promise<SnippetResult> {
+  /** Marked render of before→after for one block. `before`/`after` are the
+   *  block's source on each side ('' for an added/removed block). Returns the
+   *  page PDF bytes, or a short error (latexdiff/tectonic missing, or the block
+   *  can't stand alone). Always removes every wrapper + build file it wrote. */
+  async renderDiff(preamble: string, before: string, after: string): Promise<SnippetResult> {
     const base = `${SNIPPET_PREFIX}-${++this.seq}` // unique per render — no collision
-    const target = `${base}.tex`
-    // \pagestyle{empty} drops the page number, so the only ink on the page is the
-    // block itself — the renderer's ink-trim then crops tight instead of spanning
-    // down to a footer (which left the block tiny in a near-empty pane).
-    const tex =
-      `${preamble}\\pagestyle{empty}\n\\begin{document}\n` +
-      `\\thispagestyle{empty}\n${blockText}\n\\end{document}\n`
-    writeFileSync(join(this.root, target), tex)
+    const oldName = `${base}-old.tex`
+    const newName = `${base}-new.tex`
+    const markedName = `${base}.tex`
+    writeFileSync(join(this.root, oldName), this.wrap(preamble, before))
+    writeFileSync(join(this.root, newName), this.wrap(preamble, after))
     try {
+      let marked
+      try {
+        marked = await this.runner.run({ cmd: 'latexdiff', args: [oldName, newName], cwd: this.root })
+      } catch (err) {
+        return { error: (err as NodeJS.ErrnoException).code === 'ENOENT' ? LATEXDIFF_HINT : String(err) }
+      }
+      if (marked.code !== 0) return { error: `latexdiff failed: ${marked.stderr.trim() || marked.code}` }
+      writeFileSync(join(this.root, markedName), marked.stdout)
+
       const proc = await this.runner.run({
         cmd: 'tectonic',
-        args: ['-X', 'compile', '--keep-logs', target],
+        args: ['-X', 'compile', '--keep-logs', markedName],
         cwd: this.root,
       })
       if (proc.code !== 0) {
@@ -59,13 +68,21 @@ export class SnippetCompiler {
       }
       return { pdf: readFileSync(join(this.root, `${base}.pdf`)) }
     } catch (err) {
-      const missing = (err as NodeJS.ErrnoException).code === 'ENOENT'
-      return { error: missing ? TECTONIC_HINT : String(err) }
+      return { error: (err as NodeJS.ErrnoException).code === 'ENOENT' ? TECTONIC_HINT : String(err) }
     } finally {
-      for (const ext of SNIPPET_EXTS) {
-        rmSync(join(this.root, `${base}.${ext}`), { force: true })
+      for (const stem of [base, `${base}-old`, `${base}-new`]) {
+        for (const ext of SNIPPET_EXTS) rmSync(join(this.root, `${stem}.${ext}`), { force: true })
       }
     }
+  }
+
+  /** `<preamble>\pagestyle{empty}\begin{document}\thispagestyle{empty}<body>…`.
+   *  \pagestyle{empty} drops the page number so the page holds only the block. */
+  private wrap(preamble: string, body: string): string {
+    return (
+      `${preamble}\\pagestyle{empty}\n\\begin{document}\n` +
+      `\\thispagestyle{empty}\n${body}\n\\end{document}\n`
+    )
   }
 }
 

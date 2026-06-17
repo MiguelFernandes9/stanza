@@ -4,6 +4,7 @@ import { GitClient } from './infra/GitClient'
 import type { Store } from './infra/Store'
 import { ClaudeService } from './services/ClaudeService'
 import { CompileService } from './services/CompileService'
+import { DiffPreviewService } from './services/DiffPreviewService'
 import { FileService } from './services/FileService'
 import { ReviewService } from './services/ReviewService'
 import { SnippetCompiler } from './services/SnippetCompiler'
@@ -18,6 +19,7 @@ export class DocumentSession {
   readonly claude: ClaudeService
   readonly files: FileService
   readonly snippets: SnippetCompiler
+  readonly diffPreview: DiffPreviewService
   /** Mutable: a structural file op that renames/deletes a .tex recomputes
    *  it (DocumentService.open) so document:current and later ops see the
    *  new layout. The root never changes, so git/claude/files stay valid. */
@@ -33,6 +35,7 @@ export class DocumentSession {
     this.claude = new ClaudeService(runner, store, info)
     this.files = new FileService(info.root, this.git)
     this.snippets = new SnippetCompiler(runner, info.root)
+    this.diffPreview = new DiffPreviewService(this.git, this.snippets, info)
     // No external-edit watcher: compile fires only on explicit user actions
     // (⌘S / accept / ⌘R) — disk is the source of truth, and an external edit
     // surfaces on the next save or recompile (docs/compile-triggers.md). This

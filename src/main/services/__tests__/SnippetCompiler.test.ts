@@ -6,21 +6,7 @@ import type { ProcessRunner, ProcResult, RunSpec } from '../../infra/ProcessRunn
 import { SnippetCompiler } from '../SnippetCompiler'
 
 const SNIPPET = '.stanza-snippet'
-
-/** The wrapper .tex tectonic was pointed at (last positional arg). */
-const targetOf = (spec: RunSpec): string => spec.args[spec.args.length - 1]
-
-class MockRunner implements ProcessRunner {
-  calls: RunSpec[] = []
-  /** Wrapper .tex content as it existed at invocation (cleanup removes it after). */
-  wrapperAtCall = ''
-  constructor(private handler: (spec: RunSpec) => ProcResult) {}
-  run(spec: RunSpec): Promise<ProcResult> {
-    this.calls.push(spec)
-    this.wrapperAtCall = readFileSync(join(spec.cwd, targetOf(spec)), 'utf8')
-    return Promise.resolve(this.handler(spec))
-  }
-}
+const lastArg = (spec: RunSpec): string => spec.args[spec.args.length - 1]
 
 let root: string
 beforeEach(() => {
@@ -30,57 +16,78 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true })
 })
 
-describe('SnippetCompiler.render', () => {
-  test('wraps preamble + block, invokes tectonic in the root, returns the pdf, cleans up', async () => {
+describe('SnippetCompiler.renderDiff', () => {
+  test('wraps both sides (page number suppressed), latexdiffs them, compiles the marked output, cleans up', async () => {
+    let oldWrapper = ''
     const runner = new MockRunner((spec) => {
-      writeFileSync(join(spec.cwd, targetOf(spec).replace('.tex', '.pdf')), Buffer.from('%PDF-1.7 fake'))
+      if (spec.cmd === 'latexdiff') {
+        oldWrapper = readFileSync(join(spec.cwd, spec.args[0]), 'utf8')
+        return { code: 0, stdout: '%marked\n\\begin{document}\\end{document}\n', stderr: '', timedOut: false }
+      }
+      // tectonic: write the page PDF next to the marked .tex
+      writeFileSync(join(spec.cwd, lastArg(spec).replace('.tex', '.pdf')), Buffer.from('%PDF marked'))
       return { code: 0, stdout: '', stderr: '', timedOut: false }
     })
     const compiler = new SnippetCompiler(runner, root)
 
-    const result = await compiler.render('\\documentclass{article}\n', '\\section{Intro}')
+    const result = await compiler.renderDiff('\\documentclass{article}\n', 'before body', 'after body')
 
-    expect(runner.calls[0]).toMatchObject({ cmd: 'tectonic', cwd: root })
-    expect(runner.calls[0].args.slice(0, 3)).toEqual(['-X', 'compile', '--keep-logs'])
-    expect(targetOf(runner.calls[0])).toMatch(/^\.stanza-snippet-\d+\.tex$/)
-    // page number suppressed so the renderer's ink-trim crops tight
-    expect(runner.wrapperAtCall).toContain('\\pagestyle{empty}')
-    expect(runner.wrapperAtCall).toContain('\\thispagestyle{empty}')
-    expect(runner.wrapperAtCall).toBe(
-      '\\documentclass{article}\n\\pagestyle{empty}\n\\begin{document}\n\\thispagestyle{empty}\n\\section{Intro}\n\\end{document}\n'
-    )
-    expect('pdf' in result && result.pdf.toString()).toContain('%PDF-1.7 fake')
-    // wrapper + build files removed (nothing left in the project root)
-    for (const ext of ['tex', 'pdf', 'log']) {
-      expect(existsSync(join(root, `${targetOf(runner.calls[0]).replace('.tex', '')}.${ext}`))).toBe(false)
+    const latexdiff = runner.calls.find((c) => c.cmd === 'latexdiff')!
+    expect(latexdiff.args).toHaveLength(2)
+    expect(latexdiff.args[0]).toMatch(/^\.stanza-snippet-\d+-old\.tex$/)
+    expect(latexdiff.args[1]).toMatch(/^\.stanza-snippet-\d+-new\.tex$/)
+    expect(oldWrapper).toContain('\\pagestyle{empty}')
+    expect(oldWrapper).toContain('before body')
+
+    const tectonic = runner.calls.find((c) => c.cmd === 'tectonic')!
+    expect(tectonic.args.slice(0, 3)).toEqual(['-X', 'compile', '--keep-logs'])
+    expect(lastArg(tectonic)).toMatch(/^\.stanza-snippet-\d+\.tex$/)
+
+    expect('pdf' in result && result.pdf.toString()).toContain('%PDF marked')
+    for (const stem of ['', '-old', '-new']) {
+      for (const ext of ['tex', 'pdf', 'log']) {
+        expect(existsSync(join(root, `${SNIPPET}-1${stem}.${ext}`))).toBe(false)
+      }
     }
   })
 
-  test('gives concurrent renders distinct wrapper files (no collision)', async () => {
-    const targets: string[] = []
+  test('reports the install hint when latexdiff is missing (no compile)', async () => {
     const runner = new MockRunner((spec) => {
-      targets.push(targetOf(spec))
-      writeFileSync(join(spec.cwd, targetOf(spec).replace('.tex', '.pdf')), Buffer.from('%PDF'))
+      if (spec.cmd === 'latexdiff') {
+        const err = new Error('spawn latexdiff ENOENT') as NodeJS.ErrnoException
+        err.code = 'ENOENT'
+        throw err
+      }
       return { code: 0, stdout: '', stderr: '', timedOut: false }
     })
     const compiler = new SnippetCompiler(runner, root)
 
-    await Promise.all([compiler.render('\\documentclass{article}\n', 'A'), compiler.render('\\documentclass{article}\n', 'B')])
+    const result = await compiler.renderDiff('\\documentclass{article}\n', 'a', 'b')
 
-    expect(new Set(targets).size).toBe(2) // each render used its own file
+    expect('error' in result && result.error).toContain('latexdiff')
+    expect(runner.calls.some((c) => c.cmd === 'tectonic')).toBe(false) // never reached compile
   })
 
-  test('surfaces a compile failure as an error message', async () => {
+  test('surfaces a tectonic compile failure', async () => {
     const runner = new MockRunner((spec) => {
-      writeFileSync(join(spec.cwd, targetOf(spec).replace('.tex', '.log')), '! Undefined control sequence.\nl.1 \\bogus\n')
-      return { code: 1, stdout: '', stderr: 'failed', timedOut: false }
+      if (spec.cmd === 'latexdiff') return { code: 0, stdout: '%marked', stderr: '', timedOut: false }
+      writeFileSync(join(spec.cwd, lastArg(spec).replace('.tex', '.log')), '! Undefined control sequence.\n')
+      return { code: 1, stdout: '', stderr: 'fail', timedOut: false }
     })
     const compiler = new SnippetCompiler(runner, root)
 
-    const result = await compiler.render('\\documentclass{article}\n', '\\bogus')
+    const result = await compiler.renderDiff('\\documentclass{article}\n', 'a', '\\bogus')
 
     expect('error' in result).toBe(true)
-    expect('error' in result && result.error.length).toBeGreaterThan(0)
     expect(existsSync(join(root, `${SNIPPET}-1.log`))).toBe(false) // cleaned up
   })
 })
+
+class MockRunner implements ProcessRunner {
+  calls: RunSpec[] = []
+  constructor(private handler: (spec: RunSpec) => ProcResult) {}
+  run(spec: RunSpec): Promise<ProcResult> {
+    this.calls.push(spec)
+    return Promise.resolve(this.handler(spec))
+  }
+}
