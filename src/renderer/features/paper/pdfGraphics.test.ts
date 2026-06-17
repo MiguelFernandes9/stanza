@@ -68,34 +68,7 @@ describe('graphicBoxesFromOps — op-list image/form bboxes in top-left points',
     expect(boxes[2]!.xRight).toBeCloseTo(51, 3)
   })
 
-  it('boxes a painted vector path (native TikZ) by its bbox under the CTM', () => {
-    // A stroked path with bbox [10,20,60,90] in user space, translated to (100,200).
-    const ops: GraphicOp[] = [
-      { op: 'transform', m: [1, 0, 0, 1, 100, 200] },
-      { op: 'path', bbox: [10, 20, 60, 90] }
-    ]
-    const [box] = graphicBoxesFromOps(ops, flip(792))
-    expect(box!.xLeft).toBeCloseTo(110, 3) // 100 + 10
-    expect(box!.xRight).toBeCloseTo(160, 3) // 100 + 60
-    // user y [220,290] → top-left [792−290, 792−220] = [502, 572]
-    expect(box!.yTop).toBeCloseTo(502, 3)
-    expect(box!.yBottom).toBeCloseTo(572, 3)
-  })
-
-  it('unions several painted paths into the drawing extent (a tikz figure)', () => {
-    const ops: GraphicOp[] = [
-      { op: 'path', bbox: [0, 0, 100, 0] }, // a horizontal stroke (degenerate height)
-      { op: 'path', bbox: [0, 0, 0, 50] }, // a vertical stroke
-      { op: 'path', bbox: [40, 40, 90, 80] } // a box
-    ]
-    const boxes = graphicBoxesFromOps(ops, flip(792))
-    expect(boxes).toHaveLength(3) // one box per painted path; the binner unions them
-    const xs = boxes.flatMap((b) => [b.xLeft, b.xRight])
-    expect(Math.min(...xs)).toBeCloseTo(0, 3)
-    expect(Math.max(...xs)).toBeCloseTo(100, 3)
-  })
-
-  it('returns no boxes for an op stream with no image/form/path ops', () => {
+  it('returns no boxes for an op stream with no image/form ops', () => {
     expect(graphicBoxesFromOps([{ op: 'transform', m: [1, 0, 0, 1, 0, 0] }, { op: 'save' }, { op: 'restore' }], flip(792))).toEqual([])
     expect(graphicBoxesFromOps([], flip(792))).toEqual([])
   })

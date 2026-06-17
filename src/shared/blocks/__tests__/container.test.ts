@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { isAtomicEnv, isContainerEnv, isDrawingEnv, isFloatEnv, isListEnv, isMathEnvName } from '../container'
+import { isAtomicEnv, isContainerEnv, isFloatEnv, isListEnv, isMathEnvName } from '../container'
 
 describe('isMathEnvName', () => {
   test('display-math envs, starred variants included', () => {
@@ -79,19 +79,5 @@ describe('isFloatEnv', () => {
     expect(isFloatEnv('theorem')).toBe(false)
     expect(isFloatEnv('tikzpicture')).toBe(false)
     expect(isFloatEnv(undefined)).toBe(false)
-  })
-})
-
-describe('isDrawingEnv', () => {
-  test('vector drawing envs', () => {
-    expect(isDrawingEnv('tikzpicture')).toBe(true)
-    expect(isDrawingEnv('pgfpicture')).toBe(true)
-    expect(isDrawingEnv('picture')).toBe(true)
-    expect(isDrawingEnv('axis')).toBe(true)
-  })
-  test('non-drawing and undefined', () => {
-    expect(isDrawingEnv('figure')).toBe(false)
-    expect(isDrawingEnv('tabular')).toBe(false)
-    expect(isDrawingEnv(undefined)).toBe(false)
   })
 })
