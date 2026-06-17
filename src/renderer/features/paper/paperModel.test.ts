@@ -616,6 +616,57 @@ describe('binContentToBlocks — nested boxes + float rule (nested-block model)'
     expect(boxBottom(para[0]!)).toBeCloseTo(622, 1)
   })
 
+  it('a figure decomposes into a GRAPHIC block + a caption block (drops the float-box rect)', () => {
+    // synctex attaches a whole-float bbox rect (H≈99, top 438) to BOTH the tikz
+    // interior lines and the caption line. Without dropping it the two children
+    // tie at top 438 and the caption swallows the drawing; the binner must drop it
+    // so tikz (node rects) and caption (text) get distinct regions.
+    // The tikz bbox rect synctex gives the drawing AND the caption: x[160,450]
+    // y[438,537], H≈99 — the drawing's real extent. The node label is a NARROW
+    // synctex rect (x[192,237]); the caption a separate text line at y556.
+    const FB = prect(4, 160, 438, 290, 99) // drawing bbox (also leaked onto the caption)
+    const rects = new Map<string, PdfRect[]>([
+      ['fig#1', [FB]], // the float owns this bbox → maxH 99, render page 4
+      ['tk#1', [prect(4, 192, 443, 45, 14), FB]], // tikz: a NARROW node label + the bbox
+      ['cap#1', [prect(4, 155, 556, 300, 14), FB]] // caption: a text rect + the (wrong) bbox
+    ])
+    const rowsByPage = new Map<number, TextRow[]>([
+      [4, [trow(443, 455, 192, 237), trow(556, 560, 155, 455)]] // node label + caption line
+    ])
+    // The drawing paths span the FULL width x[160,450] — wider than the label band.
+    const graphics = new Map<number, GraphicBox[]>([
+      [4, [
+        { yTop: 443, yBottom: 490, xLeft: 161, xRight: 450 },
+        { yTop: 490, yBottom: 537, xLeft: 161, xRight: 360 }
+      ]]
+    ])
+    const envNames = new Map<string, string>([['tk#1', 'tikzpicture']])
+    const meta = new Map<string, BlockMeta>([
+      ['fig#1', { parentId: null, isFloat: true, isSection: false }],
+      ['tk#1', { parentId: 'fig#1', isFloat: false, isSection: false }],
+      ['cap#1', { parentId: 'fig#1', isFloat: false, isSection: false }]
+    ])
+    const { boxesById } = binContentToBlocks(rects, rowsByPage, graphics, envNames, meta)
+    const tk = boxesById.get('tk#1')?.[0]
+    const cap = boxesById.get('cap#1')?.[0]
+    expect(tk).toBeDefined() // the graphic IS its own block (was NO BOX before the fix)
+    expect(cap).toBeDefined()
+    // the graphic block covers the WHOLE drawing (kept the bbox region → its wide
+    // x-band admits all the paths), not just the narrow label band that would clip
+    // the drawing before the fix. The box extent is the binned graphics (top 443).
+    expect(tk!.y).toBeCloseTo(443, 0)
+    expect(boxBottom(tk!)).toBeCloseTo(537, 0)
+    expect(tk!.x).toBeLessThanOrEqual(162)
+    expect(tk!.x + tk!.width).toBeGreaterThanOrEqual(449) // full drawing width, not the label
+    // the caption block covers the caption line, distinct (ends below the graphic)
+    expect(cap!.y).toBeCloseTo(556, 0)
+    expect(boxBottom(tk!)).toBeLessThan(cap!.y)
+    // figure encloses both
+    const fig = boxesById.get('fig#1')![0]!
+    expect(fig.y).toBeCloseTo(443, 0)
+    expect(boxBottom(fig)).toBeCloseTo(560, 0)
+  })
+
   it('a section box stays its heading line only; it does NOT enclose its children', () => {
     const rects = new Map<string, PdfRect[]>([
       ['sec#1', [prect(1, 90, 100, 300, 12)]], // heading line region

@@ -64,6 +64,16 @@ export function isListEnv(name: string | undefined): boolean {
   return name !== undefined && LIST_ENVS.has(name)
 }
 
+const DRAWING_ENVS = new Set(['tikzpicture', 'pgfpicture', 'picture', 'axis'])
+
+/** A vector-drawing environment whose extent lives in its rendered PATHS, not in
+ *  fine-grained interior synctex (unlike a tabular's cells). Its geometry box is
+ *  seeded by the float bounding-box rect synctex gives it, then grown by the
+ *  captured path graphics — so a pure-vector figure gets a real graphic box. */
+export function isDrawingEnv(name: string | undefined): boolean {
+  return name !== undefined && DRAWING_ENVS.has(name)
+}
+
 const FLOAT_ENVS = new Set(['figure', 'table'])
 
 /** A float environment (figure/table, starred too): LaTeX may place it on a
