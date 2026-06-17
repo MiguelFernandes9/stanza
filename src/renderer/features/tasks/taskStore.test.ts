@@ -163,6 +163,28 @@ describe('taskReducer — Read mode clears the live selection (BUG-49)', () => {
   })
 })
 
+describe('taskReducer — toggle-view flips Read ↔ Select', () => {
+  it('flips Select → Read, tearing down the live selection like set-view read', () => {
+    const sel = run(initialTaskState, { type: 'toggle-block', ids: ['p1'], additive: false })
+    expect(sel.view).toBe('select')
+    const s = run(sel, { type: 'toggle-view' })
+    expect(s.view).toBe('read')
+    expect(s.tasks).toHaveLength(0) // empty selection torn down (same path as set-view)
+    expect(s.activeTask).toBeNull()
+  })
+
+  it('flips Read → Select', () => {
+    const read = run(initialTaskState, { type: 'set-view', view: 'read' })
+    const s = run(read, { type: 'toggle-view' })
+    expect(s.view).toBe('select')
+  })
+
+  it('round-trips back to the starting view', () => {
+    const s = run(initialTaskState, { type: 'toggle-view' }, { type: 'toggle-view' })
+    expect(s.view).toBe(initialTaskState.view)
+  })
+})
+
 describe('taskReducer — lifecycle', () => {
   const composed = (): TaskState =>
     run(
