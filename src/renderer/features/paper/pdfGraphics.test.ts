@@ -73,3 +73,68 @@ describe('graphicBoxesFromOps — op-list image/form bboxes in top-left points',
     expect(graphicBoxesFromOps([], flip(792))).toEqual([])
   })
 })
+
+describe('graphicBoxesFromOps — native vector path bboxes (tikz/pgfplots, rules)', () => {
+  // pdf.js 6.x emits ONE constructPath op carrying [paintOp, data, minMax]; minMax
+  // is the path's [minX,minY,maxX,maxY] bbox in PRE-CTM space. A tikz/pgfplots plot
+  // is a stream of such painted paths (no image/form), so without this they leave
+  // zero rendered signal and a figure block gets no box (B4).
+  it('boxes a stroked path from its minMax under the CTM', () => {
+    const ops: GraphicOp[] = [
+      { op: 'transform', m: [1, 0, 0, 1, 100, 200] },
+      { op: 'path', paints: true, minMax: [10, 20, 30, 40] }
+    ]
+    const [box] = graphicBoxesFromOps(ops, flip(792))
+    expect(box!.xLeft).toBeCloseTo(110, 3)
+    expect(box!.xRight).toBeCloseTo(130, 3)
+    // user y [220,240] → top-left [792−240, 792−220]
+    expect(box!.yTop).toBeCloseTo(552, 3)
+    expect(box!.yBottom).toBeCloseTo(572, 3)
+  })
+
+  it('scales the path bbox by the CTM', () => {
+    const ops: GraphicOp[] = [
+      { op: 'transform', m: [2, 0, 0, 3, 0, 0] },
+      { op: 'path', paints: true, minMax: [0, 0, 10, 10] }
+    ]
+    const [box] = graphicBoxesFromOps(ops, flip(792))
+    expect(box!.xRight).toBeCloseTo(20, 3) // 10·2
+    expect(box!.yTop).toBeCloseTo(762, 3) // user y 30 → 792−30
+    expect(box!.yBottom).toBeCloseTo(792, 3)
+  })
+
+  it('does not box a non-painting path (endPath / clip-only)', () => {
+    const ops: GraphicOp[] = [
+      { op: 'transform', m: [1, 0, 0, 1, 0, 0] },
+      { op: 'path', paints: false, minMax: [0, 0, 10, 10] }
+    ]
+    expect(graphicBoxesFromOps(ops, flip(792))).toEqual([])
+  })
+
+  it('skips a painted path with no minMax (defensive)', () => {
+    expect(graphicBoxesFromOps([{ op: 'path', paints: true, minMax: null }], flip(792))).toEqual([])
+  })
+
+  it('emits one box per painted path — the binner unions them per block', () => {
+    const ops: GraphicOp[] = [
+      { op: 'path', paints: true, minMax: [0, 0, 5, 5] },
+      { op: 'path', paints: true, minMax: [10, 10, 20, 20] },
+      { op: 'path', paints: false, minMax: [0, 0, 100, 100] } // clip — ignored
+    ]
+    expect(graphicBoxesFromOps(ops, flip(792))).toHaveLength(2)
+  })
+
+  it('tracks the CTM through save/restore for paths too', () => {
+    const ops: GraphicOp[] = [
+      { op: 'transform', m: [1, 0, 0, 1, 100, 100] },
+      { op: 'save' },
+      { op: 'transform', m: [1, 0, 0, 1, 500, 0] },
+      { op: 'path', paints: true, minMax: [0, 0, 1, 1] }, // ctm x at 600
+      { op: 'restore' },
+      { op: 'path', paints: true, minMax: [0, 0, 1, 1] } // ctm x back at 100
+    ]
+    const boxes = graphicBoxesFromOps(ops, flip(792))
+    expect(boxes[0]!.xLeft).toBeCloseTo(600, 3)
+    expect(boxes[1]!.xLeft).toBeCloseTo(100, 3)
+  })
+})

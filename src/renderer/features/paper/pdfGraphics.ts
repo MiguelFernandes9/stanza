@@ -2,9 +2,10 @@ import type { PDFPageProxy } from '../pdf/pdfjsSetup'
 
 /** One painted image / graphic, in the SAME top-left point space as `TextRow`
  *  (`getViewport({ scale: 1 })`). The pdf.js text layer has zero rows for a
- *  vector image (`\includegraphics{plot.pdf}` is an embedded-PDF Form XObject),
- *  so the rendered graphic bbox is the source of truth for a figure's extent —
- *  the missing half of "a block's box = the union of everything it painted". */
+ *  graphic — whether an embedded-PDF Form XObject (`\includegraphics{plot.pdf}`)
+ *  or NATIVE vector paths (a tikz/pgfplots plot is a stream of stroke/fill ops) —
+ *  so the rendered graphic bbox is the source of truth for a figure's extent: the
+ *  missing half of "a block's box = the union of everything it painted". */
 export interface GraphicBox {
   yTop: number
   yBottom: number
@@ -24,6 +25,11 @@ export type GraphicOp =
    *  (`\includegraphics` of an embedded PDF). */
   | { op: 'form'; matrix: number[] | null; bbox: number[] | null }
   | { op: 'formEnd' }
+  /** A native vector path (tikz/pgfplots strokes & fills, rules). `minMax` is the
+   *  path's [minX,minY,maxX,maxY] bbox in PRE-CTM space (pdf.js `constructPath`);
+   *  `paints` is false for a clip / `endPath` that draws no ink. A plot is a stream
+   *  of these — the only rendered signal a vector graphic leaves (no image/form). */
+  | { op: 'path'; paints: boolean; minMax: number[] | null }
 
 /** Compose two affine matrices `[a,b,c,d,e,f]` (point (x,y) ↦ (ax+cy+e,
  *  bx+dy+f)): the result applies `n` first, then `m` — i.e. concatenating `n`
@@ -92,9 +98,50 @@ export function graphicBoxesFromOps(ops: GraphicOp[], convert: (x: number, y: nu
       case 'formEnd':
         ctm = stack.pop() ?? ctm
         break
+      case 'path':
+        // A painted vector path: its minMax bbox (pre-CTM) mapped through the CTM,
+        // exactly like a form's bbox. A clip/endPath (paints:false) draws no ink.
+        if (g.paints && g.minMax) {
+          const [x0, y0, x1, y1] = g.minMax
+          out.push(cornersBox(ctm, [[x0!, y0!], [x1!, y0!], [x1!, y1!], [x0!, y1!]], convert))
+        }
+        break
     }
   }
   return out
+}
+
+/** Normalise a pdf.js operator list (`fnArray` + `argsArray`) to the bbox-relevant
+ *  `GraphicOp` stream — the only ops `graphicBoxesFromOps` tracks (CTM save/restore/
+ *  transform, image, Form XObject, painted vector path). `OPS` is injected so this
+ *  stays pdfjs-free and unit-testable; `pageGraphics` and the offline geometry
+ *  harness share this one mapping. */
+export function graphicOpsFromList(
+  fnArray: ArrayLike<number>,
+  argsArray: ArrayLike<unknown[]>,
+  OPS: Record<string, number>
+): GraphicOp[] {
+  const ops: GraphicOp[] = []
+  for (let i = 0; i < fnArray.length; i++) {
+    const fn = fnArray[i]!
+    const args = argsArray[i] as unknown[]
+    if (fn === OPS.save) ops.push({ op: 'save' })
+    else if (fn === OPS.restore) ops.push({ op: 'restore' })
+    else if (fn === OPS.transform) ops.push({ op: 'transform', m: Array.from(args as number[]) })
+    else if (fn === OPS.paintImageXObject || fn === OPS.paintImageMaskXObject || fn === OPS.paintInlineImageXObject)
+      ops.push({ op: 'image' })
+    else if (fn === OPS.paintFormXObjectBegin)
+      ops.push({ op: 'form', matrix: args[0] ? Array.from(args[0] as number[]) : null, bbox: args[1] ? Array.from(args[1] as number[]) : null })
+    else if (fn === OPS.paintFormXObjectEnd) ops.push({ op: 'formEnd' })
+    // pdf.js 6.x folds path painting into one op: args = [paintOp, data, minMax].
+    // minMax is the path bbox (pre-CTM); endPath (a clip / `n`) paints no ink.
+    else if (fn === OPS.constructPath) {
+      const paintOp = args[0] as number
+      const minMax = args[2] as ArrayLike<number> | undefined
+      ops.push({ op: 'path', paints: paintOp !== OPS.endPath, minMax: minMax ? Array.from(minMax) : null })
+    }
+  }
+  return ops
 }
 
 const cache = new WeakMap<PDFPageProxy, Promise<GraphicBox[]>>()
@@ -112,19 +159,7 @@ export function pageGraphics(page: PDFPageProxy): Promise<GraphicBox[]> {
     const { OPS } = await import('../pdf/pdfjsSetup')
     const viewport = page.getViewport({ scale: 1 })
     const list = await page.getOperatorList()
-    const ops: GraphicOp[] = []
-    for (let i = 0; i < list.fnArray.length; i++) {
-      const fn = list.fnArray[i]
-      const args = list.argsArray[i] as unknown[]
-      if (fn === OPS.save) ops.push({ op: 'save' })
-      else if (fn === OPS.restore) ops.push({ op: 'restore' })
-      else if (fn === OPS.transform) ops.push({ op: 'transform', m: Array.from(args as number[]) })
-      else if (fn === OPS.paintImageXObject || fn === OPS.paintImageMaskXObject || fn === OPS.paintInlineImageXObject)
-        ops.push({ op: 'image' })
-      else if (fn === OPS.paintFormXObjectBegin)
-        ops.push({ op: 'form', matrix: args[0] ? Array.from(args[0] as number[]) : null, bbox: args[1] ? Array.from(args[1] as number[]) : null })
-      else if (fn === OPS.paintFormXObjectEnd) ops.push({ op: 'formEnd' })
-    }
+    const ops = graphicOpsFromList(list.fnArray, list.argsArray as ArrayLike<unknown[]>, OPS as unknown as Record<string, number>)
     return graphicBoxesFromOps(ops, (x, y) => viewport.convertToViewportPoint(x, y))
   })()
   cache.set(page, boxes)
