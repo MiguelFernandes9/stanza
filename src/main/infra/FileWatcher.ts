@@ -1,9 +1,13 @@
 import { watch } from 'chokidar'
 import { relative, sep } from 'node:path'
+import { BUILD_ARTIFACT_SUFFIXES } from '../../shared/files/artifacts'
 
 /** Build artifacts the document watcher must never report — they churn
- *  on every compile and would re-trigger the loop. */
-const IGNORED_SUFFIXES = ['.pdf', '.synctex.gz', '.log', '.aux']
+ *  on every compile and would re-trigger the loop. Shares the sidebar's
+ *  artifact list and adds `.pdf`: the COMPILED pdf rewrites on every build, so
+ *  the watcher ignores all pdf churn (the sidebar instead hides only the named
+ *  output pdf, keeping figure pdfs visible). */
+const IGNORED_SUFFIXES = ['.pdf', ...BUILD_ARTIFACT_SUFFIXES]
 
 /** Watch root and call onSettle(changedRelPaths) once changes stop for
  *  settleMs. Returns a dispose function. */

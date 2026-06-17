@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import type { IpcMainInvokeEvent, WebContents } from 'electron'
 import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { IpcChannels } from '@shared/ipc'
 import type {
   BlockSpan,
@@ -23,6 +23,7 @@ import type {
   SettingsChanged,
 } from '@shared/ipc'
 import { parseProjectBlocks } from '@shared/blocks/parse'
+import { isHiddenInSidebar } from '../shared/files/artifacts'
 import { armSettleWatcher } from './infra/FileWatcher'
 import { DefaultProcessRunner } from './infra/ProcessRunner'
 import { GitClient } from './infra/GitClient'
@@ -123,7 +124,10 @@ export function registerIpcHandlers(): void {
     return { diff, files: changedFilesInDiff(diff) }
   })
 
-  ipcMain.handle(IpcChannels.documentFiles, (event): FileEntry[] => listFiles(sessionFor(event).info.root))
+  ipcMain.handle(IpcChannels.documentFiles, (event): FileEntry[] => {
+    const { info } = sessionFor(event)
+    return listFiles(info.root, outputPdfRel(info))
+  })
 
   // All project files' blocks in one merged tree — overlays must cover
   // \include'd chapters, not just the main file (BUG-2/3).
@@ -267,7 +271,7 @@ export function registerIpcHandlers(): void {
       ],
     })
     if (result.canceled || result.filePaths.length === 0) {
-      return { files: listFiles(doc.info.root) } satisfies FileMutationResult
+      return { files: listFiles(doc.info.root, outputPdfRel(doc.info)) } satisfies FileMutationResult
     }
     const rels = await doc.files.importFiles(a.dir, result.filePaths)
     return fileMutationResult(doc, rels[0])
@@ -490,7 +494,7 @@ async function fileMutationResult(
   const changed = info ? fileSetChanged(before, info) : false
   if (info) doc.info = info
   return {
-    files: listFiles(doc.info.root),
+    files: listFiles(doc.info.root, outputPdfRel(doc.info)),
     ...(changed && info ? { doc: info } : {}),
     ...(newRelPath ? { newRelPath } : {}),
   }
@@ -550,7 +554,14 @@ const FILE_KINDS: [RegExp, FileEntry['kind']][] = [
   [/\.(md|txt)$/, 'text'],
 ]
 
-function listFiles(root: string, dir = ''): FileEntry[] {
+/** The compiled output pdf, root-relative: tectonic writes `<mainBase>.pdf` at
+ *  the repo root (CompileService.pdfPath). Hidden from the sidebar by name so a
+ *  figure pdf elsewhere stays visible. */
+function outputPdfRel(info: DocumentInfo): string {
+  return basename(info.mainFile).replace(/\.tex$/i, '.pdf')
+}
+
+function listFiles(root: string, outPdf: string, dir = ''): FileEntry[] {
   let entries
   try {
     entries = readdirSync(join(root, dir), { withFileTypes: true })
@@ -565,9 +576,11 @@ function listFiles(root: string, dir = ''): FileEntry[] {
         // Emit the directory itself (so an EMPTY dir is visible and a New folder
         // can't re-collide, BUG-47), then recurse for its children.
         found.push({ relPath, kind: 'dir' })
-        found.push(...listFiles(root, relPath))
+        found.push(...listFiles(root, outPdf, relPath))
       }
-    } else {
+    } else if (!isHiddenInSidebar(relPath, outPdf)) {
+      // Drop dotfiles, LaTeX build artifacts, and the compiled output pdf — the
+      // sidebar shows sources and real assets only (figure pdfs/images stay).
       const kind = FILE_KINDS.find(([re]) => re.test(entry.name))?.[1] ?? 'other'
       found.push({ relPath, kind })
     }
