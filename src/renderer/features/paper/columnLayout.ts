@@ -43,6 +43,13 @@ const MIN_SIDE = 2
 /** Half-line slack (pt) for matching an item's y to a band — an item sitting
  *  between two baselines still lands in the right band. */
 const BAND_SLACK = 7
+/** Two-column is a PAGE property: a genuine two-column page has its two-column
+ *  bands covering a majority of its rows. A lone band can look two-column on an
+ *  otherwise single-column page — a numbered display equation (formula left,
+ *  number right), a table's own columns, a plot's tick labels — so demote the
+ *  two-column verdict unless this fraction of the page's rows lives in two-column
+ *  bands. Without this, those local x-clusters split single-column block boxes. */
+const TWO_COL_PAGE_FRAC = 0.5
 
 /** Cluster rows into vertical bands by baseline gap (reuses the MAX_LINE_GAP
  *  clustering paperModel.contentBand uses), then classify each band's column
@@ -55,7 +62,14 @@ export function pageColumnLayout(rows: TextRow[]): ColumnLayout {
     if (sorted[i]!.baseline - sorted[i - 1]!.baseline > BAND_GAP) groups.push([])
     groups[groups.length - 1]!.push(sorted[i]!)
   }
-  return { bands: groups.map(detectBand) }
+  const bands = groups.map(detectBand)
+  // Page-level gate: keep two-column bands only when they dominate the page;
+  // otherwise a single isolated cluster (equation+number, table cells, plot ticks)
+  // would falsely split an otherwise single-column page's boxes.
+  const twoRows = groups.reduce((n, g, i) => n + (bands[i]!.kind === 'two' ? g.length : 0), 0)
+  if (twoRows < TWO_COL_PAGE_FRAC * rows.length)
+    return { bands: bands.map((b) => (b.kind === 'two' ? { top: b.top, bottom: b.bottom, kind: 'single' as const } : b)) }
+  return { bands }
 }
 
 /** Classify one baseline-band: find the central x where the FEWEST rows overlap

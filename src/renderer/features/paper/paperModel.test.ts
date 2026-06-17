@@ -551,69 +551,58 @@ describe('binContentToBlocks — one row-union builder for every text block', ()
   })
 })
 
-describe('binContentToBlocks — nested boxes + float rule (nested-block model)', () => {
-  it('a container env box ENCLOSES its child equation; the equation box is the subset', () => {
-    // theorem (prose 110/123 wide) ⊃ equation (row 145, centered x 200–410).
+describe('binContentToBlocks — flat model: absorbed math, floats, section headings', () => {
+  it('a theorem block absorbs its internal prose AND math into ONE box', () => {
+    // Flat model: the equation inside the theorem is NOT a separate block — the
+    // theorem is one selectable unit, so its box covers the prose AND the formula
+    // (a centered row at 200–410) as a single rectangle.
     const rects = new Map<string, PdfRect[]>([
-      ['thm#1', [prect(1, 90, 99, 432, 50)]], // theorem interior region 99–149
-      ['eq#1', [prect(1, 200, 134, 210, 12)]] // equation child region 134–146
+      ['thm#1', [prect(1, 90, 99, 432, 50)]] // theorem interior region 99–149
     ])
     const rows = [
       trow(99, 110, 90, 522), // theorem prose
       trow(112, 123, 90, 522), // theorem prose
-      trow(134, 145, 200, 410) // the equation
+      trow(134, 145, 200, 410) // the internal equation — absorbed, not its own block
     ]
-    const meta = new Map<string, BlockMeta>([
-      ['thm#1', { parentId: null, isFloat: false, isSection: false }],
-      ['eq#1', { parentId: 'thm#1', isFloat: false, isSection: false }]
-    ])
-    const { boxesById } = binContentToBlocks(rects, new Map([[1, rows]]), new Map(), new Map(), meta)
-    const thm = boxesById.get('thm#1')![0]!
-    const eq = boxesById.get('eq#1')![0]!
-    // equation box is the centered subset
-    expect(eq.x).toBeCloseTo(200, 1)
-    expect(eq.x + eq.width).toBeCloseTo(410, 1)
-    // theorem encloses the equation AND its own prose (top at prose, full width)
-    expect(thm.y).toBeLessThanOrEqual(eq.y)
-    expect(boxBottom(thm)).toBeGreaterThanOrEqual(boxBottom(eq))
-    expect(thm.x).toBeLessThanOrEqual(eq.x)
-    expect(thm.x + thm.width).toBeGreaterThanOrEqual(eq.x + eq.width)
-    expect(thm.y).toBeCloseTo(99, 1) // includes the prose above the equation
+    const { boxesById } = binContentToBlocks(rects, new Map([[1, rows]]))
+    const thm = boxesById.get('thm#1')!
+    expect(thm).toHaveLength(1)
+    expect(thm[0]!.y).toBeCloseTo(99, 1) // prose top
+    expect(boxBottom(thm[0]!)).toBeCloseTo(145, 1) // formula bottom — all in one box
+    expect(thm[0]!.x).toBeCloseTo(90, 1) // full prose width, not the centered formula
   })
 
-  it('a page-breaking float gets ONE box (its children) and steals no sibling prose (FIG2)', () => {
-    // figure floats: source-site region on page 1 (over the sibling paragraph),
-    // real content (tikz + caption) on page 2. The float owns no rows, so the
-    // page-1 phantom never forms and the paragraph keeps its prose.
+  it('a page-breaking float is ONE box on its render page and steals no sibling prose (FIG2)', () => {
+    // The figure's source-site rect is on page 1 (over the sibling paragraph) but
+    // it RENDERS on page 2 (tikz plot + caption). Flat model: the float owns its
+    // render-page ink directly (rows ∪ graphic) — no child blocks — so the page-1
+    // phantom never forms and the paragraph keeps its prose.
     const rects = new Map<string, PdfRect[]>([
-      ['fig#1', [prect(1, 150, 600, 300, 24), prect(2, 150, 73, 330, 183)]], // source p1 + content p2
-      // the tikz child ALSO leaves a thin source-site rect on p1 (its \begin maps
-      // to the galley) — the real bug the live gate caught; the fix must drop it.
-      ['tikz#1', [prect(1, 90, 612, 432, 11), prect(2, 159, 79, 330, 125)]], // source p1 + content p2 (79–204)
-      ['cap#1', [prect(2, 159, 245, 330, 11)]], // caption child p2 (245–256)
+      ['fig#1', [prect(1, 150, 600, 300, 24), prect(2, 150, 73, 330, 183)]], // source p1 + render p2
       ['para#1', [prect(1, 90, 600, 432, 24)]] // sibling prose on p1
     ])
     const rowsByPage = new Map<number, TextRow[]>([
       [1, [trow(601, 612, 90, 522), trow(611, 622, 90, 522)]], // the sibling paragraph
-      [2, [trow(79, 90, 159, 489), trow(190, 201, 159, 489), trow(245, 254, 200, 400)]] // tikz + caption
+      [2, [trow(190, 201, 159, 489), trow(245, 254, 200, 400)]] // a tikz label + the caption
+    ])
+    const graphics = new Map<number, GraphicBox[]>([
+      [2, [{ yTop: 79, yBottom: 204, xLeft: 159, xRight: 489 }]] // the native vector plot on p2
     ])
     const meta = new Map<string, BlockMeta>([
       ['fig#1', { parentId: null, isFloat: true, isSection: false }],
-      ['tikz#1', { parentId: 'fig#1', isFloat: false, isSection: false }],
-      ['cap#1', { parentId: 'fig#1', isFloat: false, isSection: false }],
       ['para#1', { parentId: null, isFloat: false, isSection: false }]
     ])
-    const { boxesById } = binContentToBlocks(rects, rowsByPage, new Map(), new Map(), meta)
+    const { boxesById } = binContentToBlocks(rects, rowsByPage, graphics, new Map(), meta)
     const figBoxes = boxesById.get('fig#1')!
     expect(figBoxes).toHaveLength(1) // no phantom page-1 box
     expect(figBoxes[0]!.page).toBe(2)
-    expect(figBoxes[0]!.y).toBeCloseTo(79, 1) // graphic top
-    expect(boxBottom(figBoxes[0]!)).toBeCloseTo(254, 1) // caption bottom
+    expect(figBoxes[0]!.y).toBeCloseTo(79, 0) // plot top (the graphic)
+    expect(boxBottom(figBoxes[0]!)).toBeCloseTo(254, 0) // caption bottom — plot ∪ caption, one box
     // the sibling paragraph keeps its two prose rows on page 1 (not stolen)
     const para = boxesById.get('para#1')!
     expect(para).toHaveLength(1)
     expect(para[0]!.page).toBe(1)
-    expect(boxBottom(para[0]!)).toBeCloseTo(622, 1)
+    expect(boxBottom(para[0]!)).toBeCloseTo(622, 0)
   })
 
   it('a section box stays its heading line only; it does NOT enclose its children', () => {
@@ -796,7 +785,9 @@ describe('environmentInteriorSpan — exclude \\begin/\\end delimiter lines (BUG
     id: 'fig#1',
     kind: 'environment',
     span: { file: 'ch2.tex', startLine, endLine },
-    sectionId: null
+    sectionId: null,
+    parentId: null,
+    depth: 0
   })
 
   it('returns the interior span for an environment with content between delimiters', () => {
@@ -819,7 +810,9 @@ describe('environmentInteriorSpan — exclude \\begin/\\end delimiter lines (BUG
       envName: 'equation',
       span: { file: 'ch1.tex', startLine: 239, endLine: 244 },
       contentStartLine: 241,
-      sectionId: null
+      sectionId: null,
+      parentId: null,
+      depth: 0
     }
     expect(environmentInteriorSpan(eqn)).toEqual({ file: 'ch1.tex', startLine: 241, endLine: 243 })
   })
@@ -829,7 +822,9 @@ describe('environmentInteriorSpan — exclude \\begin/\\end delimiter lines (BUG
       id: 'p#1',
       kind: 'paragraph',
       span: { file: 'ch2.tex', startLine: 18, endLine: 20 },
-      sectionId: null
+      sectionId: null,
+      parentId: null,
+      depth: 0
     }
     expect(environmentInteriorSpan(para)).toBeNull()
   })
@@ -860,7 +855,9 @@ describe('blockGeometryRects — query interior, exclude \\end phantom (BUG-21)'
     id: 'fig#1',
     kind: 'environment',
     span: { file: 'ch2.tex', startLine: 11, endLine: 16 },
-    sectionId: null
+    sectionId: null,
+    parentId: null,
+    depth: 0
   }
 
   it('queries only the interior span, so the \\end rect never enters the box', async () => {
@@ -896,7 +893,9 @@ describe('blockGeometryRects — query interior, exclude \\end phantom (BUG-21)'
       id: 'e#1',
       kind: 'environment',
       span: { file: 'a.tex', startLine: 5, endLine: 6 },
-      sectionId: null
+      sectionId: null,
+      parentId: null,
+      depth: 0
     }
     await blockGeometryRects(tiny, async (span) => {
       calls.push(span)
@@ -911,7 +910,9 @@ describe('blockGeometryRects — query interior, exclude \\end phantom (BUG-21)'
       id: 'p#1',
       kind: 'paragraph',
       span: { file: 'a.tex', startLine: 18, endLine: 20 },
-      sectionId: null
+      sectionId: null,
+      parentId: null,
+      depth: 0
     }
     await blockGeometryRects(para, async (span) => {
       calls.push(span)

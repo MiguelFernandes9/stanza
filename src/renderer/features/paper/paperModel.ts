@@ -261,24 +261,6 @@ const FURNITURE_SHARE = 0.25
  *  text-row baseline (the bullet measured 719.86 vs 717.7 on the demo). */
 const BAND_EPS = 2
 
-/** M2-9: a display equation's synctex region top is unreliable — it can sit ~a
- *  line ABOVE the rendered glyphs (a tall \big| box's v−H reaches up) or below
- *  them. Snap a math region's top to its real ink: the topmost text row that
- *  starts within the region's x-band and renders within this many line-heights
- *  of the synctex span. */
-const MATH_INK_SLACK = 1.5
-/** A row counts as the equation's ink only if it STARTS at/after the region's
- *  left edge — the indented/numbered formula — not at the full-width prose
- *  margin. That x-test separates the formula from the paragraph line above it. */
-const MATH_INK_X_EPS = 1
-
-/** Median row height (≈ the body em) — the unit for MATH_INK_SLACK. */
-function medianRowHeight(rows: TextRow[]): number {
-  if (!rows.length) return 12
-  const hs = rows.map((r) => r.yBottom - r.yTop).sort((a, b) => a - b)
-  return hs[Math.floor(hs.length / 2)]!
-}
-
 /** The document's body text-area vertical band `{top, bottom}` (PDF pt),
  *  inferred from the pdf.js text rows of EVERY page overlaid: the body is the
  *  single contiguous baseline cluster, while running heads and page-number
@@ -334,39 +316,37 @@ export interface BlockMeta {
   isSection: boolean
 }
 
-/** Build every block's box from what it RENDERED (glyph rows + graphic bboxes),
- *  now NESTED. synctex only says WHERE a block landed; the extent comes from the
- *  rendered content. Two passes:
+/** Build every block's box from what it RENDERED (glyph rows + graphic bboxes).
+ *  synctex only says WHERE a block starts (and on which page); the EXTENT comes
+ *  from the rendered ink. Flat content model — every block is a leaf on the
+ *  content axis, so there is no nesting forest: one reading-order WALL partition
+ *  per (page × column).
  *
- *  1. PARTITION (per page): rows/graphics bind to the DEEPEST containing block.
- *     Each block's solid synctex rects union to a region `{top, x-band}`; regions
- *     form a forest by `parentId`. An item joins the region whose `[top-ε,
- *     sibling-ceiling) × x-band` holds its partition key — a row's BASELINE
- *     (never the font-inflated `yTop`, BUG-41), a graphic's TOP — descending to
- *     the deepest child that still contains it (innermost wins). The sibling
- *     ceiling (next sibling's top, the parent's ceiling for the last) still
- *     captures the wrapped last line synctex drops, now scoped per parent.
- *     FLOAT regions are EXCLUDED from the partition: a float's interior synctex
- *     (a \centering/\begin line) maps onto its galley origin, which can sit on a
- *     different page and steal a sibling's prose — so a float owns no rows.
+ *  1. ANCHOR: each block's synctex region top per (page, column), after dropping
+ *     furniture (the content band) and, for a FLOAT, keeping only its render page
+ *     — where the bulk of its ink lands — so the origin-page `\begin` phantom is
+ *     ignored. This LOCATES a block; it never bounds it.
  *
- *  2. COMPOSE (bottom-up): a block's box per page = its own items (skipped for a
- *     FLOAT) unioned with its children's boxes (skipped for a SECTION). So an env
- *     container encloses its descendants, a FLOAT = exactly its children (no
- *     source-site phantom — the page-4 region of a page-5 figure simply has no
- *     children there and yields no box), a SECTION = its heading line only
- *     (selection expands via expandIds), and a leaf = its own rows. A block that
- *     binds nothing AND has no child boxes yields no box (BUG-30, generalised).
+ *  2. WALLS: within a (page, column) the anchors, sorted top→down, are the walls.
+ *     A rendered unit (a text row's BASELINE — never the font-inflated yTop,
+ *     BUG-41 — or a graphic's TOP) belongs to the block with the greatest anchor
+ *     at/above it; ink above the topmost anchor (a plot that paints a hair above
+ *     its synctex top) falls to that first block. No synctex EXTENT is trusted and
+ *     there is no per-kind heuristic: a paragraph keeps its last wrapped line, an
+ *     adjacent display equation takes only the formula below it (its interior-span
+ *     anchor sits below the prose), and a float takes ALL the ink in its slot on
+ *     its render page — graphic ∪ caption ∪ rules — as one box.
  *
- *  The content band drops furniture (running head / folio) and header-margin
- *  stray rects before binning (BUG-30, M2-6). A page with rects but no rendered
- *  content falls back to the coarse synctex union so a box is never lost. Pure;
- *  inputs untouched. */
+ *  3. BOX: a block's box per cell = the union of its assigned units; a block that
+ *     binds nothing yields no box. A page with anchors but no rendered ink falls
+ *     back to the coarse synctex region so a box is never lost. The content band
+ *     drops running head / folio / header-margin strays first (BUG-30, M2-6).
+ *     Pure; inputs untouched. */
 export function binContentToBlocks(
   rectsById: Map<string, PdfRect[]>,
   rowsByPage: Map<number, TextRow[]>,
   graphicsByPage: Map<number, GraphicBox[]> = new Map(),
-  envNames: Map<string, string> = new Map(),
+  _envNames: Map<string, string> = new Map(),
   meta: Map<string, BlockMeta> = new Map()
 ): BinnedContent {
   const metaOf = (id: string): BlockMeta =>
@@ -378,17 +358,14 @@ export function binContentToBlocks(
 
   // Where the columns are on each page (gutter + bands), from the rendered text
   // layer. A column is a property of the BOX, not the source block: every rect /
-  // row is tagged its column here so a block emits one box per (page × column).
+  // row is tagged its column so a block emits one box per (page × column).
   // Single-column pages tag everything 'full', collapsing to one box per page.
   const columnsByPage = columnLayoutByPage(rowsByPage)
 
-  // A float's RENDER page = where the bulk of its own synctex rects land (the
-  // page LaTeX placed it on); its thin source-site rect on the origin page is the
-  // minority. A float DESCENDANT (graphic / caption) ALSO leaves a source-site
-  // rect on the origin page (its \begin line maps to the galley) — anchor every
-  // descendant to the float's render page and drop its origin-page region, so it
-  // can only own rows where the float really is and never steals the origin
-  // page's prose (live-gate fix; float exclusion alone is one level too shallow).
+  // A FLOAT's render page = where the bulk of its synctex ink lands (the page
+  // LaTeX placed it on); its thin source-site rect on the `\begin` origin page is
+  // the minority and is dropped, so the box comes only from where the float really
+  // is. Non-floats render where their source is, so they keep every page.
   const floatRenderPage = new Map<string, number>()
   for (const [id, rects] of rectsById) {
     if (!metaOf(id).isFloat) continue
@@ -402,261 +379,132 @@ export function binContentToBlocks(
     for (const [p, h] of heightByPage) if (h > bestH) { bestH = h; best = p }
     if (best !== undefined) floatRenderPage.set(id, best)
   }
-  const floatPageFor = (id: string): number | null => {
-    let pid = metaOf(id).parentId
-    while (pid) {
-      if (metaOf(pid).isFloat) return floatRenderPage.get(pid) ?? null
-      pid = metaOf(pid).parentId
-    }
-    return null
-  }
 
-  interface Region {
-    id: string
-    col: PdfCol
-    top: number
-    bottom: number
-    xLeft: number
-    xRight: number
-  }
-  const regionsByPage = new Map<number, Region[]>()
+  // Reading-order anchor per (block, page, column): the synctex region's top/extent
+  // there. A float anchors only on its render page. The extent is the fallback box
+  // when a page rendered no ink.
+  interface Anchor { id: string; page: number; col: PdfCol; top: number; bottom: number; xLeft: number; xRight: number }
+  const anchorsByPage = new Map<number, Anchor[]>()
   for (const [id, rects] of rectsById) {
-    const floatPage = floatPageFor(id)
-    const byPage = new Map<number, PdfRect[]>()
+    const renderPage = metaOf(id).isFloat ? floatRenderPage.get(id) ?? null : null
+    const byCell = new Map<string, Anchor>()
     for (const r of rects) {
       if (r.width <= 0 || r.height <= 0) continue
       if (!inBand(r.y, r.y + r.height)) continue // header/footer-margin stray (BUG-30)
-      const arr = byPage.get(r.page)
-      if (arr) arr.push(r)
-      else byPage.set(r.page, [r])
+      if (renderPage !== null && r.page !== renderPage) continue
+      const layout = columnsByPage.get(r.page)
+      const col = layout
+        ? columnOf(layout, { yTop: r.y, yBottom: r.y + r.height, xLeft: r.x, xRight: r.x + r.width })
+        : 'full'
+      const key = `${r.page}|${col}`
+      const cur = byCell.get(key)
+      if (!cur) byCell.set(key, { id, page: r.page, col, top: r.y, bottom: r.y + r.height, xLeft: r.x, xRight: r.x + r.width })
+      else {
+        cur.top = Math.min(cur.top, r.y); cur.bottom = Math.max(cur.bottom, r.y + r.height)
+        cur.xLeft = Math.min(cur.xLeft, r.x); cur.xRight = Math.max(cur.xRight, r.x + r.width)
+      }
     }
-    for (const [page, rs] of byPage) {
-      // A float descendant lives only on the float's render page; drop its
-      // origin-page source-site rect (it would otherwise steal that page's prose).
-      if (floatPage !== null && page !== floatPage) continue
-      const layout = columnsByPage.get(page)
-      // Split this block's rects on the page BY COLUMN, so a paragraph that flows
-      // across the break becomes a left region AND a right region — each
-      // column-pure — instead of one gutter-crossing region whose huge span (its
-      // right-column continuation reaches up to the top of the page) would steal a
-      // neighbour's rows. Single-column pages tag every rect 'full' → exactly one
-      // region per (id, page), identical to the pre-two-column partition.
-      const byCol = new Map<PdfCol, PdfRect[]>()
-      for (const r of rs) {
-        const col = layout
-          ? columnOf(layout, { yTop: r.y, yBottom: r.y + r.height, xLeft: r.x, xRight: r.x + r.width })
-          : 'full'
-        const arr = byCol.get(col)
-        if (arr) arr.push(r)
-        else byCol.set(col, [r])
-      }
-      for (const [col, crs] of byCol) {
-        const region: Region = {
-          id,
-          col,
-          top: Math.min(...crs.map((r) => r.y)),
-          bottom: Math.max(...crs.map((r) => r.y + r.height)),
-          xLeft: Math.min(...crs.map((r) => r.x)),
-          xRight: Math.max(...crs.map((r) => r.x + r.width))
-        }
-        const arr = regionsByPage.get(page)
-        if (arr) arr.push(region)
-        else regionsByPage.set(page, [region])
-      }
+    for (const a of byCell.values()) {
+      const arr = anchorsByPage.get(a.page)
+      if (arr) arr.push(a)
+      else anchorsByPage.set(a.page, [a])
     }
   }
 
-  interface Item {
-    key: number
-    xLeft: number
-    xRight: number
-    yTop: number
-    yBottom: number
-  }
-  // Own rendered items per (id, page, column) CELL: what the block itself
-  // painted, before its children's boxes are composed in. The column axis is the
-  // 2nd binning dimension (after page) — a block flowing across the break owns a
-  // left cell AND a right cell.
-  interface Cell {
-    page: number
-    col: PdfCol
-    items: Item[]
-  }
-  const cellKey = (page: number, col: PdfCol): string => `${page}|${col}`
-  const ownItems = new Map<string, Map<string, Cell>>()
-  const addOwn = (id: string, page: number, col: PdfCol, item: Item): void => {
-    let pm = ownItems.get(id)
-    if (!pm) {
-      pm = new Map()
-      ownItems.set(id, pm)
+  // Accumulate each block's box per (page × column) from the units the walls give
+  // it.
+  interface Acc { page: number; col: PdfCol; x: number; y: number; right: number; bottom: number }
+  const boxAcc = new Map<string, Map<string, Acc>>()
+  const addUnit = (id: string, page: number, col: PdfCol, xLeft: number, yTop: number, xRight: number, yBottom: number): void => {
+    let m = boxAcc.get(id)
+    if (!m) { m = new Map(); boxAcc.set(id, m) }
+    const key = `${page}|${col}`
+    const cur = m.get(key)
+    if (!cur) m.set(key, { page, col, x: xLeft, y: yTop, right: xRight, bottom: yBottom })
+    else {
+      cur.x = Math.min(cur.x, xLeft); cur.y = Math.min(cur.y, yTop)
+      cur.right = Math.max(cur.right, xRight); cur.bottom = Math.max(cur.bottom, yBottom)
     }
-    const key = cellKey(page, col)
-    const cell = pm.get(key)
-    if (cell) cell.items.push(item)
-    else pm.set(key, { page, col, items: [item] })
   }
 
-  for (const [page, regions] of regionsByPage) {
+  for (const [page, anchors] of anchorsByPage) {
+    const layout = columnsByPage.get(page)
     const rows = (rowsByPage.get(page) ?? []).filter((r) => inBand(r.baseline, r.baseline))
     const graphics = graphicsByPage.get(page) ?? []
 
-    // M2-9: snap each math env region's top to its rendered ink BEFORE ordering,
-    // so a display equation whose synctex top sits ~a line off the glyphs can't
-    // steal the partition boundary from the paragraph above (orphaning its last
-    // line) or reach up over it. Only the region top moves; the box extent still
-    // comes from the binned rows.
-    const lineH = medianRowHeight(rows)
-    for (const reg of regions) {
-      if (!isMathEnvName(envNames.get(reg.id))) continue
-      const slack = MATH_INK_SLACK * lineH
-      let inkTop = Infinity
-      for (const r of rows) {
-        if (r.xLeft < reg.xLeft - MATH_INK_X_EPS) continue // full-width prose, not the formula
-        if (r.baseline < reg.top - slack || r.baseline > reg.bottom + slack) continue
-        inkTop = Math.min(inkTop, r.baseline)
-      }
-      if (inkTop !== Infinity) reg.top = inkTop
-    }
-
+    // A page with anchors but no rendered ink → the coarse synctex region IS the
+    // box, so a box is never lost (e.g. a page whose text layer failed to extract).
     if (!rows.length && !graphics.length) {
-      // No rendered content measured for this page → coarse synctex union as each
-      // region's own item; composition (float → children, etc.) still applies.
-      for (const reg of regions)
-        addOwn(reg.id, page, reg.col, { key: reg.top, xLeft: reg.xLeft, xRight: reg.xRight, yTop: reg.top, yBottom: reg.bottom })
+      for (const a of anchors) addUnit(a.id, page, a.col, a.xLeft, a.top, a.xRight, a.bottom)
       continue
     }
 
-    // Floats own no rows (their source-site region would steal a sibling's prose,
-    // possibly on another page). Exclude them; their box is composed from children.
-    const partRegions = regions.filter((reg) => !metaOf(reg.id).isFloat)
-    // A block can have an l AND an r region on one page (it flowed across the
-    // break), so index by (id, col); a child nests under its parent's region in
-    // the SAME column (else the parent's full-width region).
-    const regKey = (reg: Region): string => `${reg.id}|${reg.col}`
-    const byIdCol = new Map<string, Map<PdfCol, Region>>()
-    for (const reg of partRegions) {
-      let m = byIdCol.get(reg.id)
-      if (!m) {
-        m = new Map()
-        byIdCol.set(reg.id, m)
+    // Snap each wall DOWN to the block's first rendered ink WITHIN its synctex
+    // region (vertical extent ∩ x-overlap), so a block whose synctex region top
+    // reaches a line above its glyphs — a tall display equation's `v−H` — can't
+    // pull the wall up over the previous block's last line (M2-9, now one rule for
+    // every block, no math gating; the x-overlap keeps a margin-shifted formula
+    // from claiming the full-width prose line beside it).
+    for (const a of anchors) {
+      let inkTop = Infinity
+      for (const r of rows) {
+        if (r.baseline < a.top - BAND_EPS || r.baseline > a.bottom + BAND_EPS) continue
+        if (r.xRight <= a.xLeft || r.xLeft >= a.xRight) continue
+        inkTop = Math.min(inkTop, r.yTop)
       }
-      m.set(reg.col, reg)
-    }
-    const parentRegionOf = (reg: Region): Region | undefined => {
-      let pid = metaOf(reg.id).parentId
-      while (pid) {
-        const m = byIdCol.get(pid)
-        if (m && !metaOf(pid).isFloat) return m.get(reg.col) ?? m.get('full') ?? [...m.values()][0]
-        pid = metaOf(pid).parentId
+      for (const g of graphics) {
+        if (g.yTop < a.top - BAND_EPS || g.yTop > a.bottom + BAND_EPS) continue
+        if (g.xRight <= a.xLeft || g.xLeft >= a.xRight) continue
+        inkTop = Math.min(inkTop, g.yTop)
       }
-      return undefined
-    }
-    const forestChildren = new Map<string, Region[]>()
-    const topLevel: Region[] = []
-    for (const reg of partRegions) {
-      const parent = parentRegionOf(reg)
-      if (parent) {
-        const k = regKey(parent)
-        const arr = forestChildren.get(k)
-        if (arr) arr.push(reg)
-        else forestChildren.set(k, [reg])
-      } else topLevel.push(reg)
-    }
-    const byTop = (a: Region, b: Region): number => a.top - b.top
-    topLevel.sort(byTop)
-    for (const arr of forestChildren.values()) arr.sort(byTop)
-
-    // The ceiling for a region is the next sibling (in reading order) that shares
-    // its column — i.e. x-overlaps it. This is what makes columns work: a left
-    // region's ceiling is the NEXT LEFT region, not whatever right-column region
-    // happens to start a few points below it (which would orphan the left
-    // column's rows). In a single-column page every sibling x-overlaps, so this
-    // is the immediate next sibling — identical to the pre-two-column behaviour.
-    const xOverlap = (a: Region, b: Region): boolean => a.xRight > b.xLeft && a.xLeft < b.xRight
-    const ceilingFor = (siblings: Region[], i: number, parentCeiling: number): number => {
-      for (let j = i + 1; j < siblings.length; j++) if (xOverlap(siblings[j]!, siblings[i]!)) return siblings[j]!.top
-      return parentCeiling
+      if (inkTop !== Infinity) a.top = inkTop
     }
 
-    // Assign an item to the DEEPEST region whose [top-ε, same-column-ceiling) ×
-    // x-band contains its partition key: children win over parents (innermost).
-    const descend = (item: Item, siblings: Region[], parentCeiling: number): Region | null => {
-      for (let i = 0; i < siblings.length; i++) {
-        const reg = siblings[i]!
-        const ceiling = ceilingFor(siblings, i, parentCeiling)
-        if (item.key >= reg.top - BAND_EPS && item.key < ceiling && item.xRight > reg.xLeft && item.xLeft < reg.xRight) {
-          const deeper = descend(item, forestChildren.get(regKey(reg)) ?? [], ceiling)
-          return deeper ?? reg
-        }
-      }
-      return null
+    // Anchors per column, sorted top→down — the walls.
+    const wallsByCol = new Map<PdfCol, Anchor[]>()
+    for (const a of anchors) {
+      const arr = wallsByCol.get(a.col)
+      if (arr) arr.push(a)
+      else wallsByCol.set(a.col, [a])
     }
-    const assign = (item: Item): void => {
-      const owner = descend(item, topLevel, Infinity)
-      if (owner) addOwn(owner.id, page, owner.col, item)
-    }
-    for (const r of rows) assign({ key: r.baseline, xLeft: r.xLeft, xRight: r.xRight, yTop: r.yTop, yBottom: r.yBottom })
-    for (const g of graphics) assign({ key: g.yTop, xLeft: g.xLeft, xRight: g.xRight, yTop: g.yTop, yBottom: g.yBottom })
-  }
+    for (const arr of wallsByCol.values()) arr.sort((a, b) => a.top - b.top)
 
-  // Compose final boxes bottom-up, per (page × column) CELL: box(cell) = own
-  // items (skip if float) ∪ child boxes in the SAME cell (skip if section). Env
-  // container → encloses descendants; float → exactly its children; section →
-  // heading line only; leaf → own rows. A block with items in two columns (a
-  // paragraph flowing across the break) yields a left box AND a right box; a
-  // single-column block yields one 'full' box. Memoised.
-  const childrenOf = new Map<string, string[]>()
-  for (const id of rectsById.keys()) {
-    const pid = metaOf(id).parentId
-    if (pid) {
-      const arr = childrenOf.get(pid)
-      if (arr) arr.push(id)
-      else childrenOf.set(pid, [id])
+    const colOf = (u: { yTop: number; yBottom: number; xLeft: number; xRight: number }): PdfCol =>
+      layout ? columnOf(layout, u) : 'full'
+    // The block whose anchor (post-snap, so it sits at the block's first ink) is
+    // the greatest at/above `key` in this column. Ink above EVERY anchor is a
+    // header-band stray the band missed — it binds to nothing. Falls back to the
+    // 'full' walls when a column has none of its own (a unit tagged l/r whose
+    // block only anchored full).
+    const owner = (key: number, col: PdfCol): Anchor | null => {
+      const inCol = (c: PdfCol): Anchor | null => {
+        const arr = wallsByCol.get(c)
+        if (!arr) return null
+        let hit: Anchor | null = null
+        // Strict ≤: the snap put each anchor at its block's first-ink yTop, so the
+        // block's own units have baseline ≥ anchor.top — no epsilon needed, and an
+        // epsilon would let the next block claim the previous block's tail (BUG-41).
+        for (const a of arr) { if (a.top <= key) hit = a; else break }
+        return hit
+      }
+      return inCol(col) ?? (col !== 'full' ? inCol('full') : null)
     }
-  }
-  interface Acc {
-    page: number
-    col: PdfCol
-    x: number
-    y: number
-    right: number
-    bottom: number
-  }
-  const grow = (acc: Map<string, Acc>, page: number, col: PdfCol, x: number, y: number, right: number, bottom: number): void => {
-    const key = cellKey(page, col)
-    const cur = acc.get(key)
-    if (!cur) acc.set(key, { page, col, x, y, right, bottom })
-    else {
-      cur.x = Math.min(cur.x, x)
-      cur.y = Math.min(cur.y, y)
-      cur.right = Math.max(cur.right, right)
-      cur.bottom = Math.max(cur.bottom, bottom)
+    for (const r of rows) {
+      const o = owner(r.baseline, colOf({ yTop: r.yTop, yBottom: r.yBottom, xLeft: r.xLeft, xRight: r.xRight }))
+      if (o) addUnit(o.id, page, o.col, r.xLeft, r.yTop, r.xRight, r.yBottom)
     }
-  }
-  const boxCache = new Map<string, Map<string, PdfRect>>()
-  const boxesFor = (id: string): Map<string, PdfRect> => {
-    const cached = boxCache.get(id)
-    if (cached) return cached
-    const m = metaOf(id)
-    const acc = new Map<string, Acc>()
-    if (!m.isFloat) {
-      const pm = ownItems.get(id)
-      if (pm) for (const cell of pm.values()) for (const it of cell.items) grow(acc, cell.page, cell.col, it.xLeft, it.yTop, it.xRight, it.yBottom)
+    for (const g of graphics) {
+      const o = owner(g.yTop, colOf(g))
+      if (o) addUnit(o.id, page, o.col, g.xLeft, g.yTop, g.xRight, g.yBottom)
     }
-    if (!m.isSection) {
-      for (const child of childrenOf.get(id) ?? [])
-        for (const b of boxesFor(child).values()) grow(acc, b.page, b.col ?? 'full', b.x, b.y, b.x + b.width, b.y + b.height)
-    }
-    const out = new Map<string, PdfRect>()
-    for (const [key, b] of acc) out.set(key, { page: b.page, x: b.x, y: b.y, width: b.right - b.x, height: b.bottom - b.y, col: b.col })
-    boxCache.set(id, out)
-    return out
   }
 
   const boxesById = new Map<string, PdfRect[]>()
-  for (const id of rectsById.keys()) {
-    const perCell = boxesFor(id)
-    if (perCell.size) boxesById.set(id, [...perCell.values()].sort((a, b) => a.page - b.page || a.x - b.x))
+  for (const [id, cells] of boxAcc) {
+    const boxes = [...cells.values()]
+      .map((c) => ({ page: c.page, x: c.x, y: c.y, width: c.right - c.x, height: c.bottom - c.y, col: c.col }))
+      .sort((a, b) => a.page - b.page || a.x - b.x)
+    if (boxes.length) boxesById.set(id, boxes)
   }
 
   const contentTopByPage = new Map<number, number>()
