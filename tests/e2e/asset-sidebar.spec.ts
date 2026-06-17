@@ -1,7 +1,7 @@
 import { _electron, expect, test } from '@playwright/test'
 import type { ElectronApplication, Page } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
-import { cpSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -68,4 +68,19 @@ test('clicking the pdf asset opens an in-app viewer tab, not the text editor', a
   // The editor status bar reports the asset (proves the AssetView body is active
   // instead of CodeMirror, which would read "LaTeX · UTF-8 · Ln …").
   await expect(page.getByText('plot.pdf · PDF')).toBeVisible()
+})
+
+test('an image asset actually renders in the viewer (CSP allows stanza-doc:)', async () => {
+  await row('figs/sample.png').click()
+  const img = page.locator('img[alt="figs/sample.png"]')
+  await expect(img).toBeVisible()
+  // naturalWidth > 0 only if the bytes loaded — a CSP block leaves it 0.
+  await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0)
+})
+
+test('an external delete refreshes the sidebar without reopening', async () => {
+  await expect(row('refs.bib')).toBeVisible()
+  rmSync(join(projectRoot, 'refs.bib')) // delete on disk, outside the app
+  // The live watcher fires document:files-changed → the renderer re-lists.
+  await expect(row('refs.bib')).toHaveCount(0)
 })

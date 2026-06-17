@@ -24,7 +24,7 @@ import type {
 } from '@shared/ipc'
 import { parseProjectBlocks } from '@shared/blocks/parse'
 import { isHiddenInSidebar } from '../shared/files/artifacts'
-import { armSettleWatcher } from './infra/FileWatcher'
+import { armSettleWatcher, watchSettled } from './infra/FileWatcher'
 import { DefaultProcessRunner } from './infra/ProcessRunner'
 import { GitClient } from './infra/GitClient'
 import { Store, GlobalSettingsStore } from './infra/Store'
@@ -42,6 +42,14 @@ let documents: DocumentService
  *  a fully independent document (mac doc-app model); a handler resolves its
  *  session from the calling window's id, never a global singleton. */
 const sessions = new Map<number, DocumentSession>()
+/** Per-window dispose fn for a live file-tree watcher (keyed by webContents.id).
+ *  Watches the document root for EXTERNAL changes (deletes/adds/renames done
+ *  outside the app) and tells that window to re-list — the sidebar otherwise
+ *  only refreshed on open or in-app file ops. Tree-only: it never recompiles
+ *  (compile stays on explicit ⌘S/⌘R/accept, the M2-2 decision). */
+const fileWatchers = new Map<number, () => void>()
+/** Debounce for the file-tree watcher — coalesce a burst (e.g. a folder move). */
+const FILE_WATCH_SETTLE_MS = 250
 let priming: AbortController | null = null
 /** Called after the store's project set changes (open/create) so the native
  *  Open Recent menu rebuilds. Injected by index.ts to avoid a menu↔registry
@@ -63,6 +71,8 @@ export function setWindowSpawner(fn: () => BrowserWindow): void {
 
 /** Drop a window's session when it closes (index.ts wires win.on('closed')). */
 export function dropSession(webContentsId: number): void {
+  fileWatchers.get(webContentsId)?.()
+  fileWatchers.delete(webContentsId)
   sessions.delete(webContentsId)
 }
 
@@ -372,6 +382,15 @@ async function loadDoc(
 
 function bindSession(wc: WebContents, info: DocumentInfo): void {
   sessions.set(wc.id, new DocumentSession(info, runner, store))
+  // Replace any prior watcher (re-opening a doc in the same window), then watch
+  // the new root for external changes → tell this window to re-list its files.
+  fileWatchers.get(wc.id)?.()
+  fileWatchers.set(
+    wc.id,
+    watchSettled(info.root, FILE_WATCH_SETTLE_MS, () => {
+      if (!wc.isDestroyed()) wc.send(IpcChannels.documentFilesChanged)
+    }),
+  )
 }
 
 /** The window currently holding `root`, or undefined — drives duplicate-focus. */
