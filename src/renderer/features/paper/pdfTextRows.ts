@@ -31,6 +31,18 @@ interface ViewportLike {
  *  fraction of a line height — absorbs sub/superscripts without merging lines. */
 const BASELINE_TOL = 0.5
 
+/** Two runs at the SAME baseline but separated horizontally by more than this
+ *  many line-heights are different COLUMNS, not one wrapped line — a two-column
+ *  page sets its left and right columns on the same baseline grid, so without
+ *  this guard they'd merge into one gutter-crossing row and the column geometry
+ *  could never separate them. A column gutter measures ~2.3× the em (25pt at
+ *  10pt) while an inter-word gap on a justified line is ≤ ~1× the em, so 1.5×
+ *  splits the gutter and keeps real words together. Single-column lines have no
+ *  such gap so this never fires for them, and even a wide intra-line gap that did
+ *  split only yields two rows of the SAME block whose union is the same box —
+ *  zero box-geometry regression. */
+const COLUMN_GAP_FRACTION = 1.5
+
 /** Glyph descent below the baseline as a fraction of the font height (pdf.js
  *  `height` ≈ the em). The row box runs [baseline − (height − descent),
  *  baseline + descent], so it encloses descenders and sits no higher than the
@@ -63,7 +75,12 @@ export function textRows(items: TextItemLike[], viewport: ViewportLike): TextRow
     // Full row height = yBottom − yTop (the em), so the merge tolerance is the
     // same ~0.5·height as before the descent change — partitioning unchanged.
     const tol = (c.yBottom - c.yTop) * BASELINE_TOL
-    if (last && Math.abs(c.baseline - last.baseline) <= tol) {
+    // Different column → start a new row even on a shared baseline: a horizontal
+    // gap wider than COLUMN_GAP_FRACTION line-heights between this run and the
+    // current row is a gutter, not a wrapped line.
+    const colGap = (c.yBottom - c.yTop) * COLUMN_GAP_FRACTION
+    const sameColumn = !!last && c.xLeft <= last.xRight + colGap && c.xRight >= last.xLeft - colGap
+    if (last && Math.abs(c.baseline - last.baseline) <= tol && sameColumn) {
       last.baseline = Math.max(last.baseline, c.baseline)
       last.yTop = Math.min(last.yTop, c.yTop)
       last.yBottom = Math.max(last.yBottom, c.yBottom)
