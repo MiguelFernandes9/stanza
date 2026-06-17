@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseProjectBlocks } from '../src/shared/blocks/parse'
+import { resolveProjectFiles } from '../src/shared/latex/project'
 import { isFloatEnv } from '../src/shared/blocks/container'
 import { flattenBlocks, blockGeometryRects, type PageBlock } from '../src/renderer/features/paper/paperModel'
 import { textRows } from '../src/renderer/features/paper/pdfTextRows'
@@ -24,14 +25,6 @@ import type { BlockSpan, PdfRect } from '../src/shared/ipc'
 // The compiled demo project: override with GEOM_DOC=/abs/path when regenerating.
 const ROOT = process.env.GEOM_DOC ?? '/Users/miguelfernandes/Documents/Projects/test'
 const PDF = join(ROOT, 'main.pdf')
-// Discover the .tex set from main.tex's \input/\include order so the harness never
-// goes stale as the doc grows (it did: listings/worked-examples/further-constructs
-// were added). main.tex first, then each include in source order.
-const TEX_FILES = [
-  'main.tex',
-  ...[...readFileSync(join(ROOT, 'main.tex'), 'utf8').matchAll(/\\(?:input|include)\{([^}]+)\}/g)]
-    .map((m) => (m[1]!.endsWith('.tex') ? m[1]! : `${m[1]}.tex`)),
-]
 // Bug constructs, addressed by (file-suffix, startLine) so the fixture labels them
 // for the assertion test. The first six are the flat-model constructs; the rest are
 // the complex-construct geometry bugs (ink-grounded binder): a pgfplots figure and a
@@ -76,6 +69,9 @@ describe.skipIf(!process.env.GEOM_CAPTURE)('capture real-doc geometry fixture', 
     const read = (rel: string): string | null => {
       try { return readFileSync(join(ROOT, rel), 'utf8') } catch { return null }
     }
+    // Resolve the \input/\include tree from main.tex (recurses, dedupes, strips
+    // comments) so the harness never goes stale as the doc grows.
+    const TEX_FILES = resolveProjectFiles('main.tex', read)
     const roots = parseProjectBlocks(TEX_FILES, read)
     const pageBlocks = flattenBlocks(roots)
 

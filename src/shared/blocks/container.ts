@@ -26,13 +26,14 @@ export function isMathEnvName(name: string | undefined): boolean {
 /** Environments LaTeX renders on a PLACEMENT page that can differ from their
  *  source position: floats (figure/table) move to where they fit; thebibliography
  *  is set after all body text and spills onto its own page, while its `\begin`
- *  galley origin maps a page earlier. All share the same geometry need — take the
- *  box from the RENDER page (the bulk of the rendered ink), not the source-site
- *  synctex, so the binner drops the origin-page phantom rect. */
+ *  galley origin maps a page earlier. NOTE: the geometry binner no longer keys on
+ *  this — it is ink-grounded and kind-agnostic, dropping every block's origin-page
+ *  phantom by rendered ink rather than by float kind. Retained as a classification
+ *  predicate only (the capture harness tags fixture blocks with it). */
 const FLOAT_ENVS = new Set(['figure', 'table', 'thebibliography'])
 
-/** True for a placement-displaced environment (see FLOAT_ENVS): its box comes
- *  from its render page, and the binner drops its origin-page phantom. */
+/** True for a placement-displaced environment (see FLOAT_ENVS). Classification
+ *  only — NOT consumed by the binner. */
 export function isFloatEnv(name: string | undefined): boolean {
   return name !== undefined && FLOAT_ENVS.has(name.replace(/\*$/, ''))
 }

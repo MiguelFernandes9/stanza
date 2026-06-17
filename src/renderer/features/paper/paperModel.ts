@@ -250,11 +250,10 @@ export { isMathEnvName }
 /** Vertical gap (pt) above which two stacked text baselines belong to separate
  *  clusters. A body line is ~13.5pt; running heads and page-number folios sit a
  *  full margin (>25pt on the demo) from the body, so any baseline gap beyond this
- *  splits furniture off the body run. Doubles as the WALL CONTIGUITY threshold:
- *  an in-flow block absorbs a run of ink below its synctex region only while each
- *  unit stays within this gap of the box's growing bottom — so it keeps every
- *  wrapped line synctex dropped (one or many) yet stops at the margin-sized gap to
- *  the next, un-anchored block. */
+ *  splits furniture off the body run. Doubles as the CONTIGUITY threshold: a block
+ *  absorbs a run of ink below its synctex region only while each unit stays within
+ *  this gap of the box's growing bottom — so it keeps every wrapped line synctex
+ *  dropped (one or many) yet stops at the margin-sized gap to the next block. */
 const MAX_LINE_GAP = 18
 /** A leading/trailing baseline cluster smaller than this fraction of the largest
  *  cluster is page furniture (a running head or folio — one short line per page,
@@ -453,19 +452,25 @@ export function binContentToBlocks(
           // Tightest = smallest SPAN (not lowest bottom edge): a sprawling galley
           // region whose bottom happens to sit a hair inside a real block must not
           // out-tight it — the real block's extent is far shorter. Tie → lower
-          // bottom, then higher top, then id (deterministic).
+          // bottom (equal span + equal bottom ⟹ equal top), then id (deterministic).
           if (!inside || span(rg) < span(inside) ||
               (span(rg) === span(inside) && (rg.bottom < inside.bottom ||
-                (rg.bottom === inside.bottom && (rg.top > inside.top || (rg.top === inside.top && rg.id < inside.id)))))) inside = rg
+                (rg.bottom === inside.bottom && rg.id < inside.id)))) inside = rg
         }
         if (inside) return inside
+        // No region contains the unit (a wrapped line synctex dropped): the nearest
+        // region above whose ink FRONTIER is within MAX_LINE_GAP claims it. Rank by
+        // frontier, tie by id (deterministic — not iteration order).
         let above: Region | null = null
+        let aboveFrontier = -Infinity
         for (const rg of regions) {
           if (!candidate(rg, col, xLeft, xRight)) continue
           const frontier = Math.max(rg.bottom, runningBottom(rg))
           if (frontier > key + BAND_EPS || key - frontier > MAX_LINE_GAP) continue
-          if (!above || frontier > Math.max(above.bottom, runningBottom(above)) ||
-              (rg.bottom === above.bottom && rg.id < above.id)) above = rg
+          if (!above || frontier > aboveFrontier || (frontier === aboveFrontier && rg.id < above.id)) {
+            above = rg
+            aboveFrontier = frontier
+          }
         }
         return above
       }
@@ -489,7 +494,7 @@ export function binContentToBlocks(
   // the tightest-containing pass routes its units to those tighter blocks and it wins
   // ~nothing → it drops; a block that genuinely spans pages wins distinctive ink on
   // each page → all kept. This dissolves the float-only cleanRects + floatRenderPage.
-  const { won } = assign(regionsByPage)
+  const { won, boxAcc: provisional } = assign(regionsByPage)
   const regionsByBlock = new Map<string, Region[]>()
   for (const arr of regionsByPage.values()) for (const rg of arr) {
     const b = regionsByBlock.get(rg.id)
@@ -503,13 +508,19 @@ export function binContentToBlocks(
     if (max <= 0) continue // won nothing anywhere → keep all (a box beats none)
     for (const r of rgs) if ((won.get(r) ?? 0) < INK_KEEP_FRAC * max) phantom.add(r)
   }
-  const activeRegions = new Map<number, Region[]>()
-  for (const [page, arr] of regionsByPage) {
-    const k = arr.filter((rg) => !phantom.has(rg))
-    if (k.length) activeRegions.set(page, k)
+  // Pass 2 — only when a phantom was dropped (the common single-region case never
+  // is): re-assign over the survivors so units off a dropped cell re-home to the
+  // tighter real block. With nothing dropped, pass 2 is provably identical to pass
+  // 1, so reuse it.
+  let boxAcc = provisional
+  if (phantom.size) {
+    const activeRegions = new Map<number, Region[]>()
+    for (const [page, arr] of regionsByPage) {
+      const k = arr.filter((rg) => !phantom.has(rg))
+      if (k.length) activeRegions.set(page, k)
+    }
+    boxAcc = assign(activeRegions).boxAcc
   }
-  // Pass 2: final assignment over the surviving (non-phantom) regions.
-  const { boxAcc } = assign(activeRegions)
 
   const boxesById = new Map<string, PdfRect[]>()
   for (const [id, cells] of boxAcc) {
