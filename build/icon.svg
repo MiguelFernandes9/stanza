@@ -1,18 +1,13 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
   <!-- Stanza app icon: the in-app StanzaMark (rounded square + three stanza
-       lines). The clay rounded square sits on the macOS icon grid — an 824×824
-       tile centred in 1024 (~100px transparent margin), so it shows at the same
-       visual size as other Dock apps. Cream lines read on the clay; glyph
-       proportions match StanzaMark.tsx (viewBox 32, rect 4..28, lines y
-       11.5/16/20.5, x from 9.5) scaled onto the 824 tile. -->
-  <defs>
-    <linearGradient id="clay" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#d07e58"/>
-      <stop offset="1" stop-color="#a94b2e"/>
-    </linearGradient>
-  </defs>
-  <rect x="100" y="100" width="824" height="824" rx="189" fill="url(#clay)"/>
-  <g stroke="#f8f4ec" stroke-width="72" stroke-linecap="round">
+       lines). The Claude-orange rounded square sits on the macOS icon grid — an
+       824×824 tile centred in 1024 (~100px transparent margin), so it shows at
+       the same visual size as other Dock apps. Claude-white lines read on the
+       orange; glyph proportions match StanzaMark.tsx (viewBox 32, rect 4..28,
+       lines y 11.5/16/20.5, x from 9.5) scaled onto the 824 tile.
+       Colours are the Anthropic brand palette: orange #d97757, light #faf9f5. -->
+  <rect x="100" y="100" width="824" height="824" rx="189" fill="#d97757"/>
+  <g stroke="#faf9f5" stroke-width="72" stroke-linecap="round">
     <line x1="289" y1="357" x2="735" y2="357"/>
     <line x1="289" y1="512" x2="615" y2="512"/>
     <line x1="289" y1="666" x2="752" y2="666"/>
