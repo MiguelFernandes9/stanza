@@ -58,10 +58,13 @@ test('a failed compile auto-opens the console listing the error', async () => {
   await expect(row).toContainText('Undefined control sequence')
 })
 
-test('clicking an error row jumps the editor to its source', async () => {
+test('clicking an error row opens the editor and jumps to the error line', async () => {
+  // Editor pane is closed here — the click must both OPEN it and land the
+  // cursor on the error line (status bar reports "Ln 12"), not just show the
+  // file at the top.
   await page.locator('[data-testid^="console-error:"]').first().click()
-  // The editor opens on ch1.tex with the offending command in view.
   await expect(page.locator('.cm-content')).toContainText('undefinedcontrolsequence', { timeout: 10000 })
+  await expect(page.getByText(/Ln 12,/)).toBeVisible()
 })
 
 test('the Raw log tab shows the tectonic log', async () => {

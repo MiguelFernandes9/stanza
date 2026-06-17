@@ -125,6 +125,17 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
   const [renameOnAppear, setRenameOnAppear] = useState<string | null>(null)
   const clearRenameOnAppear = useCallback(() => setRenameOnAppear(null), [])
   const editorApi = useRef<EditorApi | null>(null)
+  // A jump requested while the editor pane was still closed: openFile mounts
+  // EditorPane on the NEXT render, so editorApi.current is null right now —
+  // stash the target and flush it when EditorPane registers (below). Without
+  // this, the first console/outline/inverse-search jump after the editor was
+  // closed would open the file at the top instead of the target line.
+  const pendingEditorJump = useRef<{ file: string; line: number } | null>(null)
+  // Jump the editor to file:line, or stash it if the editor hasn't mounted yet.
+  const jumpInEditor = useCallback((file: string, line: number): void => {
+    if (editorApi.current) editorApi.current.jumpTo(file, line)
+    else pendingEditorJump.current = { file, line }
+  }, [])
   // Editor tab set (source of truth; EditorPane renders it). Starts empty;
   // reset alongside activeFile when the document changes.
   const [openFiles, setOpenFiles] = useState<string[]>([])
@@ -356,7 +367,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
         // known project file so a regression still jumps instead of no-op'ing.
         const file = resolveToKnownFile(loc.file, doc.texFiles)
         openFile(file) // add the tab + reveal the pane before scrolling to it
-        editorApi.current?.jumpTo(file, loc.line)
+        jumpInEditor(file, loc.line)
       },
       () => undefined
     )
@@ -725,7 +736,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
               {
                 scrollPdf: (bid) => setRevealSignal({ id: bid, nonce: Date.now() }),
                 openFile,
-                jumpTo: (file, line) => editorApi.current?.jumpTo(file, line)
+                jumpTo: jumpInEditor
               }
             )
           }}
@@ -766,6 +777,13 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
             onForwardSearch={forwardSearch}
             register={(api) => {
               editorApi.current = api
+              // Flush a jump requested before the editor mounted (file already
+              // opened above; EditorPane queues it until the buffer loads).
+              const pj = pendingEditorJump.current
+              if (pj) {
+                pendingEditorJump.current = null
+                api.jumpTo(pj.file, pj.line)
+              }
             }}
           />
         )}
@@ -836,7 +854,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
             height={panes.consoleHeight}
             onJump={(file, line) => {
               openFile(file)
-              editorApi.current?.jumpTo(file, line)
+              jumpInEditor(file, line)
             }}
             onFix={fixWithClaude}
             onClose={() => setConsoleOpen(false)}

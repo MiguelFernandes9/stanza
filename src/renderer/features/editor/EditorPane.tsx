@@ -262,11 +262,18 @@ export function EditorPane({
     register({
       saveDirty,
       jumpTo: (file, line) => {
-        if (file === activeFileRef.current && viewRef.current) {
-          applyJump(viewRef.current, line)
+        const view = viewRef.current
+        // Jump now ONLY if the view already holds this file's loaded buffer.
+        // On a fresh open the buffer reads async, so even though file is the
+        // active file the doc is still empty — queue instead and let the load
+        // effect apply it once the content lands (covers console/outline/
+        // inverse-search jumps made while the editor pane was closed).
+        const ready = view != null && file === activeFileRef.current && view.state.doc.toString() === buffers.current.get(file)
+        if (ready) {
+          applyJump(view, line)
         } else {
           pendingJump.current = { file, line }
-          onSelectFile(file)
+          if (file !== activeFileRef.current) onSelectFile(file)
         }
       },
       isDirty: (file) => dirtyRef.current.has(file),
