@@ -1,0 +1,13 @@
+{
+  "description": "Console 'Fix with Claude' op — the instruction starts with 'This LaTeX document fails to compile'. Removes the undefined command in the thesis-broken fixture so the next build is clean.",
+  "match": { "promptRegex": "fails to compile", "argsInclude": ["--resume"] },
+  "edits": [
+    {
+      "file": "chapters/ch1.tex",
+      "op": "replace",
+      "find": "\\undefinedcontrolsequence{Outline}",
+      "content": "\\section{Outline}"
+    }
+  ],
+  "result": "Removed the undefined control sequence so the document compiles."
+}
