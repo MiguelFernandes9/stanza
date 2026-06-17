@@ -259,10 +259,15 @@ const MAX_LINE_GAP = 18
  *  cluster is page furniture (a running head or folio — one short line per page,
  *  a minority isolated in the margin) and is peeled off the content band. */
 const FURNITURE_SHARE = 0.25
-/** Slack (pt) for content-band membership and region/row binning — absorbs the
- *  sub-pt drift between a synctex rect's baseline (v) and the converted pdf.js
- *  text-row baseline (the bullet measured 719.86 vs 717.7 on the demo). */
-const BAND_EPS = 2
+/** Slack (pt) for content-band membership and region/row binning. synctex's box
+ *  is `v−H..v` where H ≈ cap height, but the pdf.js row BASELINE sits a font
+ *  descender below `v` — so a one-line block's baseline can fall ~3pt past its
+ *  synctex rect bottom (measured: rect bottom 582.3 vs baseline 585.2 on the demo;
+ *  the bullet 719.86 vs 717.7). Too small a slack drops that row out of its own
+ *  region into the next block's — leaving the block with NO box. Keep it above the
+ *  measured drift yet well under a line (~13.5pt) so it never reaches a non-adjacent
+ *  region. */
+const BAND_EPS = 4
 /** A block with synctex regions on several (page, column) cells keeps a cell only
  *  when the rendered ink it WON (in the tightest-containing assignment) is at least
  *  this fraction of the block's richest cell. A galley/phantom cell (a `\begin`
@@ -426,7 +431,12 @@ export function binContentToBlocks(
     for (const [page, regions] of active) {
       const layout = columnsByPage.get(page)
       const rows = (rowsByPage.get(page) ?? []).filter((r) => inBand(r.baseline, r.baseline))
-      const graphics = graphicsByPage.get(page) ?? []
+      // Drop DEGENERATE graphics (a 0-area clip artifact, or a path whose minMax
+      // collapsed to a line/point under the CTM) so a zero-height stroke can't seed
+      // or extend a box. NOT inBand-filtered: unlike text, a figure's image/plot
+      // legitimately renders outside the running-text band, so the content band (a
+      // text concept) must not gate graphics.
+      const graphics = (graphicsByPage.get(page) ?? []).filter((g) => g.yBottom > g.yTop && g.xRight > g.xLeft)
 
       // A page with regions but no rendered ink → the coarse synctex region IS the
       // box, so a box is never lost (e.g. a page whose text layer failed to extract).
