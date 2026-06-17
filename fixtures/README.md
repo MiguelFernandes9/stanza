@@ -20,6 +20,13 @@ change a fixture and its test together.
 - **`single/`** — one self-contained `main.tex` (article class, no
   `\input`/`\include`, no bib, no figures). Used by DocumentService
   single-file tests and the E2E smoke.
+- **`twocol/`** — NeurIPS/IEEE-style `\documentclass[twocolumn]`
+  article with `\columnsep` 0.35in: a full-width title+abstract
+  (`\twocolumn[...]` span), a two-column body, and a full-width
+  `figure*`. The column-geometry engine (`columnLayout`,
+  `binContentToBlocks`) is measured against it — the rendered body
+  gutter is ~25pt at x≈306, full-width bands span both columns. Compile
+  with `cd fixtures/twocol && tectonic -X compile --synctex main.tex`.
 - **`logs/`** — captured tectonic (0.16.9) logs: `thesis-ok.log`
   (clean compile, warnings only) and `thesis-broken.log` (contains
   `! Undefined control sequence.` + `l.12 \undefinedcontrolsequence`)
