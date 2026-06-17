@@ -43,8 +43,9 @@ export const api = {
    *  (recents row). Wire payload is the bare root string (handler signature). */
   documentOpen: (req?: DocumentOpenRequest) =>
     invoke<DocumentInfo | null>(IpcChannels.documentOpen, req?.root),
+  // null when the create opened in a NEW window (caller does not setDoc).
   documentCreate: (req: { name: string; dir: string }) =>
-    invoke<DocumentInfo>(IpcChannels.documentCreate, req),
+    invoke<DocumentInfo | null>(IpcChannels.documentCreate, req),
   documentRecents: () => invoke<RecentProject[]>(IpcChannels.documentRecents),
   documentHistory: () => invoke<CommitInfo[]>(IpcChannels.documentHistory),
   /** The change a commit (by sha) introduced — its diff vs its parent (HISTORY viewer). */

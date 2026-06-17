@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import type { IpcMainInvokeEvent, WebContents } from 'electron'
 import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { IpcChannels } from '@shared/ipc'
@@ -36,16 +37,38 @@ const runner = new DefaultProcessRunner()
 let store: Store
 let globalSettings: GlobalSettingsStore
 let documents: DocumentService
-let session: DocumentSession | null = null
+/** One DocumentSession per window, keyed by its `webContents.id`. Each window is
+ *  a fully independent document (mac doc-app model); a handler resolves its
+ *  session from the calling window's id, never a global singleton. */
+const sessions = new Map<number, DocumentSession>()
 let priming: AbortController | null = null
 /** Called after the store's project set changes (open/create) so the native
  *  Open Recent menu rebuilds. Injected by index.ts to avoid a menu↔registry
  *  import cycle. */
 let onRecentsChanged: (() => void) | undefined
+/** Creates a fresh window (and returns it) for the open-in-new-window path.
+ *  Injected by index.ts (which owns createWindow) to avoid an import cycle. */
+let spawnWindow: (() => BrowserWindow) | undefined
 
 /** Register a listener fired whenever recents change (menu rebuild hook). */
 export function setRecentsListener(cb: () => void): void {
   onRecentsChanged = cb
+}
+
+/** Inject the new-window factory (index.ts owns BrowserWindow creation). */
+export function setWindowSpawner(fn: () => BrowserWindow): void {
+  spawnWindow = fn
+}
+
+/** Drop a window's session when it closes (index.ts wires win.on('closed')). */
+export function dropSession(webContentsId: number): void {
+  sessions.delete(webContentsId)
+}
+
+/** Roots of every open document, for the per-window stanza-doc:// protocol —
+ *  it serves a file only when its `root` query param matches an open session. */
+export function getOpenRoots(): Set<string> {
+  return new Set([...sessions.values()].map((s) => s.info.root))
 }
 
 /** Recents for the native Open Recent menu — same mapping as document:recents.
@@ -64,34 +87,15 @@ export function registerIpcHandlers(): void {
     primeSession: (doc, signal) => new ClaudeService(runner, store, doc).prime(signal),
   })
 
-  ipcMain.handle(IpcChannels.documentOpen, async (_e, root?: string) => {
+  ipcMain.handle(IpcChannels.documentOpen, async (event, root?: string) => {
     const folder = root ?? (await pickFolder())
     if (!folder) return null
-
-    // Plain folder (never primed): run the blocking priming pipeline
-    // with the overlay events; working projects open instantly (FR1).
-    let info: DocumentInfo | null
-    if (store.getProject(folder).sessionId) {
-      info = await documents.open(folder)
-      if (info) store.setProject(folder, { lastOpened: new Date().toISOString() })
-    } else {
-      info = await primeWithCancel(folder)
-    }
-    if (!info) return null
-
-    session = new DocumentSession(info, runner, store)
-    await reEmitPendingProposals(session) // crash recovery (spec §7)
-    onRecentsChanged?.() // refresh Open Recent — this project just moved to top
-    return info
+    return openDocument(event, folder, 'open')
   })
 
-  ipcMain.handle(IpcChannels.documentCreate, async (_e, args: { name: string; dir: string }) => {
+  ipcMain.handle(IpcChannels.documentCreate, async (event, args: { name: string; dir: string }) => {
     const created = await documents.create(args)
-    const info = await primeWithCancel(created.root)
-    if (!info) return null
-    session = new DocumentSession(info, runner, store)
-    onRecentsChanged?.() // the new project should appear in Open Recent
-    return info
+    return openDocument(event, created.root, 'create')
   })
 
   ipcMain.handle(IpcChannels.primeCancel, () => {
@@ -110,23 +114,21 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IpcChannels.documentRecents, (): RecentProject[] => getRecentProjects())
 
-  ipcMain.handle(IpcChannels.documentHistory, () => requireSession().git.log(50))
+  ipcMain.handle(IpcChannels.documentHistory, (event) => sessionFor(event).git.log(50))
 
   // HISTORY diff viewer: the change a commit introduced (its diff vs its
   // parent) + the files it touched (so the overlay renders one card per file).
-  ipcMain.handle(IpcChannels.documentDiffAt, async (_e, sha: string) => {
-    const diff = await requireSession().git.diffAt(sha)
+  ipcMain.handle(IpcChannels.documentDiffAt, async (event, sha: string) => {
+    const diff = await sessionFor(event).git.diffAt(sha)
     return { diff, files: changedFilesInDiff(diff) }
   })
 
-  ipcMain.handle(IpcChannels.documentFiles, (): FileEntry[] =>
-    listFiles(requireSession().info.root),
-  )
+  ipcMain.handle(IpcChannels.documentFiles, (event): FileEntry[] => listFiles(sessionFor(event).info.root))
 
   // All project files' blocks in one merged tree — overlays must cover
   // \include'd chapters, not just the main file (BUG-2/3).
-  ipcMain.handle(IpcChannels.documentProjectBlocks, () => {
-    const { root, texFiles } = requireSession().info
+  ipcMain.handle(IpcChannels.documentProjectBlocks, (event) => {
+    const { root, texFiles } = sessionFor(event).info
     return parseProjectBlocks(texFiles, (rel) => {
       try {
         return readFileSync(join(root, rel), 'utf8')
@@ -136,48 +138,56 @@ export function registerIpcHandlers(): void {
     })
   })
 
-  // The open document survives a renderer crash (main holds the session), so
-  // a reloaded window restores straight into the workspace (L6 recovery).
-  ipcMain.handle(IpcChannels.documentCurrent, (): DocumentInfo | null => session?.info ?? null)
-
-  ipcMain.handle(IpcChannels.documentSave, (_e, relPath: string, content: string) => {
-    atomicWrite(join(requireSession().info.root, relPath), content)
-  })
-
-  ipcMain.handle(IpcChannels.documentRead, (_e, relPath: string) =>
-    readFileSync(join(requireSession().info.root, relPath), 'utf8'),
+  // The document a window holds survives a renderer crash (main keeps the
+  // session), and a freshly spawned window learns its doc here too — per-window
+  // via the calling window's id, no query-param plumbing (L6 recovery).
+  ipcMain.handle(
+    IpcChannels.documentCurrent,
+    (event): DocumentInfo | null => sessions.get(event.sender.id)?.info ?? null,
   )
 
-  ipcMain.handle(IpcChannels.compileRun, async (_e, req: CompileRequest) => {
-    const doc = requireSession()
-    sendToAll(IpcChannels.compileStatus, 'running' satisfies CompileStatus)
+  ipcMain.handle(IpcChannels.documentSave, (event, relPath: string, content: string) => {
+    atomicWrite(join(sessionFor(event).info.root, relPath), content)
+  })
+
+  ipcMain.handle(IpcChannels.documentRead, (event, relPath: string) =>
+    readFileSync(join(sessionFor(event).info.root, relPath), 'utf8'),
+  )
+
+  ipcMain.handle(IpcChannels.compileRun, async (event, req: CompileRequest) => {
+    const doc = sessionFor(event)
+    sendTo(event.sender, IpcChannels.compileStatus, 'running' satisfies CompileStatus)
     const result = await doc.compiler.compile(req)
     // An aborted/superseded compile is not a failure — a newer compile is in
     // flight and will emit its own status. Emitting 'failed' here causes the
     // open-time "Compile failed — 0 errors" flash under StrictMode (BUG-4).
     if (!result.aborted) {
-      sendToAll(IpcChannels.compileStatus, (result.ok ? 'ok' : 'failed') satisfies CompileStatus)
+      sendTo(event.sender, IpcChannels.compileStatus, (result.ok ? 'ok' : 'failed') satisfies CompileStatus)
     }
     return result
   })
 
-  ipcMain.handle(IpcChannels.synctexInverse, (_e, point: InversePoint) =>
-    session ? session.compiler.inverse(point) : null,
-  )
+  ipcMain.handle(IpcChannels.synctexInverse, (event, point: InversePoint) => {
+    const doc = sessions.get(event.sender.id)
+    return doc ? doc.compiler.inverse(point) : null
+  })
 
-  ipcMain.handle(IpcChannels.synctexForward, (_e, span: BlockSpan) =>
-    session ? session.compiler.forward(span) : [],
-  )
+  ipcMain.handle(IpcChannels.synctexForward, (event, span: BlockSpan) => {
+    const doc = sessions.get(event.sender.id)
+    return doc ? doc.compiler.forward(span) : []
+  })
 
-  ipcMain.handle(IpcChannels.claudeRun, (_e, req: ClaudeRequest) => runClaudeOp(req))
+  ipcMain.handle(IpcChannels.claudeRun, (event, req: ClaudeRequest) =>
+    runClaudeOp(sessionFor(event), event.sender, req),
+  )
 
   ipcMain.handle(
     IpcChannels.claudeHistory,
-    (): OpRecord[] => store.getProject(requireSession().info.root).ops ?? [],
+    (event): OpRecord[] => store.getProject(sessionFor(event).info.root).ops ?? [],
   )
 
-  ipcMain.handle(IpcChannels.reviewResolve, async (_e, decision: ReviewDecision) => {
-    const doc = requireSession()
+  ipcMain.handle(IpcChannels.reviewResolve, async (event, decision: ReviewDecision) => {
+    const doc = sessionFor(event)
     const resolution = await doc.review.resolve(decision)
     if (resolution.committed || !decision.accept) {
       patchOpRecord(doc.info.root, decision.opId, { accepted: decision.accept })
@@ -185,10 +195,10 @@ export function registerIpcHandlers(): void {
     return resolution
   })
 
-  ipcMain.handle(IpcChannels.reviewList, () => requireSession().review.list())
+  ipcMain.handle(IpcChannels.reviewList, (event) => sessionFor(event).review.list())
 
-  ipcMain.handle(IpcChannels.reviewFileAt, async (_e, args: { opId: string; file: string }) => {
-    const doc = requireSession()
+  ipcMain.handle(IpcChannels.reviewFileAt, async (event, args: { opId: string; file: string }) => {
+    const doc = sessionFor(event)
     return {
       before: await doc.git.show('HEAD', args.file),
       after: await doc.git.show(`stanza/op-${args.opId}`, args.file),
@@ -198,42 +208,42 @@ export function registerIpcHandlers(): void {
   // v0.2 sidebar file management — each op mutates the doc repo (commit-per-op
   // for a clean tree), then returns the fresh listing + a new DocumentInfo
   // when the .tex set changed (full main-file propagation).
-  ipcMain.handle(IpcChannels.documentRename, async (_e, a: { from: string; to: string }) => {
-    const doc = requireSession()
+  ipcMain.handle(IpcChannels.documentRename, async (event, a: { from: string; to: string }) => {
+    const doc = sessionFor(event)
     await assertNoPendingProposal(doc, a.from)
     await doc.files.rename(a.from, a.to)
     return fileMutationResult(doc)
   })
 
-  ipcMain.handle(IpcChannels.documentDuplicate, async (_e, a: { relPath: string }) => {
-    const doc = requireSession()
+  ipcMain.handle(IpcChannels.documentDuplicate, async (event, a: { relPath: string }) => {
+    const doc = sessionFor(event)
     const newRelPath = await doc.files.duplicate(a.relPath)
     return fileMutationResult(doc, newRelPath)
   })
 
-  ipcMain.handle(IpcChannels.documentDelete, async (_e, a: { relPath: string }) => {
-    const doc = requireSession()
+  ipcMain.handle(IpcChannels.documentDelete, async (event, a: { relPath: string }) => {
+    const doc = sessionFor(event)
     await assertNoPendingProposal(doc, a.relPath)
     await doc.files.remove(a.relPath)
     return fileMutationResult(doc)
   })
 
-  ipcMain.handle(IpcChannels.documentCreateFile, async (_e, a: { dir: string; name: string }) => {
-    const doc = requireSession()
+  ipcMain.handle(IpcChannels.documentCreateFile, async (event, a: { dir: string; name: string }) => {
+    const doc = sessionFor(event)
     const newRelPath = await doc.files.createFile(a.dir, a.name)
     return fileMutationResult(doc, newRelPath)
   })
 
-  ipcMain.handle(IpcChannels.documentCreateFolder, async (_e, a: { dir: string; name: string }) => {
-    const doc = requireSession()
+  ipcMain.handle(IpcChannels.documentCreateFolder, async (event, a: { dir: string; name: string }) => {
+    const doc = sessionFor(event)
     const newRelPath = await doc.files.createFolder(a.dir, a.name)
     return fileMutationResult(doc, newRelPath)
   })
 
   // Upload (v0.4): main shows the OS picker and copies the bytes — nothing
   // ships over IPC. Cancel is a no-op (returns the current listing).
-  ipcMain.handle(IpcChannels.documentUpload, async (_e, a: { dir: string }) => {
-    const doc = requireSession()
+  ipcMain.handle(IpcChannels.documentUpload, async (event, a: { dir: string }) => {
+    const doc = sessionFor(event)
     const result = await dialog.showOpenDialog({
       properties: ['openFile', 'multiSelections'],
       filters: [
@@ -253,20 +263,20 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IpcChannels.settingsSetGlobal, (_e, patch: Partial<GlobalSettings>): GlobalSettings => {
     const next = globalSettings.set(patch)
-    // Broadcast so every window applies the new font/theme live, no reload.
-    sendToAll(IpcChannels.settingsChanged, { global: next } satisfies SettingsChanged)
+    // Global font/theme is app-wide → broadcast so EVERY window applies it live.
+    broadcast(IpcChannels.settingsChanged, { global: next } satisfies SettingsChanged)
     return next
   })
 
-  ipcMain.handle(IpcChannels.settingsGetDocument, (): DocumentSettings => {
-    const rec = store.getProject(requireSession().info.root)
+  ipcMain.handle(IpcChannels.settingsGetDocument, (event): DocumentSettings => {
+    const rec = store.getProject(sessionFor(event).info.root)
     return { mainFile: rec.mainFile, compile: rec.compile }
   })
 
   ipcMain.handle(
     IpcChannels.settingsSetDocument,
-    async (_e, patch: DocumentSettings): Promise<DocumentSettingsResult> => {
-      const doc = requireSession()
+    async (event, patch: DocumentSettings): Promise<DocumentSettingsResult> => {
+      const doc = sessionFor(event)
       const root = doc.info.root
       const mainFileChanged = patch.mainFile !== undefined && patch.mainFile !== doc.info.mainFile
       store.setProject(root, {
@@ -275,12 +285,12 @@ export function registerIpcHandlers(): void {
       })
       if (mainFileChanged) {
         // CompileService captures `doc` at construction and never re-reads
-        // session.info, so a mainFile change must REBUILD the session/compiler
-        // (mirror document:open) — mutating info alone wouldn't recompile from
-        // the new file. open() honors the override just written above.
+        // session.info, so a mainFile change must REBUILD this window's session/
+        // compiler (mirror document:open) — mutating info alone wouldn't
+        // recompile from the new file. open() honors the override just written.
         const info = await documents.open(root)
         if (info) {
-          session = new DocumentSession(info, runner, store)
+          sessions.set(event.sender.id, new DocumentSession(info, runner, store))
           return { doc: info }
         }
         return { doc: null }
@@ -292,13 +302,79 @@ export function registerIpcHandlers(): void {
   )
 }
 
+/** Open `folder` for the calling window. A launcher (no session) opens in place
+ *  and returns the DocumentInfo (renderer setDoc); a window already showing a
+ *  document spawns the open into a NEW window (mac doc-app convention) and
+ *  returns null. Opening a document already open elsewhere focuses that window. */
+async function openDocument(
+  event: IpcMainInvokeEvent,
+  folder: string,
+  kind: 'open' | 'create',
+): Promise<DocumentInfo | null> {
+  if (sessions.has(event.sender.id)) {
+    const existing = windowForRoot(folder)
+    if (existing) {
+      existing.focus() // duplicate open → focus the window that already holds it
+      return null
+    }
+    const info = await loadDoc(folder, kind, undefined) // spawn primes silently
+    if (!info) return null
+    if (!spawnWindow) throw new Error('NO_WINDOW_SPAWNER')
+    const win = spawnWindow()
+    bindSession(win.webContents, info)
+    await reEmitPendingProposals(win.webContents)
+    onRecentsChanged?.()
+    return null // the new window shows it — the caller must NOT setDoc
+  }
+
+  const info = await loadDoc(folder, kind, event.sender) // overlay → calling window
+  if (!info) return null
+  bindSession(event.sender, info)
+  await reEmitPendingProposals(event.sender)
+  onRecentsChanged?.()
+  return info
+}
+
+/** Resolve or prime the document. A primed open is instant; an un-primed open
+ *  or a create runs the priming pipeline, emitting prime:status to `emitTo`
+ *  (the window that shows the overlay — none for a silent spawn). */
+async function loadDoc(
+  folder: string,
+  kind: 'open' | 'create',
+  emitTo: WebContents | undefined,
+): Promise<DocumentInfo | null> {
+  if (kind === 'open' && store.getProject(folder).sessionId) {
+    const info = await documents.open(folder)
+    if (info) store.setProject(folder, { lastOpened: new Date().toISOString() })
+    return info
+  }
+  return primeWithCancel(folder, emitTo)
+}
+
+function bindSession(wc: WebContents, info: DocumentInfo): void {
+  sessions.set(wc.id, new DocumentSession(info, runner, store))
+}
+
+/** The window currently holding `root`, or undefined — drives duplicate-focus. */
+function windowForRoot(root: string): BrowserWindow | undefined {
+  for (const [id, s] of sessions) {
+    if (s.info.root === root) {
+      return BrowserWindow.getAllWindows().find((w) => w.webContents.id === id)
+    }
+  }
+  return undefined
+}
+
 /** Diff-gated op pipeline (FR7): lock check → clean tree → arm watcher →
  *  run op → await file settle → capture to proposal branch → emit.
  *  The watcher is armed BEFORE the op so an edit that flushes after
  *  claude exits is still seen — a fixed grace lost that race and
  *  stranded edits uncommitted (B11.2 original design). */
-async function runClaudeOp(req: ClaudeRequest): Promise<ClaudeResult> {
-  const doc = requireSession()
+async function runClaudeOp(
+  doc: DocumentSession,
+  wc: WebContents,
+  req: ClaudeRequest,
+): Promise<ClaudeResult> {
   doc.review.assertSpansFree(req.spans)
   await doc.review.prepare()
 
@@ -309,7 +385,8 @@ async function runClaudeOp(req: ClaudeRequest): Promise<ClaudeResult> {
   const watcher = armSettleWatcher(doc.info.root, { quietMs: 400, capMs: 3000 })
   let op: { opId: string; note: string }
   try {
-    op = await doc.claude.runOp(req, (status) => sendToAll(IpcChannels.claudeStatus, status))
+    // claude:status is per-document → only the owning window.
+    op = await doc.claude.runOp(req, (status) => sendTo(wc, IpcChannels.claudeStatus, status))
     await watcher.settled() // wait for claude's writes to land (and stop)
   } catch (err) {
     await doc.git.restoreAll() // failed/timed-out op never leaves edits behind
@@ -335,14 +412,20 @@ async function runClaudeOp(req: ClaudeRequest): Promise<ClaudeResult> {
 }
 
 /** Run the priming pipeline with prime:status events and prime:cancel
- *  support. Null when cancelled — callers treat it as "not opened". */
-async function primeWithCancel(root: string): Promise<DocumentInfo | null> {
+ *  support. Null when cancelled — callers treat it as "not opened". Events go
+ *  to `emitTo` only (per-document), or nowhere for a silent spawn. */
+async function primeWithCancel(
+  root: string,
+  emitTo: WebContents | undefined,
+): Promise<DocumentInfo | null> {
   const controller = new AbortController()
   priming = controller
   try {
     return await documents.prime(
       root,
-      (step) => sendToAll(IpcChannels.primeStatus, step),
+      (step) => {
+        if (emitTo) sendTo(emitTo, IpcChannels.primeStatus, step)
+      },
       controller.signal,
     )
   } catch (err) {
@@ -353,20 +436,19 @@ async function primeWithCancel(root: string): Promise<DocumentInfo | null> {
   }
 }
 
-async function reEmitPendingProposals(doc: DocumentSession): Promise<void> {
+/** Crash-recovery: re-emit a window's pending proposals to that window only. */
+async function reEmitPendingProposals(wc: WebContents): Promise<void> {
+  const doc = sessions.get(wc.id)
+  if (!doc) return
   for (const proposal of await doc.review.list()) {
-    sendToAll(IpcChannels.reviewProposal, proposal)
+    sendTo(wc, IpcChannels.reviewProposal, proposal)
   }
 }
 
-function requireSession(): DocumentSession {
-  if (!session) throw new Error('NO_DOCUMENT')
-  return session
-}
-
-/** Root of the open document, for the stanza-doc:// protocol (F5). */
-export function currentDocRoot(): string | null {
-  return session?.info.root ?? null
+function sessionFor(event: IpcMainInvokeEvent): DocumentSession {
+  const s = sessions.get(event.sender.id)
+  if (!s) throw new Error('NO_DOCUMENT')
+  return s
 }
 
 function appendOpRecord(root: string, record: OpRecord): void {
@@ -421,7 +503,13 @@ async function pickFolder(): Promise<string | null> {
   return result.canceled ? null : (result.filePaths[0] ?? null)
 }
 
-function sendToAll(channel: IpcChannel, payload: unknown): void {
+/** Per-document event → the one owning window (guarded against a closed wc). */
+function sendTo(wc: WebContents, channel: IpcChannel, payload: unknown): void {
+  if (!wc.isDestroyed()) wc.send(channel, payload)
+}
+
+/** App-global event (settingsChanged) → every window. */
+function broadcast(channel: IpcChannel, payload: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send(channel, payload)
   }
