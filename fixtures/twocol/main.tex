@@ -1,0 +1,46 @@
+% Two-column fixture (NeurIPS/IEEE-style) for column-detection engine tests.
+% Full-width title + abstract (\twocolumn[...] span), two-column body with a
+% paragraph that flows across the column break, and a full-width figure*.
+\documentclass[twocolumn,10pt]{article}
+\usepackage[margin=0.75in]{geometry}
+\setlength{\columnsep}{0.35in} % a representative, unambiguous gutter (~25pt)
+\usepackage{lipsum}
+\usepackage{graphicx}
+
+\title{A Two-Column Fixture for Column-Aware Geometry}
+\author{Stanza Tester}
+\date{2026}
+
+\begin{document}
+
+\twocolumn[
+  \begin{@twocolumnfalse}
+    \maketitle
+    \begin{abstract}
+      This abstract spans the full text width above the two columns, the way a
+      NeurIPS or IEEE paper sets its title block. The body below is typeset in
+      two columns, and at least one paragraph flows from the bottom of the left
+      column into the top of the right column so the geometry must emit two boxes
+      for a single source block.
+    \end{abstract}
+    \vspace{1em}
+  \end{@twocolumnfalse}
+]
+
+\section{Introduction}
+\lipsum[1-2]
+
+\section{A paragraph that flows across the break}
+\lipsum[3-5]
+
+\begin{figure*}[t]
+  \centering
+  \rule{0.8\textwidth}{1.2in}
+  \caption{A full-width figure spanning both columns.}
+  \label{fig:wide}
+\end{figure*}
+
+\section{More body}
+\lipsum[6-8]
+
+\end{document}

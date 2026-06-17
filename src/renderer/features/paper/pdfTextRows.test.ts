@@ -63,6 +63,30 @@ describe('textRows — pdf.js bottom-up items → top-left rows', () => {
     expect(rows[1]!.baseline).toBeCloseTo(200.12, 2)
   })
 
+  it('splits two runs on a shared baseline across a column gutter into two rows', () => {
+    // left column ends ~x293, right column starts ~x319 — a 26pt gutter (~2.3×
+    // the em) at the same baseline is two columns, not one wrapped line, so the
+    // column geometry can separate them. (Mirrors the measured fixture.)
+    const rows = textRows(
+      [item(54, 591.88, 239, 10.91, 'left'), item(319, 591.88, 239, 10.91, 'right')],
+      viewport(792)
+    )
+    expect(rows).toHaveLength(2)
+    const [a, b] = [...rows].sort((p, q) => p.xLeft - q.xLeft)
+    expect(a!.xRight).toBeCloseTo(293, 0)
+    expect(b!.xLeft).toBeCloseTo(319, 0)
+  })
+
+  it('keeps adjacent words on a line together (gap below the column threshold)', () => {
+    // a normal ~10pt inter-word gap (< 1.5× the em) must NOT split — single
+    // column lines stay one row.
+    const rows = textRows(
+      [item(90, 591.88, 40, 10.91, 'two'), item(140, 591.88, 30, 10.91, 'words')],
+      viewport(792)
+    )
+    expect(rows).toHaveLength(1)
+  })
+
   it('ignores empty / zero-height items', () => {
     const rows = textRows(
       [item(90, 591.88, 40, 10.91, '  '), item(90, 591.88, 0, 0, '')],
