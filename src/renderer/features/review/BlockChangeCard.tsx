@@ -136,19 +136,21 @@ function Shot({ side, state, dual }: { side: Side; state: RenderOutcome | 'loadi
       <div
         style={{
           minHeight: 48,
+          maxHeight: 360,
+          overflow: 'auto',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           background: 'var(--paper-1)',
           border: '1px solid var(--border-default)',
           borderRadius: 'var(--radius-sm)',
-          padding: 8,
+          padding: 12,
         }}
       >
         {state === 'loading' || state === undefined ? (
           <Loader2 size={16} style={{ color: 'var(--ink-300)', animation: 'stz-spin 0.9s linear infinite' }} />
         ) : state.url ? (
-          <img src={state.url} alt={`${side} render`} style={{ maxWidth: '100%', display: 'block' }} />
+          <img src={state.url} alt={`${side} render`} style={{ maxWidth: '100%', maxHeight: 336, objectFit: 'contain', display: 'block' }} />
         ) : (
           <span style={{ font: 'var(--text-2xs)/1.4 var(--font-sans)', color: 'var(--ink-400)' }}>
             {state.error ?? 'Could not render this block on its own.'}

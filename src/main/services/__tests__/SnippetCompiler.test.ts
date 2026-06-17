@@ -43,7 +43,12 @@ describe('SnippetCompiler.render', () => {
     expect(runner.calls[0]).toMatchObject({ cmd: 'tectonic', cwd: root })
     expect(runner.calls[0].args.slice(0, 3)).toEqual(['-X', 'compile', '--keep-logs'])
     expect(targetOf(runner.calls[0])).toMatch(/^\.stanza-snippet-\d+\.tex$/)
-    expect(runner.wrapperAtCall).toBe('\\documentclass{article}\n\\begin{document}\n\\section{Intro}\n\\end{document}\n')
+    // page number suppressed so the renderer's ink-trim crops tight
+    expect(runner.wrapperAtCall).toContain('\\pagestyle{empty}')
+    expect(runner.wrapperAtCall).toContain('\\thispagestyle{empty}')
+    expect(runner.wrapperAtCall).toBe(
+      '\\documentclass{article}\n\\pagestyle{empty}\n\\begin{document}\n\\thispagestyle{empty}\n\\section{Intro}\n\\end{document}\n'
+    )
     expect('pdf' in result && result.pdf.toString()).toContain('%PDF-1.7 fake')
     // wrapper + build files removed (nothing left in the project root)
     for (const ext of ['tex', 'pdf', 'log']) {

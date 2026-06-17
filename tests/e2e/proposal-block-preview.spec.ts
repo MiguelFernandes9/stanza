@@ -78,6 +78,11 @@ test('proposal review shows per-block cards and renders a changed equation in is
   await overlay.getByTestId('block-render-toggle').first().click()
   await expect(overlay.locator('img')).toHaveCount(2, { timeout: 30000 })
 
+  // The render is trimmed tight — no page-number footer dragging the crop down
+  // to span a whole near-empty page (the equation crop is short, not page-tall).
+  const shot = await overlay.locator('img').first().boundingBox()
+  expect(shot!.height).toBeLessThan(220)
+
   // Source tab still shows the raw unified diff.
   await overlay.getByText('Source', { exact: true }).click()
   await expect(overlay).toContainText('varepsilon')

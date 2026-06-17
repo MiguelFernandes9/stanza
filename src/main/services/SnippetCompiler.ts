@@ -40,7 +40,12 @@ export class SnippetCompiler {
   async render(preamble: string, blockText: string): Promise<SnippetResult> {
     const base = `${SNIPPET_PREFIX}-${++this.seq}` // unique per render — no collision
     const target = `${base}.tex`
-    const tex = `${preamble}\\begin{document}\n${blockText}\n\\end{document}\n`
+    // \pagestyle{empty} drops the page number, so the only ink on the page is the
+    // block itself — the renderer's ink-trim then crops tight instead of spanning
+    // down to a footer (which left the block tiny in a near-empty pane).
+    const tex =
+      `${preamble}\\pagestyle{empty}\n\\begin{document}\n` +
+      `\\thispagestyle{empty}\n${blockText}\n\\end{document}\n`
     writeFileSync(join(this.root, target), tex)
     try {
       const proc = await this.runner.run({
