@@ -103,4 +103,17 @@ describe('real-doc block geometry (flat model + rendered-ink walls)', () => {
     expect(eqn).toHaveLength(1)
     expect(eqn[0]!.height).toBeLessThan(120) // the formula, not the whole column
   })
+
+  it('an equation with a leading \\label keeps the previous paragraph last line (baseline-snap)', () => {
+    // eq:mvt (foundations.tex:43) and eq:walk (appendix.tex:9) start with \label;
+    // a tall formula glyph's yTop sits above the prose last-line baseline, so a
+    // yTop-keyed wall stole that line. Anchoring on the baseline keeps it in prose:
+    // the 2-line / 3-line paragraph above retains its full height.
+    const pMvt = at('foundations.tex', 41) // 2 rendered lines
+    expect(pMvt).toHaveLength(1)
+    expect(pMvt[0]!.height).toBeGreaterThan(18)
+    const pWalk = at('appendix.tex', 4) // 3 rendered lines
+    expect(pWalk).toHaveLength(1)
+    expect(pWalk[0]!.height).toBeGreaterThan(35)
+  })
 })

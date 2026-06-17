@@ -463,25 +463,27 @@ export function binContentToBlocks(
       continue
     }
 
-    // Snap each wall DOWN to the block's first rendered ink WITHIN its synctex
-    // region (vertical extent ∩ x-overlap), so a block whose synctex region top
-    // reaches a line above its glyphs — a tall display equation's `v−H` — can't
-    // pull the wall up over the previous block's last line (M2-9, now one rule for
-    // every block, no math gating; the x-overlap keeps a margin-shifted formula
-    // from claiming the full-width prose line beside it).
+    // Snap each wall DOWN to the BASELINE of the block's first rendered ink WITHIN
+    // its synctex region (vertical extent ∩ x-overlap), so a block whose synctex
+    // region top reaches a line above its glyphs — a tall display equation's `v−H`
+    // — can't pull the wall up over the previous block's last line (M2-9, now one
+    // rule for every block, no math gating). The anchor is keyed on the BASELINE,
+    // not yTop: rows partition by baseline, and a tall math glyph's yTop sits a
+    // line ABOVE its baseline, so a yTop anchor would still swallow the prose
+    // baseline beside it. The box extent still comes from the assigned rows' yTop.
     for (const a of anchors) {
-      let inkTop = Infinity
+      let inkKey = Infinity
       for (const r of rows) {
         if (r.baseline < a.top - BAND_EPS || r.baseline > a.bottom + BAND_EPS) continue
         if (r.xRight <= a.xLeft || r.xLeft >= a.xRight) continue
-        inkTop = Math.min(inkTop, r.yTop)
+        inkKey = Math.min(inkKey, r.baseline)
       }
       for (const g of graphics) {
         if (g.yTop < a.top - BAND_EPS || g.yTop > a.bottom + BAND_EPS) continue
         if (g.xRight <= a.xLeft || g.xLeft >= a.xRight) continue
-        inkTop = Math.min(inkTop, g.yTop)
+        inkKey = Math.min(inkKey, g.yTop)
       }
-      if (inkTop !== Infinity) a.top = inkTop
+      if (inkKey !== Infinity) a.top = inkKey
     }
 
     // Anchors per column, sorted top→down — the walls.
