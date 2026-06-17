@@ -248,9 +248,13 @@ export function washBoxes(
 export { isMathEnvName }
 
 /** Vertical gap (pt) above which two stacked text baselines belong to separate
- *  clusters when inferring the body text area. A body line is ~13.5pt; running
- *  heads and page-number folios sit a full margin (>25pt on the demo) from the
- *  body, so any baseline gap beyond this splits furniture off the body run. */
+ *  clusters. A body line is ~13.5pt; running heads and page-number folios sit a
+ *  full margin (>25pt on the demo) from the body, so any baseline gap beyond this
+ *  splits furniture off the body run. Doubles as the WALL CONTIGUITY threshold:
+ *  an in-flow block absorbs a run of ink below its synctex region only while each
+ *  unit stays within this gap of the box's growing bottom — so it keeps every
+ *  wrapped line synctex dropped (one or many) yet stops at the margin-sized gap to
+ *  the next, un-anchored block. */
 const MAX_LINE_GAP = 18
 /** A leading/trailing baseline cluster smaller than this fraction of the largest
  *  cluster is page furniture (a running head or folio — one short line per page,
@@ -260,13 +264,6 @@ const FURNITURE_SHARE = 0.25
  *  sub-pt drift between a synctex rect's baseline (v) and the converted pdf.js
  *  text-row baseline (the bullet measured 719.86 vs 717.7 on the demo). */
 const BAND_EPS = 2
-/** How far below its synctex region a block's wall may still claim a row — just
- *  enough for the ONE wrapped last line synctex drops (~1 line; measured ≤16pt on
- *  the demo, vs ~0 for the 41 blocks synctex covers fully). A larger gap is the
- *  next block's content the synctex map didn't anchor near it — an auto-generated
- *  "References" heading, a stray after a `\bigskip` — and must NOT be absorbed,
- *  else the box runs past the end of its own text into the next block. */
-const MAX_WALL_DROP = 24
 
 /** The document's body text-area vertical band `{top, bottom}` (PDF pt),
  *  inferred from the pdf.js text rows of EVERY page overlaid: the body is the
@@ -314,9 +311,10 @@ export interface BinnedContent {
   columnsByPage: Map<number, ColumnLayout>
 }
 
-/** Per-block structural metadata the binner needs to NEST boxes. A missing entry
- *  defaults to a top-level, non-float, non-section block — which makes the binner
- *  degenerate to the flat one-region-per-block partition (back-compat). */
+/** Per-block structural metadata the binner needs to place boxes (a float's
+ *  render page, a section's heading-line). A missing entry defaults to a
+ *  top-level, non-float, non-section block — the flat one-region-per-block
+ *  partition (back-compat). */
 export interface BlockMeta {
   parentId: string | null
   isFloat: boolean
@@ -473,71 +471,104 @@ export function binContentToBlocks(
       continue
     }
 
-    // Snap each wall DOWN to the BASELINE of the block's first rendered ink WITHIN
-    // its synctex region (vertical extent ∩ x-overlap), so a block whose synctex
-    // region top reaches a line above its glyphs — a tall display equation's `v−H`
-    // — can't pull the wall up over the previous block's last line (M2-9, now one
-    // rule for every block, no math gating). The anchor is keyed on the BASELINE,
-    // not yTop: rows partition by baseline, and a tall math glyph's yTop sits a
-    // line ABOVE its baseline, so a yTop anchor would still swallow the prose
-    // baseline beside it. The box extent still comes from the assigned rows' yTop.
-    for (const a of anchors) {
-      let inkKey = Infinity
-      for (const r of rows) {
-        if (r.baseline < a.top - BAND_EPS || r.baseline > a.bottom + BAND_EPS) continue
-        if (r.xRight <= a.xLeft || r.xLeft >= a.xRight) continue
-        inkKey = Math.min(inkKey, r.baseline)
-      }
-      for (const g of graphics) {
-        if (g.yTop < a.top - BAND_EPS || g.yTop > a.bottom + BAND_EPS) continue
-        if (g.xRight <= a.xLeft || g.xLeft >= a.xRight) continue
-        inkKey = Math.min(inkKey, g.yTop)
-      }
-      if (inkKey !== Infinity) a.top = inkKey
-    }
-
-    // Anchors per column, sorted top→down — the walls.
+    // Walls = anchors per column, sorted top→down. Build the columns once, snap
+    // each wall DOWN to its block's first rendered ink, then re-sort.
+    //
+    // Snap rationale: a block whose synctex region top reaches a line above its
+    // glyphs — a tall display equation's `v−H` — would otherwise pull its wall up
+    // over the previous block's last line (M2-9; one rule for every block, no math
+    // gating). The wall is keyed on the BASELINE, not yTop: rows partition by
+    // baseline, and a tall math glyph's yTop sits a line ABOVE its baseline, so a
+    // yTop wall would still swallow the prose baseline beside it. The snap is
+    // BOUNDED by the next wall in the column — the ink it accepts must sit above the
+    // successor's anchor — so a loose region can never snap PAST its successor and
+    // invert reading order (which would let the later block steal this block's first
+    // line). wallCmp (top, then xLeft, then id) makes wall order deterministic, not
+    // a sort-stability/input-order accident.
+    const wallCmp = (a: Anchor, b: Anchor): number =>
+      a.top - b.top || a.xLeft - b.xLeft || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
     const wallsByCol = new Map<PdfCol, Anchor[]>()
     for (const a of anchors) {
       const arr = wallsByCol.get(a.col)
       if (arr) arr.push(a)
       else wallsByCol.set(a.col, [a])
     }
-    for (const arr of wallsByCol.values()) arr.sort((a, b) => a.top - b.top)
+    for (const arr of wallsByCol.values()) {
+      arr.sort(wallCmp)
+      for (let i = 0; i < arr.length; i++) {
+        const a = arr[i]!
+        // The next wall STRICTLY below (skip equal-top siblings — they share this
+        // position, so they don't bound this block's ink, and using their equal top
+        // as the ceiling would exclude every row and zero out the snap).
+        let ceil = Infinity
+        for (let j = i + 1; j < arr.length; j++) if (arr[j]!.top > a.top) { ceil = arr[j]!.top; break }
+        let inkKey = Infinity
+        for (const r of rows) {
+          if (r.baseline < a.top - BAND_EPS || r.baseline > a.bottom + BAND_EPS || r.baseline >= ceil) continue
+          if (r.xRight <= a.xLeft || r.xLeft >= a.xRight) continue
+          inkKey = Math.min(inkKey, r.baseline)
+        }
+        for (const g of graphics) {
+          if (g.yTop < a.top - BAND_EPS || g.yTop > a.bottom + BAND_EPS || g.yTop >= ceil) continue
+          if (g.xRight <= a.xLeft || g.xLeft >= a.xRight) continue
+          inkKey = Math.min(inkKey, g.yTop)
+        }
+        if (inkKey !== Infinity) a.top = inkKey
+      }
+      arr.sort(wallCmp) // snap moved tops down — re-sort so the walls stay ordered
+    }
 
     const colOf = (u: { yTop: number; yBottom: number; xLeft: number; xRight: number }): PdfCol =>
       layout ? columnOf(layout, u) : 'full'
-    // The block whose anchor (post-snap, so it sits at the block's first ink) is
-    // the greatest at/above `key` in this column. Ink above EVERY anchor is a
-    // header-band stray the band missed — it binds to nothing. Falls back to the
-    // 'full' walls when a column has none of its own (a unit tagged l/r whose
-    // block only anchored full).
-    const owner = (key: number, col: PdfCol): Anchor | null => {
-      const inCol = (c: PdfCol): Anchor | null => {
-        const arr = wallsByCol.get(c)
-        if (!arr) return null
-        let hit: Anchor | null = null
-        // Strict ≤: the snap put each anchor at its block's first-ink yTop, so the
-        // block's own units have baseline ≥ anchor.top — no epsilon needed, and an
-        // epsilon would let the next block claim the previous block's tail (BUG-41).
-        for (const a of arr) { if (a.top <= key) hit = a; else break }
-        return hit
+    // The wall whose anchor (post-snap, at the block's first ink) is the greatest
+    // at/above `key`. On a TIE (two blocks whose first ink shares a baseline) the
+    // earlier wall by wallCmp wins — it keeps its own first line rather than ceding
+    // it to its successor (strict `>`, so the first of an equal-top run is kept).
+    // Ink above EVERY anchor is a header stray the band missed — it binds to
+    // nothing.
+    const greatest = (arr: Anchor[] | undefined, key: number): Anchor | null => {
+      if (!arr) return null
+      let hit: Anchor | null = null
+      for (const a of arr) {
+        if (a.top > key) break
+        if (!hit || a.top > hit.top) hit = a
       }
-      return inCol(col) ?? (col !== 'full' ? inCol('full') : null)
+      return hit
     }
-    // An IN-FLOW block binds a unit only within its synctex region plus one
-    // dropped-line allowance; a row farther below is the next block's content the
-    // map never anchored (e.g. an auto "References" heading), not this block's tail.
-    // FLOATS are exempt: a figure/table caption legitimately sits well below the
-    // graphic/tabular, and a float's extent is already bounded to its render page.
-    const withinDrop = (o: Anchor, key: number): boolean => metaOf(o.id).isFloat || key <= o.bottom + MAX_WALL_DROP
-    for (const r of rows) {
-      const o = owner(r.baseline, colOf({ yTop: r.yTop, yBottom: r.yBottom, xLeft: r.xLeft, xRight: r.xRight }))
-      if (o && withinDrop(o, r.baseline)) addUnit(o.id, page, o.col, r.xLeft, r.yTop, r.xRight, r.yBottom)
+    // A unit tagged l/r with no own-column wall falls back to the full walls; a
+    // gutter-spanning 'full' unit with no full wall falls back to the nearer l/r
+    // wall — so a wide row on a two-column page is never silently dropped for want
+    // of a full-width anchor.
+    const owner = (key: number, col: PdfCol): Anchor | null => {
+      if (col !== 'full') return greatest(wallsByCol.get(col), key) ?? greatest(wallsByCol.get('full'), key)
+      const full = greatest(wallsByCol.get('full'), key)
+      if (full) return full
+      const l = greatest(wallsByCol.get('l'), key)
+      const r = greatest(wallsByCol.get('r'), key)
+      if (!l || !r) return l ?? r
+      return l.top >= r.top ? l : r
     }
-    for (const g of graphics) {
-      const o = owner(g.yTop, colOf(g))
-      if (o && withinDrop(o, g.yTop)) addUnit(o.id, page, o.col, g.xLeft, g.yTop, g.xRight, g.yBottom)
+    // An IN-FLOW block binds its synctex-region ink AND any run CONTIGUOUS below it
+    // — each unit within MAX_LINE_GAP of the box's current bottom — so it keeps ALL
+    // the wrapped lines synctex drops (one or many), yet stops at a margin-sized
+    // gap: content the map never anchored (an auto "References" heading, a stray
+    // past a \bigskip) is the next block's, not this tail. FLOATS are exempt — a
+    // caption sits well below the graphic, and a float is already bounded to its
+    // render page. Units are swept in key order so the box bottom (the frontier)
+    // grows as ink is added.
+    const accepts = (o: Anchor, key: number): boolean => {
+      if (metaOf(o.id).isFloat) return true
+      const cur = boxAcc.get(o.id)?.get(`${page}|${o.col}`)
+      const bottom = cur ? Math.max(cur.bottom, o.bottom) : o.bottom
+      return key <= bottom + MAX_LINE_GAP
+    }
+    const units = [
+      ...rows.map((r) => ({ key: r.baseline, xLeft: r.xLeft, yTop: r.yTop, xRight: r.xRight, yBottom: r.yBottom })),
+      ...graphics.map((g) => ({ key: g.yTop, xLeft: g.xLeft, yTop: g.yTop, xRight: g.xRight, yBottom: g.yBottom }))
+    ].sort((a, b) => a.key - b.key)
+    for (const u of units) {
+      const o = owner(u.key, colOf(u))
+      if (o && accepts(o, u.key)) addUnit(o.id, page, o.col, u.xLeft, u.yTop, u.xRight, u.yBottom)
     }
   }
 

@@ -386,6 +386,41 @@ describe('binContentToBlocks — one row-union builder for every text block', ()
     expect(boxBottom(p2)).toBeCloseTo(758.2, 1)
   })
 
+  it('absorbs MANY synctex-dropped wrapped lines, not just one (contiguity, not a fixed cap)', () => {
+    // A paragraph whose synctex region drops its last wrapped lines and is the LAST
+    // block on the page (no next-wall ceiling). The old fixed one-line cap stopped
+    // ~+24pt past the region bottom — it lost the 2nd dropped line. The contiguity
+    // frontier absorbs the whole run: each line within MAX_LINE_GAP (18) of the
+    // box's growing bottom, so none is lost however many synctex drops.
+    const rects = new Map<string, PdfRect[]>([
+      ['par#1', [prect(3, 90, 600, 432, 27)]] // region 600–627 (2 mapped lines)
+    ])
+    const rows = [
+      trow(601, 612, 90, 522),
+      trow(615, 627, 90, 522), // in-region
+      trow(628, 640, 90, 522), // dropped line 1 (+13 past 627)
+      trow(641, 653, 90, 522), // dropped line 2 (+26 — was OVER the old cap, lost)
+      trow(654, 666, 90, 380) // dropped line 3 (+39)
+    ]
+    const { boxesById } = binContentToBlocks(rects, new Map([[3, rows]]))
+    expect(boxBottom(boxesById.get('par#1')![0]!)).toBeCloseTo(666, 1) // reaches the 3rd dropped line
+  })
+
+  it('bins identically regardless of block insertion order on an equal-top tie (V2)', () => {
+    // Two blocks whose first ink shares a baseline (a tie after the snap). The old
+    // "keep the last anchor ≤ key" resolved ties by Map-insertion / sort-stability
+    // accident; the wallCmp total order (top, then xLeft, then id) + the strict-`>`
+    // owner make the boundary row's owner the same regardless of insertion order.
+    const a: [string, PdfRect[]] = ['z#1', [prect(1, 90, 200, 200, 40)]] // region 200–240
+    const b: [string, PdfRect[]] = ['a#2', [prect(1, 90, 200, 432, 40)]] // same region top 200
+    const rows = [trow(201, 212, 90, 522)] // one shared row both regions cover
+    const fwd = binContentToBlocks(new Map([a, b]), new Map([[1, rows]])).boxesById
+    const rev = binContentToBlocks(new Map([b, a]), new Map([[1, rows]])).boxesById
+    expect(fwd.get('a#2')).toEqual(rev.get('a#2')) // earlier-id wall owns the tie either way
+    expect(fwd.get('z#1')).toEqual(rev.get('z#1'))
+    expect(fwd.get('a#2')).toBeTruthy() // 'a#2' (id-first) is the deterministic owner
+  })
+
   it('partitions on the baseline so a tight stack does not bleed into the next block (BUG-41)', () => {
     // {\large} abstract: para1 box bottoms at 294.5 with a dropped "emblem." row
     // (baseline 306); para2's region top is 311.52 and its first row has yTop
