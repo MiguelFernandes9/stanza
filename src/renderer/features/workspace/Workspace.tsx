@@ -43,6 +43,8 @@ import { planMove } from './fileDrag'
 import { revealBlock } from './revealBlock'
 import { ResizeHandle } from './ResizeHandle'
 import { Sidebar } from './Sidebar'
+import { ConsolePanel } from '../console/ConsolePanel'
+import { formatFixInstruction } from '../console/formatFixInstruction'
 import { usePaneWidths } from './usePaneWidths'
 import { uniqueName } from './fileMenu'
 import { TitleBar } from './TitleBar'
@@ -109,6 +111,11 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
   // opens a file (sidebar click or PDF inverse search).
   const [activeFile, setActiveFile] = useState('')
   const [compileErrors, setCompileErrors] = useState<CompileError[]>([])
+  // Raw tectonic log of the last failed compile (powers the console's Raw-log
+  // view + feeds "Fix with Claude"); '' after a clean build.
+  const [compileLog, setCompileLog] = useState('')
+  // Bottom compile console (Problems panel); auto-opens on a failed compile.
+  const [consoleOpen, setConsoleOpen] = useState(false)
   const [pdfState, setPdfState] = useState<{ rel: string; nonce: number } | null>(null)
   const [pdfFlash, setPdfFlash] = useState<PdfFlash | null>(null)
   // Outline reveal: which block PaperPane should scroll the PDF to (nonce
@@ -118,6 +125,17 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
   const [renameOnAppear, setRenameOnAppear] = useState<string | null>(null)
   const clearRenameOnAppear = useCallback(() => setRenameOnAppear(null), [])
   const editorApi = useRef<EditorApi | null>(null)
+  // A jump requested while the editor pane was still closed: openFile mounts
+  // EditorPane on the NEXT render, so editorApi.current is null right now —
+  // stash the target and flush it when EditorPane registers (below). Without
+  // this, the first console/outline/inverse-search jump after the editor was
+  // closed would open the file at the top instead of the target line.
+  const pendingEditorJump = useRef<{ file: string; line: number } | null>(null)
+  // Jump the editor to file:line, or stash it if the editor hasn't mounted yet.
+  const jumpInEditor = useCallback((file: string, line: number): void => {
+    if (editorApi.current) editorApi.current.jumpTo(file, line)
+    else pendingEditorJump.current = { file, line }
+  }, [])
   // Editor tab set (source of truth; EditorPane renders it). Starts empty;
   // reset alongside activeFile when the document changes.
   const [openFiles, setOpenFiles] = useState<string[]>([])
@@ -289,6 +307,10 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
         if (res.aborted) return
         setCompile({ state: res.ok ? 'ok' : 'failed', errors: res.errors.length, warnings: 0 })
         setCompileErrors(res.errors)
+        setCompileLog(res.log ?? '')
+        // Surface failures without a hunt: pop the console the moment a build
+        // breaks. Success leaves the panel as the user left it.
+        if (!res.ok) setConsoleOpen(true)
         if (res.ok && res.pdfPath) {
           // tectonic writes the PDF flat at the doc root (cwd), so the
           // basename is its root-relative path — no absolute path in the URL.
@@ -345,7 +367,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
         // known project file so a regression still jumps instead of no-op'ing.
         const file = resolveToKnownFile(loc.file, doc.texFiles)
         openFile(file) // add the tab + reveal the pane before scrolling to it
-        editorApi.current?.jumpTo(file, loc.line)
+        jumpInEditor(file, loc.line)
       },
       () => undefined
     )
@@ -374,6 +396,12 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
       if (key === 'b') {
         e.preventDefault()
         dispatch({ type: 'toggle-view' })
+        return
+      }
+      // Cmd/Ctrl+` → toggle the compile console (VS Code panel convention).
+      if (e.key === '`') {
+        e.preventDefault()
+        setConsoleOpen((v) => !v)
         return
       }
 
@@ -570,6 +598,16 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
     runOp(taskId, text, [])
   }
 
+  /** Console "Fix with Claude": bundle every current compile error + the raw
+   *  log into one whole-document op (errors have no block anchor → spans: []).
+   *  Reuses submitWholeDoc, so the result lands in the normal proposal flow;
+   *  open the chat so the proposal is visible. */
+  const fixWithClaude = (): void => {
+    if (editorErrors.length === 0) return
+    setChatOpen(true)
+    submitWholeDoc(formatFixInstruction(editorErrors, compileLog))
+  }
+
   const resolveTask = (taskId: number, accept: boolean): void => {
     const task = state.tasks.find((t) => t.id === taskId)
     const opId = task?.proposal?.opId ?? task?.opId
@@ -698,7 +736,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
               {
                 scrollPdf: (bid) => setRevealSignal({ id: bid, nonce: Date.now() }),
                 openFile,
-                jumpTo: (file, line) => editorApi.current?.jumpTo(file, line)
+                jumpTo: jumpInEditor
               }
             )
           }}
@@ -739,6 +777,13 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
             onForwardSearch={forwardSearch}
             register={(api) => {
               editorApi.current = api
+              // Flush a jump requested before the editor mounted (file already
+              // opened above; EditorPane queues it until the buffer loads).
+              const pj = pendingEditorJump.current
+              if (pj) {
+                pendingEditorJump.current = null
+                api.jumpTo(pj.file, pj.line)
+              }
             }}
           />
         )}
@@ -799,6 +844,24 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           />
         )}
       </div>
+      {consoleOpen && (
+        <>
+          <ResizeHandle orientation="horizontal" ariaLabel="Resize console" onResize={panes.resizeConsole} />
+          <ConsolePanel
+            errors={editorErrors}
+            log={compileLog}
+            state={compile.state}
+            height={panes.consoleHeight}
+            onJump={(file, line) => {
+              openFile(file)
+              jumpInEditor(file, line)
+            }}
+            onFix={fixWithClaude}
+            onClose={() => setConsoleOpen(false)}
+            busy={chatBusy}
+          />
+        </>
+      )}
       {historyDiff && (
         <HistoryDiffOverlay
           subject={historyDiff.subject}

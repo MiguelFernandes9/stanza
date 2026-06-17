@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   clamp,
   clampPaneWidths,
+  CONSOLE_MAX,
+  CONSOLE_MIN,
+  DEFAULT_CONSOLE,
   DEFAULT_EDITOR,
   DEFAULT_SIDEBAR,
   EDITOR_MAX,
@@ -34,69 +37,71 @@ describe('clamp', () => {
 })
 
 describe('clampPaneWidths', () => {
-  it('clamps both panes below their minimum', () => {
-    expect(clampPaneWidths({ sidebar: 50, editor: 50 })).toEqual({
+  it('clamps every pane below its minimum', () => {
+    expect(clampPaneWidths({ sidebar: 50, editor: 50, consoleHeight: 10 })).toEqual({
       sidebar: SIDEBAR_MIN,
-      editor: EDITOR_MIN
+      editor: EDITOR_MIN,
+      consoleHeight: CONSOLE_MIN
     })
   })
 
-  it('clamps both panes above their maximum', () => {
-    expect(clampPaneWidths({ sidebar: 9999, editor: 9999 })).toEqual({
+  it('clamps every pane above its maximum', () => {
+    expect(clampPaneWidths({ sidebar: 9999, editor: 9999, consoleHeight: 9999 })).toEqual({
       sidebar: SIDEBAR_MAX,
-      editor: EDITOR_MAX
+      editor: EDITOR_MAX,
+      consoleHeight: CONSOLE_MAX
     })
   })
 
-  it('leaves in-range widths untouched', () => {
-    expect(clampPaneWidths({ sidebar: 300, editor: 500 })).toEqual({ sidebar: 300, editor: 500 })
+  it('leaves in-range sizes untouched', () => {
+    expect(clampPaneWidths({ sidebar: 300, editor: 500, consoleHeight: 250 })).toEqual({
+      sidebar: 300,
+      editor: 500,
+      consoleHeight: 250
+    })
   })
 })
 
 describe('loadPaneWidths', () => {
+  const defaults = { sidebar: DEFAULT_SIDEBAR, editor: DEFAULT_EDITOR, consoleHeight: DEFAULT_CONSOLE }
+
   it('returns defaults when nothing is stored', () => {
-    expect(loadPaneWidths(fakeStorage())).toEqual({
-      sidebar: DEFAULT_SIDEBAR,
-      editor: DEFAULT_EDITOR
-    })
+    expect(loadPaneWidths(fakeStorage())).toEqual(defaults)
   })
 
   it('returns defaults when no storage is available (SSR / disabled)', () => {
-    expect(loadPaneWidths(undefined)).toEqual({ sidebar: DEFAULT_SIDEBAR, editor: DEFAULT_EDITOR })
+    expect(loadPaneWidths(undefined)).toEqual(defaults)
   })
 
-  it('reads stored widths, clamping out-of-range values', () => {
-    const s = fakeStorage({ [KEY]: JSON.stringify({ sidebar: 9999, editor: 400 }) })
-    expect(loadPaneWidths(s)).toEqual({ sidebar: SIDEBAR_MAX, editor: 400 })
+  it('reads stored sizes, clamping out-of-range values', () => {
+    const s = fakeStorage({ [KEY]: JSON.stringify({ sidebar: 9999, editor: 400, consoleHeight: 9999 }) })
+    expect(loadPaneWidths(s)).toEqual({ sidebar: SIDEBAR_MAX, editor: 400, consoleHeight: CONSOLE_MAX })
   })
 
   it('falls back to defaults on corrupt JSON', () => {
-    expect(loadPaneWidths(fakeStorage({ [KEY]: 'not json {' }))).toEqual({
-      sidebar: DEFAULT_SIDEBAR,
-      editor: DEFAULT_EDITOR
-    })
+    expect(loadPaneWidths(fakeStorage({ [KEY]: 'not json {' }))).toEqual(defaults)
   })
 
   it('fills a missing field with its default', () => {
     const s = fakeStorage({ [KEY]: JSON.stringify({ sidebar: 300 }) })
-    expect(loadPaneWidths(s)).toEqual({ sidebar: 300, editor: DEFAULT_EDITOR })
+    expect(loadPaneWidths(s)).toEqual({ sidebar: 300, editor: DEFAULT_EDITOR, consoleHeight: DEFAULT_CONSOLE })
   })
 })
 
 describe('savePaneWidths', () => {
   it('writes JSON under stanza.paneWidths', () => {
     const s = fakeStorage()
-    savePaneWidths({ sidebar: 300, editor: 500 }, s)
-    expect(JSON.parse(s.mem.get(KEY)!)).toEqual({ sidebar: 300, editor: 500 })
+    savePaneWidths({ sidebar: 300, editor: 500, consoleHeight: 250 }, s)
+    expect(JSON.parse(s.mem.get(KEY)!)).toEqual({ sidebar: 300, editor: 500, consoleHeight: 250 })
   })
 
   it('round-trips through loadPaneWidths', () => {
     const s = fakeStorage()
-    savePaneWidths({ sidebar: 320, editor: 600 }, s)
-    expect(loadPaneWidths(s)).toEqual({ sidebar: 320, editor: 600 })
+    savePaneWidths({ sidebar: 320, editor: 600, consoleHeight: 300 }, s)
+    expect(loadPaneWidths(s)).toEqual({ sidebar: 320, editor: 600, consoleHeight: 300 })
   })
 
   it('never throws when storage is unavailable', () => {
-    expect(() => savePaneWidths({ sidebar: 300, editor: 500 }, undefined)).not.toThrow()
+    expect(() => savePaneWidths({ sidebar: 300, editor: 500, consoleHeight: 250 }, undefined)).not.toThrow()
   })
 })

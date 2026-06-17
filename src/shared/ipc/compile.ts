@@ -6,6 +6,7 @@ export interface CompileResult {
   pdfPath?: string      // absolute; set when ok
   synctexPath?: string
   errors: CompileError[]
+  log?: string          // raw tectonic .log (or stderr); set on failure for the console
 }
 export type CompileStatus = 'running' | 'ok' | 'failed'
 export interface InversePoint { page: number; x: number; y: number }  // PDF pt
