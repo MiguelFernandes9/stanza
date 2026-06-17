@@ -1,14 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import type { JSX } from 'react'
 import { Check, Sparkles, X } from 'lucide-react'
 import { BlockTag, Button, IconButton, Kbd, SegmentedControl } from '@renderer/components'
 import type { BlockTagKind } from '@renderer/components'
-import type { BlockChange } from '@shared/blocks/changes'
 import type { RenderBlockRequest, RenderBlockResult, ReviewProposal } from '@shared/ipc'
 import { BlockChangeCard } from './BlockChangeCard'
-import type { RenderOutcome } from './BlockChangeCard'
+import { DiffPreviewPane } from './DiffPreviewPane'
 import { DiffView } from './DiffView'
-import { renderSnippet } from './renderSnippet'
 
 export interface ReviewBlockTag {
   kind: BlockTagKind
@@ -20,19 +18,21 @@ interface Props {
   proposal: ReviewProposal
   note?: string
   blockTag: ReviewBlockTag | null
-  /** review:renderBlock — typeset one changed block in isolation. */
+  /** review:renderBlock — the marked (latexdiff) render of one changed block. */
   renderBlock: (req: RenderBlockRequest) => Promise<RenderBlockResult>
   onClose: () => void
   onResolve: (accept: boolean) => void
 }
 
-/** Full-screen review. Blocks view = one card per changed block (kind, name,
- *  source word-diff, and an on-demand isolated render); Source view = the raw
- *  unified diff. ⌘↵ accept, esc/click-out close. */
+/** Full-screen review, two panes: LEFT the changed-block cards (Blocks) or the
+ *  raw unified diff (Source); RIGHT a Preview of the selected block rendered with
+ *  its change marked inline (latexdiff), zoom + scroll. ⌘↵ accept, esc/click-out
+ *  close. */
 export function ReviewOverlay({ proposal, note, blockTag, renderBlock, onClose, onResolve }: Props): JSX.Element {
-  const hasBlocks = proposal.blocks.length > 0
+  const blocks = proposal.blocks
+  const hasBlocks = blocks.length > 0
   const [mode, setMode] = useState<'blocks' | 'source'>(hasBlocks ? 'blocks' : 'source')
-  const cache = useRef(new Map<string, RenderOutcome>())
+  const [selected, setSelected] = useState(0)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -42,26 +42,6 @@ export function ReviewOverlay({ proposal, note, blockTag, renderBlock, onClose, 
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose, onResolve])
-
-  const makeRender =
-    (change: BlockChange) =>
-    async (side: 'before' | 'after'): Promise<RenderOutcome> => {
-      const text = side === 'before' ? change.beforeText : change.afterText
-      if (!text) return { error: 'No content on this side.' }
-      const key = `${side}:${text}`
-      const hit = cache.current.get(key)
-      if (hit) return hit
-      const res = await renderBlock({ opId: proposal.opId, side, text })
-      let out: RenderOutcome
-      if ('error' in res) {
-        out = { error: res.error }
-      } else {
-        const url = await renderSnippet(res.pdf)
-        out = url ? { url } : { error: 'Nothing rendered for this block.' }
-      }
-      cache.current.set(key, out)
-      return out
-    }
 
   return (
     <div
@@ -81,8 +61,8 @@ export function ReviewOverlay({ proposal, note, blockTag, renderBlock, onClose, 
         onClick={(e) => e.stopPropagation()}
         data-testid="review-overlay"
         style={{
-          width: 'min(880px, 92vw)',
-          maxHeight: '86vh',
+          width: hasBlocks ? 'min(1180px, 95vw)' : 'min(880px, 92vw)',
+          height: '88vh',
           display: 'flex',
           flexDirection: 'column',
           background: 'var(--paper-1)',
@@ -98,32 +78,46 @@ export function ReviewOverlay({ proposal, note, blockTag, renderBlock, onClose, 
           </span>
           {blockTag && <BlockTag kind={blockTag.kind} label={blockTag.label} span={blockTag.span} active />}
           <div style={{ flex: 1 }} />
-          <SegmentedControl
-            size="sm"
-            value={mode}
-            onChange={(v) => setMode(v as 'blocks' | 'source')}
-            options={[
-              { value: 'blocks', label: 'Blocks' },
-              { value: 'source', label: 'Source' }
-            ]}
-          />
+          {hasBlocks && (
+            <SegmentedControl
+              size="sm"
+              value={mode}
+              onChange={(v) => setMode(v as 'blocks' | 'source')}
+              options={[
+                { value: 'blocks', label: 'Blocks' },
+                { value: 'source', label: 'Source' }
+              ]}
+            />
+          )}
           <IconButton size="sm" label="Close" onClick={onClose}>
             <X size={15} />
           </IconButton>
         </div>
 
-        <div style={{ flex: 1, overflow: 'auto', padding: 18 }}>
-          {note && <div style={{ font: 'var(--text-sm)/1.5 var(--font-sans)', color: 'var(--ink-600)', marginBottom: 14 }}>{note}</div>}
-          {mode === 'blocks' ? (
-            hasBlocks ? (
-              <BlockList blocks={proposal.blocks} makeRender={makeRender} />
+        <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+          {/* LEFT — the LaTeX change */}
+          <div
+            style={{
+              width: hasBlocks ? 460 : '100%',
+              flex: hasBlocks ? '0 0 auto' : '1',
+              overflow: 'auto',
+              padding: 18,
+              borderRight: hasBlocks ? '1px solid var(--border-default)' : undefined
+            }}
+          >
+            {note && <div style={{ font: 'var(--text-sm)/1.5 var(--font-sans)', color: 'var(--ink-600)', marginBottom: 14 }}>{note}</div>}
+            {mode === 'blocks' && hasBlocks ? (
+              <BlockList blocks={blocks} selected={selected} onSelect={setSelected} />
             ) : (
-              <div style={{ font: 'var(--text-sm)/1.5 var(--font-sans)', color: 'var(--ink-400)' }}>
-                No per-block view for this change — see the Source diff.
-              </div>
-            )
-          ) : (
-            <DiffView diff={proposal.diff} files={proposal.files} />
+              <DiffView diff={proposal.diff} files={proposal.files} />
+            )}
+          </div>
+
+          {/* RIGHT — the rendered preview of the selected block */}
+          {hasBlocks && (
+            <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>
+              <DiffPreviewPane opId={proposal.opId} index={selected} renderBlock={renderBlock} />
+            </div>
           )}
         </div>
 
@@ -158,32 +152,30 @@ export function ReviewOverlay({ proposal, note, blockTag, renderBlock, onClose, 
   )
 }
 
-/** Cards grouped by file; a file header shows only when the change spans more
- *  than one file (the common single-file case stays uncluttered). */
+/** Selectable change cards, with a file header before each new file (only when
+ *  the change spans more than one file). The card index is its position in
+ *  proposal.blocks — the key the preview renders by. */
 function BlockList({
   blocks,
-  makeRender
+  selected,
+  onSelect
 }: {
-  blocks: BlockChange[]
-  makeRender: (c: BlockChange) => (side: 'before' | 'after') => Promise<RenderOutcome>
+  blocks: ReviewProposal['blocks']
+  selected: number
+  onSelect: (i: number) => void
 }): JSX.Element {
-  const files = [...new Set(blocks.map((b) => b.file))]
-  const multi = files.length > 1
+  const multi = new Set(blocks.map((b) => b.file)).size > 1
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {files.map((file) => (
-        <div key={file} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {multi && (
-            <div style={{ font: 'var(--weight-semibold) var(--text-2xs)/1 var(--font-mono)', color: 'var(--ink-400)', marginTop: 2 }}>
-              {file}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {blocks.map((change, i) => (
+        <Fragment key={i}>
+          {multi && (i === 0 || blocks[i - 1].file !== change.file) && (
+            <div style={{ font: 'var(--weight-semibold) var(--text-2xs)/1 var(--font-mono)', color: 'var(--ink-400)', marginTop: i === 0 ? 0 : 6 }}>
+              {change.file}
             </div>
           )}
-          {blocks
-            .filter((b) => b.file === file)
-            .map((change, i) => (
-              <BlockChangeCard key={i} change={change} onRender={makeRender(change)} />
-            ))}
-        </div>
+          <BlockChangeCard change={change} selected={i === selected} onSelect={() => onSelect(i)} />
+        </Fragment>
       ))}
     </div>
   )

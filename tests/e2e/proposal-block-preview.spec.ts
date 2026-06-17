@@ -47,7 +47,7 @@ test.afterAll(async () => {
   await app?.close()
 })
 
-test('proposal review shows per-block cards and renders a changed equation in isolation', async () => {
+test('proposal review shows block cards + a marked latexdiff preview of the selected block', async () => {
   // Whole-doc op that edits the equation (no PDF-click selection needed).
   await page.keyboard.press('Meta+j')
   const composer = page.getByPlaceholder('Edit the whole document…')
@@ -65,25 +65,20 @@ test('proposal review shows per-block cards and renders a changed equation in is
   await expect(bubble).toBeVisible()
   await bubble.getByRole('button', { name: 'Review' }).click()
 
-  // Blocks view (default): an "Equation" card, marked Modified, word-diffing the
-  // source — the new \varepsilon term shows.
+  // Left pane (default Blocks): an "Equation" card, marked Modified, word-diffing
+  // the source — the new \varepsilon term shows.
   const overlay = page.getByTestId('review-overlay')
   await expect(overlay).toBeVisible()
+  await expect(overlay.getByTestId('block-card').first()).toBeVisible()
   await expect(overlay.getByText('Equation').first()).toBeVisible()
   await expect(overlay.getByText('Modified').first()).toBeVisible()
   await expect(overlay).toContainText('varepsilon')
 
-  // Preview: compile the block alone → BOTH the current and proposed renders
-  // appear (concurrent isolated compiles, each in its own wrapper file).
-  await overlay.getByTestId('block-render-toggle').first().click()
-  await expect(overlay.locator('img')).toHaveCount(2, { timeout: 30000 })
+  // Right pane: the selected block's marked latexdiff render is compiled eagerly
+  // and shown in the preview (a cropped page image), no spinner left hanging.
+  await expect(overlay.locator('img').first()).toBeVisible({ timeout: 30000 })
 
-  // The render is trimmed tight — no page-number footer dragging the crop down
-  // to span a whole near-empty page (the equation crop is short, not page-tall).
-  const shot = await overlay.locator('img').first().boundingBox()
-  expect(shot!.height).toBeLessThan(220)
-
-  // Source tab still shows the raw unified diff.
+  // Source toggle shows the raw unified diff on the left.
   await overlay.getByText('Source', { exact: true }).click()
   await expect(overlay).toContainText('varepsilon')
 
