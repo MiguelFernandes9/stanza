@@ -30,6 +30,11 @@ export type GraphicOp =
    *  `paints` is false for a clip / `endPath` that draws no ink. A plot is a stream
    *  of these — the only rendered signal a vector graphic leaves (no image/form). */
   | { op: 'path'; paints: boolean; minMax: number[] | null }
+  /** A clip (`W`/`W*`) applied to the just-constructed path: intersects the active
+   *  clip region with that path's `minMax` bbox under the CTM. pgfplots clips its
+   *  plot to the axis box, so without this a data line drawn past the axis would
+   *  contribute its full pre-clip bbox and inflate the figure's box past its caption. */
+  | { op: 'clip'; minMax: number[] | null }
 
 /** Compose two affine matrices `[a,b,c,d,e,f]` (point (x,y) ↦ (ax+cy+e,
  *  bx+dy+f)): the result applies `n` first, then `m` — i.e. concatenating `n`
@@ -69,16 +74,30 @@ const UNIT_SQUARE = [[0, 0], [1, 0], [1, 1], [0, 1]]
  *  glyph boxes live in one coordinate space. Pure; `convert` is injectable. */
 export function graphicBoxesFromOps(ops: GraphicOp[], convert: (x: number, y: number) => number[]): GraphicBox[] {
   let ctm = [1, 0, 0, 1, 0, 0]
-  const stack: number[][] = []
+  let clip: GraphicBox | null = null // active clip region (device/top-left space), or none
+  const stack: { ctm: number[]; clip: GraphicBox | null }[] = []
   const out: GraphicBox[] = []
+  const boxOf = (mm: number[]): GraphicBox => {
+    const [x0, y0, x1, y1] = mm
+    return cornersBox(ctm, [[x0!, y0!], [x1!, y0!], [x1!, y1!], [x0!, y1!]], convert)
+  }
+  // Intersect a box with the active clip; null when the clip excludes it entirely.
+  const clipped = (b: GraphicBox): GraphicBox | null => {
+    if (!clip) return b
+    const xLeft = Math.max(b.xLeft, clip.xLeft), xRight = Math.min(b.xRight, clip.xRight)
+    const yTop = Math.max(b.yTop, clip.yTop), yBottom = Math.min(b.yBottom, clip.yBottom)
+    return xRight > xLeft && yBottom > yTop ? { xLeft, xRight, yTop, yBottom } : null
+  }
   for (const g of ops) {
     switch (g.op) {
       case 'save':
-        stack.push(ctm.slice())
+        stack.push({ ctm: ctm.slice(), clip })
         break
-      case 'restore':
-        ctm = stack.pop() ?? ctm
+      case 'restore': {
+        const s = stack.pop()
+        if (s) { ctm = s.ctm; clip = s.clip }
         break
+      }
       case 'transform':
         ctm = compose(ctm, g.m)
         break
@@ -91,21 +110,29 @@ export function graphicBoxesFromOps(ops: GraphicOp[], convert: (x: number, y: nu
           const [x0, y0, x1, y1] = g.bbox
           out.push(cornersBox(m, [[x0!, y0!], [x1!, y0!], [x1!, y1!], [x0!, y1!]], convert))
         }
-        stack.push(ctm.slice()) // the form body runs under CTM ∘ matrix
+        stack.push({ ctm: ctm.slice(), clip }) // the form body runs under CTM ∘ matrix
         ctm = m
         break
       }
-      case 'formEnd':
-        ctm = stack.pop() ?? ctm
+      case 'formEnd': {
+        const s = stack.pop()
+        if (s) { ctm = s.ctm; clip = s.clip }
         break
-      case 'path':
-        // A painted vector path: its minMax bbox (pre-CTM) mapped through the CTM,
-        // exactly like a form's bbox. A clip/endPath (paints:false) draws no ink.
+      }
+      case 'clip':
+        // Tighten the active clip to this path's bbox (clipping is intersective).
+        if (g.minMax) clip = clipped(boxOf(g.minMax)) ?? clip
+        break
+      case 'path': {
+        // A painted vector path: its minMax bbox under the CTM, then CLIPPED to the
+        // active region — so a pgfplots line drawn past its axis contributes only the
+        // visible (clipped) extent, not its full pre-clip bbox.
         if (g.paints && g.minMax) {
-          const [x0, y0, x1, y1] = g.minMax
-          out.push(cornersBox(ctm, [[x0!, y0!], [x1!, y0!], [x1!, y1!], [x0!, y1!]], convert))
+          const c = clipped(boxOf(g.minMax))
+          if (c) out.push(c)
         }
         break
+      }
     }
   }
   return out
@@ -122,6 +149,7 @@ export function graphicOpsFromList(
   OPS: Record<string, number>
 ): GraphicOp[] {
   const ops: GraphicOp[] = []
+  let lastMinMax: number[] | null = null // bbox of the most recent path, for a following clip
   for (let i = 0; i < fnArray.length; i++) {
     const fn = fnArray[i]!
     const args = argsArray[i] as unknown[]
@@ -138,8 +166,12 @@ export function graphicOpsFromList(
     else if (fn === OPS.constructPath) {
       const paintOp = args[0] as number
       const minMax = args[2] as ArrayLike<number> | undefined
-      ops.push({ op: 'path', paints: paintOp !== OPS.endPath, minMax: minMax ? Array.from(minMax) : null })
+      lastMinMax = minMax ? Array.from(minMax) : null
+      ops.push({ op: 'path', paints: paintOp !== OPS.endPath, minMax: lastMinMax })
     }
+    // A clip (`W`/`W*`) follows the path it clips against — carry that path's bbox
+    // so graphicBoxesFromOps can tighten the clip region.
+    else if (fn === OPS.clip || fn === OPS.eoClip) ops.push({ op: 'clip', minMax: lastMinMax })
   }
   return ops
 }

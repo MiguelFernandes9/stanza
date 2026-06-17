@@ -115,6 +115,29 @@ describe('graphicBoxesFromOps — native vector path bboxes (tikz/pgfplots, rule
     expect(graphicBoxesFromOps([{ op: 'path', paints: true, minMax: null }], flip(792))).toEqual([])
   })
 
+  it('clips a painted path to the active clip region (a pgfplots line ∩ its axis)', () => {
+    const ops: GraphicOp[] = [
+      { op: 'path', paints: false, minMax: [0, 0, 100, 40] }, // the clip path (axis box, y0–40)
+      { op: 'clip', minMax: [0, 0, 100, 40] },
+      { op: 'path', paints: true, minMax: [0, 0, 100, 100] } // a data line drawn past the axis (y0–100)
+    ]
+    const [box] = graphicBoxesFromOps(ops, flip(792))
+    expect(box!.yTop).toBeCloseTo(752, 3) // clipped to the axis top (792−40), NOT 692 (792−100)
+    expect(box!.yBottom).toBeCloseTo(792, 3)
+    expect(box!.xRight).toBeCloseTo(100, 3)
+  })
+
+  it('releases the clip on restore', () => {
+    const ops: GraphicOp[] = [
+      { op: 'save' },
+      { op: 'clip', minMax: [0, 0, 100, 40] },
+      { op: 'restore' },
+      { op: 'path', paints: true, minMax: [0, 0, 100, 100] } // after restore: unclipped
+    ]
+    const [box] = graphicBoxesFromOps(ops, flip(792))
+    expect(box!.yTop).toBeCloseTo(692, 3) // 792−100, full extent
+  })
+
   it('emits one box per painted path — the binner unions them per block', () => {
     const ops: GraphicOp[] = [
       { op: 'path', paints: true, minMax: [0, 0, 5, 5] },
