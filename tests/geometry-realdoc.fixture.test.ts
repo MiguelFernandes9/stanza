@@ -116,4 +116,17 @@ describe('real-doc block geometry (flat model + rendered-ink walls)', () => {
     expect(pWalk).toHaveLength(1)
     expect(pWalk[0]!.height).toBeGreaterThan(35)
   })
+
+  it('the last paragraph does not run its box into the "References" heading below', () => {
+    // The bibliography's auto "References" heading renders ~32pt below the appendix's
+    // last paragraph, with no synctex anchor near it — the paragraph's wall absorbed
+    // it (box ran to y398, over the heading). The wall now stops one dropped-line
+    // past the paragraph's own text, so the box ends at its sentence.
+    const para = at('appendix.tex', 63)
+    const biblio = at('bibliography.tex', 1)
+    expect(para).toHaveLength(1)
+    expect(biblio).toHaveLength(1)
+    expect(overlap(para[0]!, biblio[0]!)).toBe(false)
+    expect(para[0]!.y + para[0]!.height).toBeLessThan(370) // ends at its own last line (~363)
+  })
 })

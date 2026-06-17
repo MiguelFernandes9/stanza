@@ -260,6 +260,13 @@ const FURNITURE_SHARE = 0.25
  *  sub-pt drift between a synctex rect's baseline (v) and the converted pdf.js
  *  text-row baseline (the bullet measured 719.86 vs 717.7 on the demo). */
 const BAND_EPS = 2
+/** How far below its synctex region a block's wall may still claim a row — just
+ *  enough for the ONE wrapped last line synctex drops (~1 line; measured ≤16pt on
+ *  the demo, vs ~0 for the 41 blocks synctex covers fully). A larger gap is the
+ *  next block's content the synctex map didn't anchor near it — an auto-generated
+ *  "References" heading, a stray after a `\bigskip` — and must NOT be absorbed,
+ *  else the box runs past the end of its own text into the next block. */
+const MAX_WALL_DROP = 24
 
 /** The document's body text-area vertical band `{top, bottom}` (PDF pt),
  *  inferred from the pdf.js text rows of EVERY page overlaid: the body is the
@@ -515,13 +522,17 @@ export function binContentToBlocks(
       }
       return inCol(col) ?? (col !== 'full' ? inCol('full') : null)
     }
+    // A unit binds to its owner only if it sits within the block's synctex region
+    // plus one dropped-line allowance; a row farther below is the next block's
+    // content the map never anchored (e.g. an auto "References" heading), not this
+    // block's tail — leave it unbound rather than overrun the block's own text.
     for (const r of rows) {
       const o = owner(r.baseline, colOf({ yTop: r.yTop, yBottom: r.yBottom, xLeft: r.xLeft, xRight: r.xRight }))
-      if (o) addUnit(o.id, page, o.col, r.xLeft, r.yTop, r.xRight, r.yBottom)
+      if (o && r.baseline <= o.bottom + MAX_WALL_DROP) addUnit(o.id, page, o.col, r.xLeft, r.yTop, r.xRight, r.yBottom)
     }
     for (const g of graphics) {
       const o = owner(g.yTop, colOf(g))
-      if (o) addUnit(o.id, page, o.col, g.xLeft, g.yTop, g.xRight, g.yBottom)
+      if (o && g.yTop <= o.bottom + MAX_WALL_DROP) addUnit(o.id, page, o.col, g.xLeft, g.yTop, g.xRight, g.yBottom)
     }
   }
 
