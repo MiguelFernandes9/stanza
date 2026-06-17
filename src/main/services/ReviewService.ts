@@ -5,6 +5,7 @@ import type {
   ReviewResolution,
 } from '../../shared/ipc/review'
 import type { GitClient } from '../infra/GitClient'
+import { computeBlockChanges } from './blockChanges'
 import { changedFilesInDiff, outsideSpanFiles } from './diffSpans'
 
 const BRANCH_PREFIX = 'stanza/op-'
@@ -130,6 +131,9 @@ export class ReviewService {
       files: changedFilesInDiff(diff),
       outsideSpan: outsideSpanFiles(diff, spans),
       diff,
+      blocks: await computeBlockChanges(diff, 'HEAD', branch, (rev, file) =>
+        this.git.show(rev, file),
+      ),
     }
   }
 }

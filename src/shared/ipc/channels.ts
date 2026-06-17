@@ -22,7 +22,7 @@ export const IpcChannels = {
   reviewProposal: 'review:proposal',  // main→renderer event: ReviewProposal
   reviewResolve: 'review:resolve',    // invoke ReviewDecision → ReviewResolution
   reviewList: 'review:list',          // invoke → ReviewProposal[] (pending op branches)
-  reviewFileAt: 'review:fileAt',      // invoke {opId, file} → {before: string; after: string}
+  reviewRenderBlock: 'review:renderBlock', // invoke RenderBlockRequest → RenderBlockResult (isolated block PDF, base64)
   documentRename: 'document:rename',       // invoke {from: string; to: string} → FileMutationResult
   documentDuplicate: 'document:duplicate', // invoke {relPath: string} → FileMutationResult
   documentDelete: 'document:delete',       // invoke {relPath: string} → FileMutationResult

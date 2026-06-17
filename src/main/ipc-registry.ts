@@ -16,6 +16,7 @@ import type {
   IpcChannel,
   OpRecord,
   RecentProject,
+  RenderBlockRequest,
   ReviewDecision,
   GlobalSettings,
   DocumentSettings,
@@ -23,6 +24,7 @@ import type {
   SettingsChanged,
 } from '@shared/ipc'
 import { parseProjectBlocks } from '@shared/blocks/parse'
+import { splitPreamble } from '@shared/blocks/changes'
 import { isHiddenInSidebar } from '../shared/files/artifacts'
 import { armSettleWatcher, watchSettled } from './infra/FileWatcher'
 import { DefaultProcessRunner } from './infra/ProcessRunner'
@@ -226,11 +228,20 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IpcChannels.reviewList, (event) => sessionFor(event).review.list())
 
-  ipcMain.handle(IpcChannels.reviewFileAt, async (event, args: { opId: string; file: string }) => {
+  ipcMain.handle(IpcChannels.reviewRenderBlock, async (event, req: RenderBlockRequest) => {
     const doc = sessionFor(event)
-    return {
-      before: await doc.git.show('HEAD', args.file),
-      after: await doc.git.show(`stanza/op-${args.opId}`, args.file),
+    // before = HEAD (pre-op), after = the op branch — so the preamble matches the
+    // block's revision (a package the proposed block needs is present on after).
+    const rev = req.side === 'before' ? 'HEAD' : `stanza/op-${req.opId}`
+    try {
+      const mainText = await doc.git.show(rev, doc.info.mainFile)
+      const fileText =
+        req.span.file === doc.info.mainFile ? mainText : await doc.git.show(rev, req.span.file)
+      const block = lineSlice(fileText, req.span.startLine, req.span.endLine)
+      const result = await doc.snippets.render(splitPreamble(mainText), block)
+      return 'pdf' in result ? { pdf: result.pdf.toString('base64') } : { error: result.error }
+    } catch (err) {
+      return { error: String(err) }
     }
   })
 
@@ -581,6 +592,11 @@ function atomicWrite(absPath: string, content: string): void {
   const tempPath = `${absPath}.stanza-tmp`
   writeFileSync(tempPath, content)
   renameSync(tempPath, absPath)
+}
+
+/** 1-based inclusive line range from file text (block span → its source). */
+function lineSlice(text: string, startLine: number, endLine: number): string {
+  return text.split('\n').slice(startLine - 1, endLine).join('\n')
 }
 
 const FILE_KINDS: [RegExp, FileEntry['kind']][] = [

@@ -27,7 +27,7 @@ export function outsideSpanFiles(diff: string, spans: BlockSpan[]): string[] {
   return outside
 }
 
-function fileSections(diff: string): [file: string, body: string][] {
+export function fileSections(diff: string): [file: string, body: string][] {
   const sections: [string, string][] = []
   const parts = diff.split(/^diff --git /m).filter((part) => part.trim() !== '')
   for (const part of parts) {
@@ -39,30 +39,44 @@ function fileSections(diff: string): [file: string, body: string][] {
   return sections
 }
 
-/** Old-side line numbers actually changed by the hunks: deleted lines
- *  at their own number, insertions at the line they land before. */
-function changedOldLines(body: string): number[] {
-  const changed: number[] = []
+/** Old- and new-side line numbers actually changed by the hunks. Old: deleted
+ *  lines at their own number, plus the line an insertion lands before. New:
+ *  added lines at their own number, plus the line a deletion lands before.
+ *  Each side maps to its own parse (HEAD vs branch) for block resolution. */
+export function hunkChangedLines(body: string): { old: number[]; new: number[] } {
+  const old: number[] = []
+  const neu: number[] = []
   let oldLine = 0
+  let newLine = 0
   let inHunk = false
   for (const line of body.split('\n')) {
-    const hunk = /^@@ -(\d+)(?:,\d+)? \+\d+(?:,\d+)? @@/.exec(line)
+    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line)
     if (hunk) {
       oldLine = Number(hunk[1])
+      newLine = Number(hunk[2])
       inHunk = true
       continue
     }
     if (!inHunk) continue
     if (line.startsWith('-')) {
-      changed.push(oldLine)
+      old.push(oldLine)
+      neu.push(newLine) // the new-side line this deletion sits before
       oldLine++
     } else if (line.startsWith('+')) {
-      changed.push(oldLine)
+      old.push(oldLine) // the old-side line this insertion lands before
+      neu.push(newLine)
+      newLine++
     } else if (line.startsWith(' ')) {
       oldLine++
+      newLine++
     } else {
       inHunk = false // hunk body ended (e.g. next file header)
     }
   }
-  return changed
+  return { old, new: neu }
+}
+
+/** Old-side line numbers actually changed by the hunks (span-overlap check). */
+function changedOldLines(body: string): number[] {
+  return hunkChangedLines(body).old
 }
