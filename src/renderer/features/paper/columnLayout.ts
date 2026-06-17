@@ -68,7 +68,12 @@ export function pageColumnLayout(rows: TextRow[]): ColumnLayout {
   // Page-level gate: keep two-column bands only when they cover most of the page's
   // text HEIGHT; otherwise an isolated cluster (equation+number, a multi-line
   // aligned equation, table cells, plot ticks) would falsely split an otherwise
-  // single-column page's boxes.
+  // single-column page's boxes. textHeight is the top-to-bottom span so the sparse
+  // prose around a local cluster counts toward the denominator and demotes it — a
+  // page that is MOSTLY one cluster (a near-full-page equation/table) relies on
+  // this. (Known limit: a real two-column body sitting under a very tall full-width
+  // title band can fall under the threshold and wrongly demote; unobserved on the
+  // demo, needs a two-column fixture to address without regressing the clusters.)
   const twoHeight = bands.reduce((h, b) => h + (b.kind === 'two' ? b.bottom - b.top : 0), 0)
   const textHeight = bands[bands.length - 1]!.bottom - bands[0]!.top
   if (textHeight > 0 && twoHeight < TWO_COL_PAGE_FRAC * textHeight)
