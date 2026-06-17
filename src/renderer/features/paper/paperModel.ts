@@ -386,11 +386,16 @@ export function binContentToBlocks(
   }
   const cleanRects = (id: string, rects: PdfRect[]): PdfRect[] => {
     if (!metaOf(id).isFloat) return rects
-    return rects.filter((r) => {
+    const kept = rects.filter((r) => {
       for (const n of nonFloatRectsByPage.get(r.page) ?? [])
         if (r.x < n.x + n.width && n.x < r.x + r.width && r.y < n.y + n.height && n.y < r.y + r.height) return false
       return true
     })
+    // Drop the galley-origin rect (coincides with the in-flow text), but NEVER
+    // empty the float: if every rect collides with some block's synctex (a stray
+    // map onto the float's own region), keep them all — a box, even overlapping,
+    // beats none.
+    return kept.length ? kept : rects
   }
 
   // A FLOAT's render page = where the bulk of its synctex ink lands (the page
@@ -522,17 +527,19 @@ export function binContentToBlocks(
       }
       return inCol(col) ?? (col !== 'full' ? inCol('full') : null)
     }
-    // A unit binds to its owner only if it sits within the block's synctex region
-    // plus one dropped-line allowance; a row farther below is the next block's
-    // content the map never anchored (e.g. an auto "References" heading), not this
-    // block's tail — leave it unbound rather than overrun the block's own text.
+    // An IN-FLOW block binds a unit only within its synctex region plus one
+    // dropped-line allowance; a row farther below is the next block's content the
+    // map never anchored (e.g. an auto "References" heading), not this block's tail.
+    // FLOATS are exempt: a figure/table caption legitimately sits well below the
+    // graphic/tabular, and a float's extent is already bounded to its render page.
+    const withinDrop = (o: Anchor, key: number): boolean => metaOf(o.id).isFloat || key <= o.bottom + MAX_WALL_DROP
     for (const r of rows) {
       const o = owner(r.baseline, colOf({ yTop: r.yTop, yBottom: r.yBottom, xLeft: r.xLeft, xRight: r.xRight }))
-      if (o && r.baseline <= o.bottom + MAX_WALL_DROP) addUnit(o.id, page, o.col, r.xLeft, r.yTop, r.xRight, r.yBottom)
+      if (o && withinDrop(o, r.baseline)) addUnit(o.id, page, o.col, r.xLeft, r.yTop, r.xRight, r.yBottom)
     }
     for (const g of graphics) {
       const o = owner(g.yTop, colOf(g))
-      if (o && g.yTop <= o.bottom + MAX_WALL_DROP) addUnit(o.id, page, o.col, g.xLeft, g.yTop, g.xRight, g.yBottom)
+      if (o && withinDrop(o, g.yTop)) addUnit(o.id, page, o.col, g.xLeft, g.yTop, g.xRight, g.yBottom)
     }
   }
 
