@@ -1,0 +1,13 @@
+{
+  "description": "Whole-doc op that edits the equation in the single fixture — adds an epsilon term. Drives the per-block review card + isolated render preview (an 'Equation' block change).",
+  "match": { "promptRegex": "equation", "argsInclude": ["--resume"] },
+  "edits": [
+    {
+      "file": "main.tex",
+      "op": "replace",
+      "find": "a^2 + b^2 = c^2",
+      "content": "a^2 + b^2 = c^2 + \\varepsilon"
+    }
+  ],
+  "result": "Added an epsilon term to the Pythagorean identity."
+}
