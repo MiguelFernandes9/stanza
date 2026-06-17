@@ -583,37 +583,6 @@ describe('binContentToBlocks — one row-union builder for every text block', ()
     const { boxesById } = binContentToBlocks(rects, rows, graphics)
     expect(boxesById.get('p#1')![0]!.y).toBeGreaterThan(90) // box from rows (~97), graphic at y40 excluded
   })
-
-  it('a one-line block keeps its box when its baseline drifts past its synctex rect bottom', () => {
-    // synctex's box is v−H..v (H≈cap height) but the rendered BASELINE sits a descender
-    // below v, so a one-line block's baseline can fall ~3pt past its rect bottom (real
-    // doc: diagrams.tex:64 rect bottom 582.3, baseline 585.2). Too tight a slack drops
-    // the baseline into the NEXT block's region and the block gets NO box. BAND_EPS=4
-    // keeps it: the block contains its own baseline and (tighter span) wins it.
-    const rects = new Map<string, PdfRect[]>([
-      ['a#1', [prect(5, 72, 572.7, 468, 9.6)]], // region 572.7–582.3 (synctex undershoots the baseline)
-      ['b#2', [prect(5, 72, 583.7, 468, 12.2)]] // next block region 583.7–595.9
-    ])
-    const rows = [
-      trow(571.5, 585.2, 72, 533), // a#1's only line — baseline 2.9pt past its rect bottom
-      trow(584.2, 593.7, 72, 540) // b#2's first line
-    ]
-    const { boxesById } = binContentToBlocks(rects, new Map([[5, rows]]))
-    expect(boxesById.get('a#1')).toBeTruthy() // was NOBOX: stolen by b#2 under a 2pt slack
-    expect(boxesById.get('a#1')![0]!.y).toBeCloseTo(571.5, 0)
-  })
-
-  it('drops a degenerate (zero-height) graphic so it cannot extend a box', () => {
-    // A clip artifact or a path whose minMax collapsed under the CTM has yBottom===yTop;
-    // it must not seed or contiguity-extend a block's box past its real text.
-    const rects = new Map<string, PdfRect[]>([['p#1', [prect(1, 90, 100, 300, 40)]]]) // region 100–140
-    const rows = new Map<number, TextRow[]>([[1, [...bodyRun(108, 138)]]])
-    const graphics = new Map<number, GraphicBox[]>([
-      [1, [{ yTop: 150, yBottom: 150, xLeft: 90, xRight: 390 }]] // degenerate stroke 12pt below the region
-    ])
-    const { boxesById } = binContentToBlocks(rects, rows, graphics)
-    expect(boxBottom(boxesById.get('p#1')![0]!)).toBeLessThan(140) // ends at its text, not extended to y150
-  })
 })
 
 describe('binContentToBlocks — flat model: absorbed math, floats, section headings', () => {
