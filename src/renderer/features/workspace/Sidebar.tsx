@@ -36,8 +36,6 @@ interface Props {
   files: FileEntry[]
   blocks: BlockNode[]
   history: CommitInfo[]
-  /** Rendered figure/equation numbers by block id, shown in the outline (Part B). */
-  outlineNumbers?: Map<string, string>
   activeBlock: string | null
   onPickBlock: (id: string) => void
   /** Click a HISTORY commit → open its full-page diff vs current (by sha). */
@@ -402,7 +400,6 @@ export function Sidebar({
   files,
   blocks,
   history,
-  outlineNumbers,
   activeBlock,
   onPickBlock,
   onPickHistory,
@@ -624,7 +621,7 @@ export function Sidebar({
 
         <CollapsibleSection title="Outline" icon={<List size={12} />}>
           <div style={{ marginBottom: 18 }}>
-            <OutlineTree blocks={blocks} activeBlock={activeBlock} onPick={onPickBlock} numbers={outlineNumbers} />
+            <OutlineTree blocks={blocks} activeBlock={activeBlock} onPick={onPickBlock} />
           </div>
         </CollapsibleSection>
 

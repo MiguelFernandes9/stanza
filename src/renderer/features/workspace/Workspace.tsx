@@ -114,9 +114,6 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
   // Outline reveal: which block PaperPane should scroll the PDF to (nonce
   // re-fires a repeat click on the same row). Mode-aware navigation (BUG-48).
   const [revealSignal, setRevealSignal] = useState<{ id: string; nonce: number } | null>(null)
-  // Rendered figure/equation numbers (block id → "Figure 1"), computed in the
-  // paper layer from the text layer and shown in the outline (BUG-48 Part B).
-  const [outlineNumbers, setOutlineNumbers] = useState<Map<string, string>>(new Map())
   // A just-created file the sidebar should drop into inline rename (type-name).
   const [renameOnAppear, setRenameOnAppear] = useState<string | null>(null)
   const clearRenameOnAppear = useCallback(() => setRenameOnAppear(null), [])
@@ -671,21 +668,18 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           files={files}
           blocks={blocks}
           history={history}
-          outlineNumbers={outlineNumbers}
           activeBlock={activeTask?.blockIds[0] ?? null}
           onPickBlock={(id) => {
             const block = pageById.get(id)
             if (!block) return
-            // Mode-aware reveal: ALWAYS scroll the PDF + jump the source; select
-            // ONLY in select mode. Never forces the view (BUG-48).
+            // Pure jump-to-location: ALWAYS scroll the PDF + jump the source.
+            // Never selects a block, never forces the view (BUG-48).
             revealBlock(
               { id, file: resolveToKnownFile(block.span.file, doc.texFiles), line: block.contentStartLine ?? block.span.startLine },
-              state.view,
               {
                 scrollPdf: (bid) => setRevealSignal({ id: bid, nonce: Date.now() }),
                 openFile,
-                jumpTo: (file, line) => editorApi.current?.jumpTo(file, line),
-                selectBlock: (bid) => dispatch({ type: 'toggle-block', ids: expandIds(blocks, bid), additive: false })
+                jumpTo: (file, line) => editorApi.current?.jumpTo(file, line)
               }
             )
           }}
@@ -743,7 +737,6 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           flash={pdfFlash}
           revealBlock={revealSignal}
           onForwardSearch={forwardSearch}
-          onNumbers={setOutlineNumbers}
           onToggleBlock={(id, additive) => {
             const subtree = expandIds(blocks, id)
             // Repeat-click escalation: a plain click on the block that is ALREADY

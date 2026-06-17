@@ -10,37 +10,29 @@ export interface OutlineNode {
   children: OutlineNode[]
 }
 
-/** A short outline label: the rendered figure/equation number when one is known
- *  ("Figure 1", "Equation 2" — keyed by block id in `numbers`), else a section
- *  or named environment by its name, else a kind fallback (BlockNode carries no
- *  prose, so plain paragraphs have none — buildOutline drops those). */
-export function outlineLabel(node: BlockNode, numbers?: Map<string, string>): string {
-  const rendered = numbers?.get(node.id)
-  if (rendered) return rendered
-  if (node.name && node.name.trim()) return node.name
-  return node.kind === 'section' ? 'Untitled section' : node.kind
+/** A section's outline label: its title. BlockNodes the outline emits are always
+ *  titled sections, so this is just the trimmed name (guarded for type safety). */
+export function outlineLabel(node: BlockNode): string {
+  return node.name?.trim() ?? ''
 }
 
-/** Filter the block tree to the outline: every section (kept and recursed) and
- *  every NAMED environment (figures, equations, theorems…). Preamble and unnamed
- *  plain paragraphs are dropped; nesting and order are preserved. A named env is
- *  an outline LEAF — only sections recurse — so a container's interior blocks
- *  (a theorem's equation, a figure's caption, list items) stay PDF-selection only
- *  and the outline stays shallow (nested-block model, decision 4). `numbers`
- *  (block id → rendered "Figure 1") drives the label. Pure — unit-tested. */
-export function buildOutline(roots: BlockNode[], numbers?: Map<string, string>): OutlineNode[] {
+/** Filter the block tree to a structural table of contents: ONLY titled
+ *  sections (`\chapter … \subparagraph`, all `kind: 'section'`). Preamble, plain
+ *  paragraphs, and every environment (equations, figures, theorems) are dropped
+ *  — the outline is navigation over document structure, not content. An untitled
+ *  section emits no row but its children are PROMOTED into the parent level, so a
+ *  titled descendant is never orphaned. One rule, no per-kind exceptions; nesting
+ *  and order are preserved. Pure — unit-tested. */
+export function buildOutline(roots: BlockNode[]): OutlineNode[] {
   const out: OutlineNode[] = []
   for (const node of roots) {
-    if (node.kind === 'preamble') continue
-    if (node.kind === 'section') {
-      out.push({
-        id: node.id,
-        label: outlineLabel(node, numbers),
-        kind: node.kind,
-        children: buildOutline(node.children, numbers)
-      })
-    } else if (node.name) {
-      out.push({ id: node.id, label: outlineLabel(node, numbers), kind: node.kind, children: [] })
+    if (node.kind !== 'section') continue
+    const children = buildOutline(node.children)
+    if (node.name && node.name.trim()) {
+      out.push({ id: node.id, label: outlineLabel(node), kind: node.kind, children })
+    } else {
+      // Untitled section: drop the row, promote its (already-filtered) descendants.
+      out.push(...children)
     }
   }
   return out
@@ -50,16 +42,14 @@ interface Props {
   blocks: BlockNode[]
   activeBlock: string | null
   onPick: (id: string) => void
-  /** Rendered figure/equation numbers by block id (Part B). */
-  numbers?: Map<string, string>
 }
 
-/** Nested file outline (v0.4): the full section/named-leaf tree, indented and
- *  collapsible. Replaces the top-level-only OUTLINE list. */
-export function OutlineTree({ blocks, activeBlock, onPick, numbers }: Props): JSX.Element {
+/** Nested file outline: the titled-section tree, indented and collapsible. A
+ *  structural table of contents — click a row to jump (never selects). */
+export function OutlineTree({ blocks, activeBlock, onPick }: Props): JSX.Element {
   return (
-    <div>
-      {buildOutline(blocks, numbers).map((n) => (
+    <div data-testid="outline-tree">
+      {buildOutline(blocks).map((n) => (
         <OutlineRow key={n.id} node={n} depth={0} activeBlock={activeBlock} onPick={onPick} />
       ))}
     </div>
