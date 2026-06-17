@@ -10,18 +10,51 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import type { BrowserWindow } from 'electron'
 import { IpcChannels } from '../../shared/ipc'
 import type { ClaudeResult } from '../../shared/ipc/claude'
-import type { CommitInfo, FileMutationResult, HistoryDiff, PrimeStep } from '../../shared/ipc/document'
+import type { ReviewResolution } from '../../shared/ipc/review'
+import type { CommitInfo, FileEntry, FileMutationResult, HistoryDiff, PrimeStep } from '../../shared/ipc/document'
 import { DefaultProcessRunner } from '../infra/ProcessRunner'
 import { GitClient } from '../infra/GitClient'
 
+// A fake window: `webContents.id` keys its session; `.send` records the target
+// id so a test can assert per-window event routing. Ids never reset across tests
+// (the module-global sessions map persists), so each test's launcher is isolated.
+interface FakeWindow {
+  webContents: { id: number; send: (c: string, p: unknown) => void; isDestroyed: () => boolean }
+  focus: () => void
+  close: () => void
+  isDestroyed: () => boolean
+  on: () => void
+}
+
 const h = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
-  sent: [] as { channel: string; payload: unknown }[],
+  sent: [] as { id: number; channel: string; payload: unknown }[],
+  windows: [] as FakeWindow[],
+  nextId: 1,
   userData: '',
   openDialog: { canceled: true, filePaths: [] as string[] },
   closed: false,
+  makeWindow(): FakeWindow {
+    const id = h.nextId++
+    const win: FakeWindow = {
+      webContents: {
+        id,
+        send: (channel, payload) => h.sent.push({ id, channel, payload }),
+        isDestroyed: () => false,
+      },
+      focus: vi.fn(),
+      close: () => {
+        h.closed = true
+      },
+      isDestroyed: () => false,
+      on: vi.fn(),
+    }
+    h.windows.push(win)
+    return win
+  },
 }))
 
 vi.mock('electron', () => ({
@@ -31,19 +64,13 @@ vi.mock('electron', () => ({
       h.handlers.set(channel, fn),
   },
   BrowserWindow: {
-    getAllWindows: () => [
-      {
-        webContents: {
-          send: (channel: string, payload: unknown) => h.sent.push({ channel, payload }),
-        },
-      },
-    ],
-    getFocusedWindow: () => ({ close: () => { h.closed = true } }),
+    getAllWindows: () => h.windows,
+    getFocusedWindow: () => h.windows[h.windows.length - 1] ?? null,
   },
   dialog: { showOpenDialog: async () => h.openDialog },
 }))
 
-import { registerIpcHandlers } from '../ipc-registry'
+import { dropSession, registerIpcHandlers, setWindowSpawner } from '../ipc-registry'
 
 const runner = new DefaultProcessRunner()
 const ARTICLE = '\\documentclass{article}\n\\begin{document}\nhi\n\\end{document}\n'
@@ -70,11 +97,16 @@ function makeClaudeStub(script: string): string {
   return path
 }
 
-const invoke = (channel: string, ...args: unknown[]) => {
+// The default "launcher" window for invokes — the first open from it reuses it
+// (binds a session to its id), matching today's single-window path.
+let launcher: FakeWindow
+
+const invokeFrom = (win: FakeWindow, channel: string, ...args: unknown[]) => {
   const handler = h.handlers.get(channel)
   if (!handler) throw new Error(`no handler for ${channel}`)
-  return handler(null, ...args)
+  return handler({ sender: win.webContents }, ...args)
 }
+const invoke = (channel: string, ...args: unknown[]) => invokeFrom(launcher, channel, ...args)
 
 const primeEvents = (): PrimeStep[] =>
   h.sent.filter((e) => e.channel === 'prime:status').map((e) => e.payload as PrimeStep)
@@ -83,9 +115,14 @@ beforeEach(() => {
   h.userData = makeDir('stanza-reg-data-')
   h.handlers.clear()
   h.sent = []
+  h.windows = []
   h.openDialog = { canceled: true, filePaths: [] }
   h.closed = false
   registerIpcHandlers()
+  // The fake window stands in for a real BrowserWindow (only the bits the
+  // registry touches: webContents.id/send, focus, on).
+  setWindowSpawner(() => h.makeWindow() as unknown as BrowserWindow)
+  launcher = h.makeWindow() // the calling window for invoke()
 })
 
 afterEach(() => {
@@ -369,4 +406,136 @@ describe('document:diffAt (history diff viewer)', () => {
     expect(res.diff).toContain('+hello world')
     expect(res.files).toContain('main.tex')
   })
+})
+
+describe('multi-window sessions', () => {
+  const primedStub = (): void =>
+    void vi.stubEnv('STANZA_CLAUDE_BIN', makeClaudeStub(`echo '{"result":"primed"}'`))
+  const rels = (files: FileEntry[]): string[] => files.map((f) => f.relPath)
+
+  test('sessionFor resolves by the calling window; a window with no session is NO_DOCUMENT', async () => {
+    primedStub()
+    // The launcher has no session until a document opens in it.
+    expect(() => invoke('document:files')).toThrow('NO_DOCUMENT')
+    const root = makeProject()
+    const info = await invoke('document:open', root) // launcher reuse → DocumentInfo
+    expect(info).toMatchObject({ root, mainFile: 'main.tex' })
+    expect(rels((await invoke('document:files')) as FileEntry[])).toContain('main.tex')
+  })
+
+  test('a window that already has a doc opens the next in a NEW window (null); sessions stay isolated', async () => {
+    primedStub()
+    const a = makeProject()
+    writeFileSync(join(a, 'a.tex'), '% a\n')
+    const b = makeProject()
+    writeFileSync(join(b, 'b.tex'), '% b\n')
+
+    const aInfo = await invoke('document:open', a) // launcher → session A (reuse)
+    expect(aInfo).toMatchObject({ root: a })
+
+    const before = h.windows.length
+    const spawned = await invoke('document:open', b) // launcher HAS a doc → new window
+    expect(spawned).toBeNull() // caller must NOT setDoc
+    expect(h.windows.length).toBe(before + 1) // a window was spawned
+    const winB = h.windows[h.windows.length - 1]!
+
+    // Each window resolves its OWN document, no cross-talk.
+    expect(rels((await invokeFrom(winB, 'document:files')) as FileEntry[])).toContain('b.tex')
+    const aFiles = rels((await invoke('document:files')) as FileEntry[]) // launcher = A
+    expect(aFiles).toContain('a.tex')
+    expect(aFiles).not.toContain('b.tex')
+  })
+
+  test('opening a root already open focuses its window — no duplicate window', async () => {
+    primedStub()
+    const root = makeProject()
+    await invoke('document:open', root) // launcher → session
+    const before = h.windows.length
+
+    const dup = await invoke('document:open', root) // same root from a doc window
+    expect(dup).toBeNull()
+    expect(h.windows.length).toBe(before) // no new window
+    expect(launcher.focus).toHaveBeenCalled() // the holding window was focused
+  })
+
+  test('closing a window deletes its session', async () => {
+    primedStub()
+    const root = makeProject()
+    await invoke('document:open', root)
+    expect(rels((await invoke('document:files')) as FileEntry[]).length).toBeGreaterThan(0)
+
+    dropSession(launcher.webContents.id) // simulate win.on('closed')
+    expect(() => invoke('document:files')).toThrow('NO_DOCUMENT')
+  })
+
+  test('a per-document event targets only its window; settings:changed broadcasts to all', async () => {
+    primedStub()
+    const a = makeProject()
+    const b = makeProject()
+    await invoke('document:open', a) // launcher → A
+    await invoke('document:open', b) // spawn → window B
+    const winB = h.windows[h.windows.length - 1]!
+
+    // A per-doc op in A emits claude:status to A's window ONLY.
+    h.sent = []
+    await invoke('claude:run', { instruction: 'x', spans: [] })
+    const claudeIds = new Set(
+      h.sent.filter((e) => e.channel === IpcChannels.claudeStatus).map((e) => e.id),
+    )
+    expect(claudeIds.has(launcher.webContents.id)).toBe(true)
+    expect(claudeIds.has(winB.webContents.id)).toBe(false) // B never saw A's status
+
+    // A global settings change broadcasts to EVERY window.
+    h.sent = []
+    await invoke(IpcChannels.settingsSetGlobal, {})
+    const settingsIds = new Set(
+      h.sent.filter((e) => e.channel === IpcChannels.settingsChanged).map((e) => e.id),
+    )
+    expect(settingsIds.has(launcher.webContents.id)).toBe(true)
+    expect(settingsIds.has(winB.webContents.id)).toBe(true)
+  }, 20_000)
+})
+
+describe('reviewResolve re-derives the document on accept (BUG-53)', () => {
+  // The op call (--resume) adds a new \input'd section file; the prime call
+  // just establishes the session.
+  const addSectionStub = () =>
+    makeClaudeStub(`case "$*" in
+  *--resume*) sleep 0.2; mkdir -p sections; echo '\\section{Extra}' > sections/extra.tex; echo '\\input{sections/extra}' >> main.tex; echo '{"result":"added a section"}' ;;
+  *) echo '{"result":"primed"}' ;;
+esac`)
+
+  test('a committed accept that adds a .tex returns a fresh DocumentInfo with the new file', async () => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', addSectionStub())
+    const root = makeProject()
+    await invoke('document:open', root)
+    const before = (await invoke('document:projectBlocks')) as unknown[]
+
+    const run = (await invoke('claude:run', { instruction: 'add a section', spans: [] })) as ClaudeResult
+    const resolution = (await invoke('review:resolve', {
+      opId: run.proposal!.opId,
+      accept: true,
+    })) as ReviewResolution
+
+    // The merge added sections/extra.tex → fresh DocumentInfo carries it.
+    expect(resolution.committed).toBe(true)
+    expect(resolution.doc).toBeDefined()
+    expect(resolution.doc!.texFiles).toContain('sections/extra.tex')
+
+    // session.info is now fresh, so project blocks include the new file's section.
+    const after = (await invoke('document:projectBlocks')) as unknown[]
+    expect(after.length).toBeGreaterThan(before.length)
+  }, 20_000)
+
+  test('a reject does not attach a DocumentInfo', async () => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', addSectionStub())
+    const root = makeProject()
+    await invoke('document:open', root)
+    const run = (await invoke('claude:run', { instruction: 'add a section', spans: [] })) as ClaudeResult
+    const resolution = (await invoke('review:resolve', {
+      opId: run.proposal!.opId,
+      accept: false,
+    })) as ReviewResolution
+    expect(resolution.doc).toBeUndefined()
+  }, 20_000)
 })

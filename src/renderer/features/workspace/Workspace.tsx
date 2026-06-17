@@ -188,10 +188,12 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
 
   // FR4 stale-PDF rule: a failed compile keeps the last good render — the
   // nonce only bumps on ok, which busts the stanza-doc:// cache.
-  // The URL carries only the root-relative name; embedding the absolute
-  // pdfPath (realpath form since the synctex fixes) tripped the protocol's
-  // traversal guard — the document root is resolved in main, not here.
-  const pdfUrl = pdfState ? `stanza-doc://doc/${encodeURIComponent(pdfState.rel)}?v=${pdfState.nonce}` : null
+  // The URL carries the root-relative name plus THIS window's document root, so
+  // the per-window protocol serves the right document (multi-window) and the
+  // traversal guard resolves against it — main validates the root is open.
+  const pdfUrl = pdfState
+    ? `stanza-doc://doc/${encodeURIComponent(pdfState.rel)}?v=${pdfState.nonce}&root=${encodeURIComponent(doc.root)}`
+    : null
 
   const loadHistory = useCallback(() => {
     void client.documentHistory().then(setHistory, () => setHistory([]))
@@ -576,6 +578,15 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
         if (accept) {
           runCompile()
           loadHistory()
+          // Claude's op may have added/renamed files (a new \input'd section, a
+          // dir). When the file set changed, re-key on the fresh DocumentInfo and
+          // refresh the sidebar + blocks — the same re-derive app file ops get,
+          // so multi-file blocks + new dirs appear without a restart (BUG-53).
+          if (resolution.doc) {
+            onDocChanged?.(resolution.doc)
+            loadFiles()
+            loadBlocks()
+          }
         }
       },
       (err: unknown) =>

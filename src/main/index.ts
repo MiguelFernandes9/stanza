@@ -1,6 +1,12 @@
 import { app, BrowserWindow, nativeImage, shell } from 'electron'
 import { join } from 'node:path'
-import { currentDocRoot, registerIpcHandlers, setRecentsListener } from './ipc-registry'
+import {
+  dropSession,
+  getOpenRoots,
+  registerIpcHandlers,
+  setRecentsListener,
+  setWindowSpawner,
+} from './ipc-registry'
 import { buildAppMenu } from './menu'
 import { handleDocProtocol, registerDocScheme } from './protocol'
 
@@ -23,7 +29,7 @@ if (process.env.STANZA_USER_DATA) {
   app.setPath('userData', process.env.STANZA_USER_DATA)
 }
 
-function createWindow(): void {
+function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1440,
     height: 920,
@@ -40,7 +46,15 @@ function createWindow(): void {
     }
   })
 
+  // Capture the id now — by the 'closed' event the webContents is destroyed and
+  // `win.webContents` throws "Object has been destroyed".
+  const wcId = win.webContents.id
+
   win.on('ready-to-show', () => win.show())
+
+  // Drop this window's document session when it closes — nothing else to
+  // dispose (no long-lived watcher/process; the settle watcher is per-op).
+  win.on('closed', () => dropSession(wcId))
 
   // Renderer-crash safety net (L6): a GPU/OOM crash leaves a blank window.
   // Reload it — the open document survives in the main process, so the
@@ -61,6 +75,7 @@ function createWindow(): void {
   } else {
     void win.loadFile(join(import.meta.dirname, '../renderer/index.html'))
   }
+  return win
 }
 
 void app.whenReady().then(() => {
@@ -76,8 +91,11 @@ void app.whenReady().then(() => {
   // register the rebuild hook so opens/creates refresh Open Recent.
   registerIpcHandlers()
   setRecentsListener(buildAppMenu)
+  setWindowSpawner(createWindow) // open-in-new-window path (ipc-registry)
   buildAppMenu()
-  handleDocProtocol(currentDocRoot)
+  // Per-window protocol: serve a stanza-doc:// file only for an OPEN document
+  // root (the renderer tags each PDF URL with its own root).
+  handleDocProtocol(getOpenRoots)
   createWindow()
 
   app.on('activate', () => {

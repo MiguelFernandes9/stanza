@@ -23,7 +23,13 @@ vi.mock('electron', () => ({
   shell: { openExternal: vi.fn() },
   nativeImage: { createFromPath: () => ({ isEmpty: () => true }) }
 }))
-vi.mock('../ipc-registry', () => ({ currentDocRoot: () => null, registerIpcHandlers: vi.fn() }))
+vi.mock('../ipc-registry', () => ({
+  registerIpcHandlers: vi.fn(),
+  setRecentsListener: vi.fn(),
+  setWindowSpawner: vi.fn(),
+  dropSession: vi.fn(),
+  getOpenRoots: () => new Set<string>()
+}))
 vi.mock('../menu', () => ({ buildAppMenu: vi.fn() }))
 vi.mock('../protocol', () => ({ registerDocScheme: vi.fn(), handleDocProtocol: vi.fn() }))
 

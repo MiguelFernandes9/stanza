@@ -3,9 +3,11 @@ import { realpathSync } from 'node:fs'
 import { normalize, join, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-/** stanza-doc://doc/<relPath> serves files from the OPEN document's folder
- *  (the renderer cannot fetch file:// under CSP). Path-traversal guarded;
- *  404 when no document is open. */
+/** stanza-doc://doc/<relPath>?root=<encodedRoot> serves files from a document's
+ *  folder (the renderer cannot fetch file:// under CSP). The renderer tags every
+ *  URL with its own window's document root, so multiple windows resolve to their
+ *  own document; only roots of OPEN documents are served (a closed/forged root
+ *  404s). Path-traversal guarded. */
 export const DOC_SCHEME = 'stanza-doc'
 
 /** Must run before app.whenReady(). */
@@ -20,12 +22,14 @@ export function registerDocScheme(): void {
   ])
 }
 
-/** Call after ready. getRoot returns the open document root or null. */
-export function handleDocProtocol(getRoot: () => string | null): void {
+/** Call after ready. getRoots returns the roots of all OPEN documents — the URL's
+ *  `root` param must be one of them (so a window only reads its own document, and
+ *  a stale/forged root is rejected). */
+export function handleDocProtocol(getRoots: () => Set<string>): void {
   protocol.handle(DOC_SCHEME, (request) => {
-    const root = getRoot()
-    if (!root) return new Response('no document open', { status: 404 })
     const url = new URL(request.url)
+    const root = url.searchParams.get('root')
+    if (!root || !getRoots().has(root)) return new Response('no document open', { status: 404 })
     const rel = decodeURIComponent(url.pathname).replace(/^\/+/, '')
     const abs = normalize(join(root, rel))
     // Resolve symlinks on both sides before the traversal check: the document
