@@ -135,4 +135,16 @@ describe('real-doc block geometry (flat model + rendered-ink walls)', () => {
     expect(fig).toHaveLength(1)
     expect(fig[0]!.height).toBeGreaterThan(150) // graphic + caption, one box
   })
+
+  it('the bibliography renders on its placement page only — no galley-origin phantom', () => {
+    // thebibliography is set after the body and spills to its own page; its `\begin`
+    // galley maps a page earlier, over the appendix table. Treating it as a
+    // placement-displaced float drops that phantom: the bibliography boxes only
+    // where it renders, and the appendix table below the phantom gets its own box.
+    const biblio = at('bibliography.tex', 1)
+    expect(biblio).toHaveLength(1) // one box on the render page, not a stray + real
+    const table = at('appendix.tex', 30)
+    expect(table).toHaveLength(1) // its own box, no longer eaten by the phantom
+    expect(table[0]!.page).not.toBe(biblio[0]!.page) // table and bibliography are on different pages
+  })
 })

@@ -22,6 +22,9 @@ describe('isFloatEnv', () => {
     expect(isFloatEnv('figure*')).toBe(true)
     expect(isFloatEnv('table*')).toBe(true)
   })
+  test('thebibliography is placement-displaced (renders on its own page)', () => {
+    expect(isFloatEnv('thebibliography')).toBe(true)
+  })
   test('non-floats and undefined', () => {
     expect(isFloatEnv('theorem')).toBe(false)
     expect(isFloatEnv('tikzpicture')).toBe(false)

@@ -23,12 +23,16 @@ export function isMathEnvName(name: string | undefined): boolean {
   return name !== undefined && MATH_ENV_NAMES.has(name.replace(/\*$/, ''))
 }
 
-const FLOAT_ENVS = new Set(['figure', 'table'])
+/** Environments LaTeX renders on a PLACEMENT page that can differ from their
+ *  source position: floats (figure/table) move to where they fit; thebibliography
+ *  is set after all body text and spills onto its own page, while its `\begin`
+ *  galley origin maps a page earlier. All share the same geometry need — take the
+ *  box from the RENDER page (the bulk of the rendered ink), not the source-site
+ *  synctex, so the binner drops the origin-page phantom rect. */
+const FLOAT_ENVS = new Set(['figure', 'table', 'thebibliography'])
 
-/** A float environment (figure/table, starred too): LaTeX may place it on a
- *  different page than its source. Its geometry box comes from its RENDER page —
- *  where the bulk of its rendered ink lands — not its source-site synctex; the
- *  binner drops the origin-page phantom. */
+/** True for a placement-displaced environment (see FLOAT_ENVS): its box comes
+ *  from its render page, and the binner drops its origin-page phantom. */
 export function isFloatEnv(name: string | undefined): boolean {
   return name !== undefined && FLOAT_ENVS.has(name.replace(/\*$/, ''))
 }
