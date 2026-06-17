@@ -5,9 +5,11 @@ import { EditorState } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { client } from '@renderer/lib/client'
 import type { CompileError, DocumentInfo } from '@shared/ipc'
+import { isViewerAsset } from '@shared/files/artifacts'
 import { baseExtensions } from './cmExtensions'
 import { setProjectContext } from './completion/contextFacet'
 import type { ProjectContext } from './completion/projectContext'
+import { AssetView } from './AssetView'
 import { FileTab } from './FileTab'
 import { insertionBarIndex } from './openFilesModel'
 
@@ -207,6 +209,8 @@ export function EditorPane({
     const view = viewRef.current
     // No file open (empty tab set) → nothing to read; the placeholder shows.
     if (!view || activeFile === '') return
+    // Image/PDF asset → the AssetView renders it; never read a binary as text.
+    if (isViewerAsset(activeFile)) return
     const setBuffer = (content: string): void => {
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: content } })
       setLineCount(view.state.doc.lines)
@@ -295,6 +299,8 @@ export function EditorPane({
   const [draggingFile, setDraggingFile] = useState<string | null>(null)
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   const barIndex = insertionBarIndex(openFiles, draggingFile, dropIndex)
+  // An image/PDF tab renders the viewer in the body instead of CodeMirror.
+  const showAsset = activeFile !== '' && isViewerAsset(activeFile)
 
   return (
     <section
@@ -368,9 +374,10 @@ export function EditorPane({
             position: 'absolute',
             inset: 0,
             overflow: 'hidden',
-            visibility: openFiles.length === 0 ? 'hidden' : 'visible'
+            visibility: openFiles.length === 0 || showAsset ? 'hidden' : 'visible'
           }}
         />
+        {showAsset && <AssetView relPath={activeFile} root={doc.root} />}
         {openFiles.length === 0 && (
           <div
             style={{
@@ -404,7 +411,9 @@ export function EditorPane({
           color: 'var(--ink-400)'
         }}
       >
-        LaTeX · UTF-8 · Ln {cursor.line}, Col {cursor.col} · {lineCount} lines
+        {showAsset
+          ? `${activeFile.slice(activeFile.lastIndexOf('/') + 1)} · ${/\.pdf$/i.test(activeFile) ? 'PDF' : 'image'}`
+          : `LaTeX · UTF-8 · Ln ${cursor.line}, Col ${cursor.col} · ${lineCount} lines`}
       </div>
     </section>
   )

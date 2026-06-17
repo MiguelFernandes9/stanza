@@ -6,32 +6,23 @@ const target = { id: 'b1', file: 'chapters/ch1.tex', line: 12 }
 const spies = (): RevealActions => ({
   scrollPdf: vi.fn(),
   openFile: vi.fn(),
-  jumpTo: vi.fn(),
-  selectBlock: vi.fn()
+  jumpTo: vi.fn()
 })
 
 describe('revealBlock', () => {
-  it('read mode: scrolls the PDF and jumps the source, but does NOT select', () => {
+  it('scrolls the PDF, opens the file, and jumps the source — pure navigation', () => {
     const a = spies()
-    revealBlock(target, 'read', a)
+    revealBlock(target, a)
     expect(a.scrollPdf).toHaveBeenCalledWith('b1')
     expect(a.openFile).toHaveBeenCalledWith('chapters/ch1.tex')
     expect(a.jumpTo).toHaveBeenCalledWith('chapters/ch1.tex', 12)
-    expect(a.selectBlock).not.toHaveBeenCalled()
   })
 
-  it('select mode: scrolls + jumps AND selects the block', () => {
-    const a = spies()
-    revealBlock(target, 'select', a)
-    expect(a.scrollPdf).toHaveBeenCalledWith('b1')
-    expect(a.openFile).toHaveBeenCalledWith('chapters/ch1.tex')
-    expect(a.jumpTo).toHaveBeenCalledWith('chapters/ch1.tex', 12)
-    expect(a.selectBlock).toHaveBeenCalledWith('b1')
-  })
-
-  // The view is never switched from either mode — there is no view-changing
-  // action in the surface, so read can never become select (the old bug).
-  it('takes no action that could switch the view (no setView in the surface)', () => {
-    expect(Object.keys(spies())).not.toContain('setView')
+  // Navigation only: the surface carries no select OR view-switching action, so a
+  // reveal can never create/select a block (jump-only) nor flip read into select.
+  it('exposes no select or view-switching action in the surface', () => {
+    const keys = Object.keys(spies())
+    expect(keys).not.toContain('selectBlock')
+    expect(keys).not.toContain('setView')
   })
 })

@@ -1,28 +1,36 @@
 import { watch } from 'chokidar'
 import { relative, sep } from 'node:path'
+import { BUILD_ARTIFACT_SUFFIXES } from '../../shared/files/artifacts'
 
 /** Build artifacts the document watcher must never report — they churn
- *  on every compile and would re-trigger the loop. */
-const IGNORED_SUFFIXES = ['.pdf', '.synctex.gz', '.log', '.aux']
+ *  on every compile and would re-trigger the loop. Shares the sidebar's
+ *  artifact list and adds `.pdf`: the COMPILED pdf rewrites on every build, so
+ *  the watcher ignores all pdf churn (the sidebar instead hides only the named
+ *  output pdf, keeping figure pdfs visible). */
+const IGNORED_SUFFIXES = ['.pdf', ...BUILD_ARTIFACT_SUFFIXES]
 
 /** Watch root and call onSettle(changedRelPaths) once changes stop for
- *  settleMs. Returns a dispose function. */
+ *  settleMs. Returns a dispose function. `ignored` decides which paths the
+ *  watcher skips (default = build-artifact churn, for the compile-op settle).
+ *  The sidebar's tree watcher passes its own predicate so it tracks exactly the
+ *  files it displays (figure pdfs included, compiled pdf/artifacts excluded). */
 export function watchSettled(
   root: string,
   settleMs: number,
   onSettle: (files: string[]) => void,
+  ignored: (relPath: string) => boolean = isIgnored,
 ): () => void {
   const pending = new Set<string>()
   let timer: NodeJS.Timeout | null = null
 
   const watcher = watch(root, {
     ignoreInitial: true,
-    ignored: (absPath: string) => isIgnored(relative(root, absPath)),
+    ignored: (absPath: string) => ignored(relative(root, absPath)),
   })
 
   watcher.on('all', (_event, absPath) => {
     const relPath = relative(root, absPath)
-    if (relPath === '' || isIgnored(relPath)) return
+    if (relPath === '' || ignored(relPath)) return
     pending.add(relPath.split(sep).join('/'))
     if (timer) clearTimeout(timer)
     timer = setTimeout(() => {

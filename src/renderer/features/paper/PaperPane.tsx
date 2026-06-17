@@ -22,9 +22,6 @@ import type { BlockMark, PageBlock } from './paperModel'
 import type { ColumnLayout } from './columnLayout'
 import { pageTextRows } from './pdfTextRows'
 import type { TextRow } from './pdfTextRows'
-import { pageTextTokens } from './pdfTextTokens'
-import type { TextToken } from './pdfTextTokens'
-import { buildOutlineNumbers } from './outlineNumbers'
 import { pageGraphics } from './pdfGraphics'
 import type { GraphicBox } from './pdfGraphics'
 import { BADGE, PAD, RAIL, RAIL_GUTTER, connectorPath, paneLayout, pdfScrollTop, phaseTone, railBubbleTop, stackTops } from './paperPaneLayout'
@@ -59,9 +56,6 @@ interface Props {
   revealBlock: { id: string; nonce: number } | null
   /** Synctex-forward fallback when a block's geometry box isn't computed yet. */
   onForwardSearch: (line: number) => void
-  /** Rendered figure/equation numbers (block id → "Figure 1"), recomputed when
-   *  the geometry is rebuilt (Part B). */
-  onNumbers?: (numbers: Map<string, string>) => void
   onToggleBlock: (id: string, additive: boolean) => void
   onActivateTask: (taskId: number) => void
   onToggleAdding: () => void
@@ -181,16 +175,12 @@ export function PaperPane(props: Props): JSX.Element {
       const pages = [...new Set(perBlock.flatMap(({ rects }) => rects.map((r) => r.page)))]
       const rowsByPage = new Map<number, TextRow[]>()
       const graphicsByPage = new Map<number, GraphicBox[]>()
-      // Tokens (text + position) per page — the outline reads rendered figure/
-      // equation numbers out of these (Part B); rows drop the string.
-      const tokensByPage = new Map<number, TextToken[]>()
       await Promise.all(
         pages.map((p) =>
           pdf.getPage(p).then((page) =>
             Promise.all([
               pageTextRows(page).then((rows) => void rowsByPage.set(p, rows)).catch(() => void rowsByPage.set(p, [])),
-              pageGraphics(page).then((g) => void graphicsByPage.set(p, g)).catch(() => void graphicsByPage.set(p, [])),
-              pageTextTokens(page).then((t) => void tokensByPage.set(p, t)).catch(() => void tokensByPage.set(p, []))
+              pageGraphics(page).then((g) => void graphicsByPage.set(p, g)).catch(() => void graphicsByPage.set(p, []))
             ])
           )
         )
@@ -225,10 +215,6 @@ export function PaperPane(props: Props): JSX.Element {
       setBlockRects(boxesById)
       setContentTops(contentTopByPage)
       columnsByPage.current = cols // Phase 2 (two-rail bubbles) will consume this
-      // Rendered figure/equation numbers for the outline (Part B): read each
-      // float/math block's number from the tokens inside its box, lift to
-      // Workspace → Sidebar → OutlineTree.
-      props.onNumbers?.(buildOutlineNumbers(pageBlocks, boxesById, tokensByPage))
     })
     return () => {
       alive = false
