@@ -23,7 +23,8 @@ import type {
   SettingsChanged,
 } from '@shared/ipc'
 import { parseProjectBlocks } from '@shared/blocks/parse'
-import { armSettleWatcher } from './infra/FileWatcher'
+import { isHiddenInSidebar } from '../shared/files/artifacts'
+import { armSettleWatcher, watchSettled } from './infra/FileWatcher'
 import { DefaultProcessRunner } from './infra/ProcessRunner'
 import { GitClient } from './infra/GitClient'
 import { Store, GlobalSettingsStore } from './infra/Store'
@@ -41,6 +42,14 @@ let documents: DocumentService
  *  a fully independent document (mac doc-app model); a handler resolves its
  *  session from the calling window's id, never a global singleton. */
 const sessions = new Map<number, DocumentSession>()
+/** Per-window dispose fn for a live file-tree watcher (keyed by webContents.id).
+ *  Watches the document root for EXTERNAL changes (deletes/adds/renames done
+ *  outside the app) and tells that window to re-list — the sidebar otherwise
+ *  only refreshed on open or in-app file ops. Tree-only: it never recompiles
+ *  (compile stays on explicit ⌘S/⌘R/accept, the M2-2 decision). */
+const fileWatchers = new Map<number, () => void>()
+/** Debounce for the file-tree watcher — coalesce a burst (e.g. a folder move). */
+const FILE_WATCH_SETTLE_MS = 250
 let priming: AbortController | null = null
 /** Called after the store's project set changes (open/create) so the native
  *  Open Recent menu rebuilds. Injected by index.ts to avoid a menu↔registry
@@ -62,6 +71,8 @@ export function setWindowSpawner(fn: () => BrowserWindow): void {
 
 /** Drop a window's session when it closes (index.ts wires win.on('closed')). */
 export function dropSession(webContentsId: number): void {
+  fileWatchers.get(webContentsId)?.()
+  fileWatchers.delete(webContentsId)
   sessions.delete(webContentsId)
 }
 
@@ -123,7 +134,10 @@ export function registerIpcHandlers(): void {
     return { diff, files: changedFilesInDiff(diff) }
   })
 
-  ipcMain.handle(IpcChannels.documentFiles, (event): FileEntry[] => listFiles(sessionFor(event).info.root))
+  ipcMain.handle(IpcChannels.documentFiles, (event): FileEntry[] => {
+    const { info } = sessionFor(event)
+    return listFiles(info.root, outputPdfRel(info))
+  })
 
   // All project files' blocks in one merged tree — overlays must cover
   // \include'd chapters, not just the main file (BUG-2/3).
@@ -267,7 +281,7 @@ export function registerIpcHandlers(): void {
       ],
     })
     if (result.canceled || result.filePaths.length === 0) {
-      return { files: listFiles(doc.info.root) } satisfies FileMutationResult
+      return { files: listFiles(doc.info.root, outputPdfRel(doc.info)) } satisfies FileMutationResult
     }
     const rels = await doc.files.importFiles(a.dir, result.filePaths)
     return fileMutationResult(doc, rels[0])
@@ -368,6 +382,33 @@ async function loadDoc(
 
 function bindSession(wc: WebContents, info: DocumentInfo): void {
   sessions.set(wc.id, new DocumentSession(info, runner, store))
+  // Replace any prior watcher (re-opening a doc in the same window), then watch
+  // the new root for external changes → tell this window to re-list its files.
+  fileWatchers.get(wc.id)?.()
+  fileWatchers.set(
+    wc.id,
+    watchSettled(
+      info.root,
+      FILE_WATCH_SETTLE_MS,
+      () => {
+        if (!wc.isDestroyed()) wc.send(IpcChannels.documentFilesChanged)
+      },
+      sidebarWatchIgnore(outputPdfRel(info)),
+    ),
+  )
+}
+
+/** Ignore predicate for the tree watcher: skip exactly what the sidebar hides
+ *  (dotfiles, build artifacts, compiled pdf — so compile churn never refreshes)
+ *  plus the heavy dirs the walk omits, while still firing for figure pdfs and
+ *  every other displayed file. Keeps the watcher consistent with listFiles by
+ *  construction. */
+function sidebarWatchIgnore(outPdf: string): (relPath: string) => boolean {
+  return (relPath) => {
+    const segments = relPath.split('/')
+    if (segments.includes('.git') || segments.includes('node_modules')) return true
+    return isHiddenInSidebar(relPath, outPdf)
+  }
 }
 
 /** The window currently holding `root`, or undefined — drives duplicate-focus. */
@@ -490,7 +531,7 @@ async function fileMutationResult(
   const changed = info ? fileSetChanged(before, info) : false
   if (info) doc.info = info
   return {
-    files: listFiles(doc.info.root),
+    files: listFiles(doc.info.root, outputPdfRel(doc.info)),
     ...(changed && info ? { doc: info } : {}),
     ...(newRelPath ? { newRelPath } : {}),
   }
@@ -550,7 +591,16 @@ const FILE_KINDS: [RegExp, FileEntry['kind']][] = [
   [/\.(md|txt)$/, 'text'],
 ]
 
-function listFiles(root: string, dir = ''): FileEntry[] {
+/** The compiled output pdf, root-relative. Mirrors CompileService.pdfPath /
+ *  docGitignore exactly: tectonic writes `<mainFile sans .tex>.pdf` NEXT TO the
+ *  main file (CompileService.lastBase keeps the dir), so a main in a subdir
+ *  (src/main.tex → src/main.pdf) is matched. Hidden from the sidebar by this
+ *  name so figure pdfs elsewhere stay visible. */
+function outputPdfRel(info: DocumentInfo): string {
+  return info.mainFile.replace(/\.tex$/i, '.pdf')
+}
+
+function listFiles(root: string, outPdf: string, dir = ''): FileEntry[] {
   let entries
   try {
     entries = readdirSync(join(root, dir), { withFileTypes: true })
@@ -565,9 +615,11 @@ function listFiles(root: string, dir = ''): FileEntry[] {
         // Emit the directory itself (so an EMPTY dir is visible and a New folder
         // can't re-collide, BUG-47), then recurse for its children.
         found.push({ relPath, kind: 'dir' })
-        found.push(...listFiles(root, relPath))
+        found.push(...listFiles(root, outPdf, relPath))
       }
-    } else {
+    } else if (!isHiddenInSidebar(relPath, outPdf)) {
+      // Drop dotfiles, LaTeX build artifacts, and the compiled output pdf — the
+      // sidebar shows sources and real assets only (figure pdfs/images stay).
       const kind = FILE_KINDS.find(([re]) => re.test(entry.name))?.[1] ?? 'other'
       found.push({ relPath, kind })
     }

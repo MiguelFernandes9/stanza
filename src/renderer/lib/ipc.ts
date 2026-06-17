@@ -107,6 +107,8 @@ export const api = {
     invoke<DocumentSettingsResult>(IpcChannels.settingsSetDocument, patch),
   onCompileStatus: on<CompileStatus>(IpcChannels.compileStatus),
   onSettingsChanged: on<SettingsChanged>(IpcChannels.settingsChanged),
+  /** External fs change under the doc root — the renderer re-fetches document:files. */
+  onDocumentFilesChanged: on<void>(IpcChannels.documentFilesChanged),
   onClaudeStatus: on<ClaudeStatus>(IpcChannels.claudeStatus),
   onReviewProposal: on<ReviewProposal>(IpcChannels.reviewProposal),
   onPrimeStatus: on<PrimeStep>(IpcChannels.primeStatus),
