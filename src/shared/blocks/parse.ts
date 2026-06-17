@@ -1,7 +1,6 @@
 import { parse } from '@unified-latex/unified-latex-util-parse'
 import type * as Ast from '@unified-latex/unified-latex-types'
 import type { BlockNode } from './types'
-import { isContainerEnv, isListEnv } from './container'
 
 const SECTION_LEVELS: Record<string, number> = {
   chapter: 1,
@@ -167,14 +166,13 @@ function walkBody(file: string, nodes: Ast.Node[]): BlockNode[] {
   return roots
 }
 
-/** Process one flat node stream, attaching blocks to `out`. Two nesting axes:
- *  sections nest via a local stack (document-body axis); a CONTAINER environment
- *  recurses its content into its own children (containment axis) — a theorem's
- *  equation, a figure's caption/graphic become child blocks. Atomic envs
- *  (math/cells/drawing/verbatim) stay leaves. Each scope keeps its own
+/** Process one flat node stream, attaching blocks to `out`. ONE nesting axis:
+ *  sections nest via a local stack (document-body axis). Every environment is a
+ *  single leaf block spanning its `\begin..\end` — its interior (prose, math,
+ *  sub-envs, \item, \caption) is absorbed, never a child block (flat content
+ *  model; supersedes the recursive model). Each scope keeps its own
  *  paragraph/section state; a brace group still recurses IN-scope so an internal
- *  parbreak splits the outer paragraph (BUG-22). See docs/nested-block-model.md
- *  §5.1. */
+ *  parbreak splits the outer paragraph (BUG-22). */
 function walkScope(file: string, nodes: Ast.Node[], out: BlockNode[]): void {
   const sectionStack: { block: BlockNode; level: number }[] = []
   let paragraph: { startLine: number; endLine: number } | null = null
@@ -248,14 +246,11 @@ function walkScope(file: string, nodes: Ast.Node[], out: BlockNode[]): void {
         const contentStart = envContentStartLine(env)
         if (contentStart !== undefined && contentStart > start.line + 1) envBlock.contentStartLine = contentStart
         attach(envBlock)
-        // Recurse a container env into its CHILDREN (containment axis). Only
-        // distinct sub-blocks become children — nested envs, list \items,
-        // \caption, \includegraphics; plain prose stays part of this env (see
-        // walkEnvContent / docs §5.1). A list splits on \item.
-        if (isContainerEnv(name, env.content)) {
-          if (isListEnv(name)) parseItems(file, env, envBlock)
-          else walkEnvContent(file, env.content as Ast.Node[], envBlock)
-        }
+        // Flat content model: an environment is ONE block spanning \begin..\end.
+        // Its interior — prose, math, sub-environments, \item, \caption — is
+        // ABSORBED, never a child block, so selecting it hands Claude the whole
+        // unit and the overlay is one clean box. Only sections nest (the
+        // structural axis, via sectionStack). Supersedes the recursive model (#103).
         continue
       }
 
@@ -278,68 +273,6 @@ function walkScope(file: string, nodes: Ast.Node[], out: BlockNode[]): void {
 
   walkNodes(nodes)
   flushParagraph()
-}
-
-/** A list environment's `\item` macros delimit its child blocks: each item spans
- *  from its `\item` line to the line before the next `\item` (or the `\end`).
- *  Items are leaf paragraph blocks — reusing the paragraph kind keeps ids stable
- *  (ID_PREFIX has no item slot). Item interiors are not yet recursed (rare; see
- *  docs §7). */
-function parseItems(file: string, env: Ast.Environment, listBlock: BlockNode): void {
-  const content = env.content
-  if (!Array.isArray(content)) return
-  const items = content.filter(
-    (n): n is Ast.Macro => n.type === 'macro' && n.content === 'item' && !!n.position,
-  )
-  const endLine = env.position ? env.position.end.line : 0
-  for (let i = 0; i < items.length; i++) {
-    const startLine = items[i]!.position!.start.line
-    const next = items[i + 1]
-    const itemEnd = next ? next.position!.start.line - 1 : endLine - 1
-    listBlock.children.push(block('paragraph', file, startLine, Math.max(startLine, itemEnd)))
-  }
-}
-
-/** Macros that form their own child block inside a container env — a labeled
- *  sub-element worth selecting on its own: the caption and an embedded graphic.
- *  Every other macro is absorbed into the parent env's prose. */
-const CHILD_MACROS = new Set(['caption', 'includegraphics'])
-
-/** Children of a non-list container environment: ONLY distinct sub-blocks become
- *  children — nested environments (recursed), \caption, \includegraphics. Plain
- *  prose, inline/standalone/transparent macros, and display math are absorbed
- *  into the parent env (no child block), so clicking the prose selects the whole
- *  env while clicking the equation selects the equation (docs §5.1, decision 0).
- *  Brace groups are transparent — recursed in place. */
-function walkEnvContent(file: string, content: Ast.Node[], parent: BlockNode): void {
-  for (const node of content) {
-    if (!node.position) continue
-    const { start, end } = node.position
-
-    if (node.type === 'group') {
-      walkEnvContent(file, node.content, parent)
-      continue
-    }
-    if (node.type === 'macro' && CHILD_MACROS.has(node.content)) {
-      parent.children.push(block('paragraph', file, start.line, end.line))
-      continue
-    }
-    if (ENVIRONMENT_TYPES.has(node.type)) {
-      const env = node as Ast.Environment
-      const name = envName(env)
-      const envBlock = block('environment', file, start.line, end.line, name)
-      const contentStart = envContentStartLine(env)
-      if (contentStart !== undefined && contentStart > start.line + 1) envBlock.contentStartLine = contentStart
-      parent.children.push(envBlock)
-      if (isContainerEnv(name, env.content)) {
-        if (isListEnv(name)) parseItems(file, env, envBlock)
-        else walkEnvContent(file, env.content as Ast.Node[], envBlock)
-      }
-      continue
-    }
-    // prose, inline macros, standalone/transparent macros, sections, display
-    // math: all absorbed into the parent env — no child block.
-  }
 }
 
 function preambleBlock(file: string, nodes: Ast.Node[]): BlockNode | null {
