@@ -24,10 +24,6 @@ export type GraphicOp =
    *  (`\includegraphics` of an embedded PDF). */
   | { op: 'form'; matrix: number[] | null; bbox: number[] | null }
   | { op: 'formEnd' }
-  /** A PAINTED vector path (fill/stroke) — native TikZ/pgfplots drawing. `bbox`
-   *  is the path's `[minX,minY,maxX,maxY]` in user space (under the current CTM),
-   *  so a pure-vector figure gets a graphic box like an embedded image does. */
-  | { op: 'path'; bbox: number[] }
 
 /** Compose two affine matrices `[a,b,c,d,e,f]` (point (x,y) ↦ (ax+cy+e,
  *  bx+dy+f)): the result applies `n` first, then `m` — i.e. concatenating `n`
@@ -96,11 +92,6 @@ export function graphicBoxesFromOps(ops: GraphicOp[], convert: (x: number, y: nu
       case 'formEnd':
         ctm = stack.pop() ?? ctm
         break
-      case 'path': {
-        const [x0, y0, x1, y1] = g.bbox
-        out.push(cornersBox(ctm, [[x0!, y0!], [x1!, y0!], [x1!, y1!], [x0!, y1!]], convert))
-        break
-      }
     }
   }
   return out
@@ -133,16 +124,6 @@ export function pageGraphics(page: PDFPageProxy): Promise<GraphicBox[]> {
       else if (fn === OPS.paintFormXObjectBegin)
         ops.push({ op: 'form', matrix: args[0] ? Array.from(args[0] as number[]) : null, bbox: args[1] ? Array.from(args[1] as number[]) : null })
       else if (fn === OPS.paintFormXObjectEnd) ops.push({ op: 'formEnd' })
-      else if (fn === OPS.constructPath) {
-        // pdf.js v6 folds the paint type into constructPath: args = [paintOp,
-        // coords, bbox]. Emit the bbox only for PAINTED paths (fill/stroke) — skip
-        // clip setup (endPath/clip/eoClip) and paths with no bbox. This captures
-        // native TikZ/pgfplots drawings (no image/XObject) as graphic boxes.
-        const paintOp = args[0] as number
-        const bbox = args[2] as ArrayLike<number> | null | undefined
-        if (bbox && paintOp !== OPS.endPath && paintOp !== OPS.clip && paintOp !== OPS.eoClip)
-          ops.push({ op: 'path', bbox: Array.from(bbox) })
-      }
     }
     return graphicBoxesFromOps(ops, (x, y) => viewport.convertToViewportPoint(x, y))
   })()

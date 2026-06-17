@@ -5,7 +5,7 @@ import type { TextRow } from './pdfTextRows'
 import type { GraphicBox } from './pdfGraphics'
 import type { ColumnLayout } from './columnLayout'
 import { columnLayoutByPage, columnOf } from './columnLayout'
-import { isDrawingEnv, isMathEnvName } from '../../../shared/blocks/container'
+import { isMathEnvName } from '../../../shared/blocks/container'
 
 /** Selection state a task stamps on a block — drives the edge bar, the
  *  selection wash and the hover/lock pill on both the PDF overlay and the
@@ -260,11 +260,6 @@ const FURNITURE_SHARE = 0.25
  *  sub-pt drift between a synctex rect's baseline (v) and the converted pdf.js
  *  text-row baseline (the bullet measured 719.86 vs 717.7 on the demo). */
 const BAND_EPS = 2
-/** A float descendant's synctex rect this fraction (or more) of the float's own
- *  bounding-box height IS that bounding box (synctex attaches the whole-float rect
- *  to every interior line) — dropped so the graphic and caption children get
- *  distinct content regions instead of both tying to the float's top. */
-const FLOAT_BOX_SHARE = 0.8
 
 /** M2-9: a display equation's synctex region top is unreliable — it can sit ~a
  *  line ABOVE the rendered glyphs (a tall \big| box's v−H reaches up) or below
@@ -394,7 +389,7 @@ export function binContentToBlocks(
   // descendant to the float's render page and drop its origin-page region, so it
   // can only own rows where the float really is and never steals the origin
   // page's prose (live-gate fix; float exclusion alone is one level too shallow).
-  const floatRender = new Map<string, { page: number; maxH: number }>()
+  const floatRenderPage = new Map<string, number>()
   for (const [id, rects] of rectsById) {
     if (!metaOf(id).isFloat) continue
     const heightByPage = new Map<number, number>()
@@ -405,15 +400,12 @@ export function binContentToBlocks(
     let best: number | undefined
     let bestH = -1
     for (const [p, h] of heightByPage) if (h > bestH) { bestH = h; best = p }
-    if (best !== undefined) {
-      const onPage = rects.filter((r) => r.page === best)
-      floatRender.set(id, { page: best, maxH: Math.max(...onPage.map((r) => r.height)) })
-    }
+    if (best !== undefined) floatRenderPage.set(id, best)
   }
-  const floatInfoFor = (id: string): { page: number; maxH: number } | null => {
+  const floatPageFor = (id: string): number | null => {
     let pid = metaOf(id).parentId
     while (pid) {
-      if (metaOf(pid).isFloat) return floatRender.get(pid) ?? null
+      if (metaOf(pid).isFloat) return floatRenderPage.get(pid) ?? null
       pid = metaOf(pid).parentId
     }
     return null
@@ -429,39 +421,26 @@ export function binContentToBlocks(
   }
   const regionsByPage = new Map<number, Region[]>()
   for (const [id, rects] of rectsById) {
-    let chosen = rects.filter((r) => r.width > 0 && r.height > 0 && inBand(r.y, r.y + r.height)) // header/footer stray (BUG-30)
-    const fi = floatInfoFor(id)
-    if (fi) {
-      // A float descendant renders only on the float's render page; drop its
-      // origin-page source-site rect (else it steals that page's prose).
-      chosen = chosen.filter((r) => r.page === fi.page)
-      // synctex attaches the float's bounding-box rect to EVERY interior line. For
-      // a DRAWING env that rect IS the graphic's extent — keep it (a tikzpicture
-      // has no fine interior synctex; its box is the bbox grown by its paths). For
-      // a TEXT child (caption) that rect is the wrong (drawing) box and would tie
-      // it to the float top so it swallows the graphic — drop it, keeping the
-      // caption's own text rects (keep the big rect only if it is the sole rect, so
-      // an \includegraphics image still gets a region).
-      if (!isDrawingEnv(envNames.get(id))) {
-        const content = chosen.filter((r) => r.height < FLOAT_BOX_SHARE * fi.maxH)
-        if (content.length) chosen = content
-      }
-    }
+    const floatPage = floatPageFor(id)
     const byPage = new Map<number, PdfRect[]>()
-    for (const r of chosen) {
+    for (const r of rects) {
+      if (r.width <= 0 || r.height <= 0) continue
+      if (!inBand(r.y, r.y + r.height)) continue // header/footer-margin stray (BUG-30)
       const arr = byPage.get(r.page)
       if (arr) arr.push(r)
       else byPage.set(r.page, [r])
     }
     for (const [page, rs] of byPage) {
+      // A float descendant lives only on the float's render page; drop its
+      // origin-page source-site rect (it would otherwise steal that page's prose).
+      if (floatPage !== null && page !== floatPage) continue
       const layout = columnsByPage.get(page)
       // Split this block's rects on the page BY COLUMN, so a paragraph that flows
       // across the break becomes a left region AND a right region — each
       // column-pure — instead of one gutter-crossing region whose huge span (its
       // right-column continuation reaches up to the top of the page) would steal a
       // neighbour's rows. Single-column pages tag every rect 'full' → exactly one
-      // region per (id, page), identical to the pre-two-column partition. (The
-      // float page-drop + bbox-drop already ran in the `chosen` filter above.)
+      // region per (id, page), identical to the pre-two-column partition.
       const byCol = new Map<PdfCol, PdfRect[]>()
       for (const r of rs) {
         const col = layout

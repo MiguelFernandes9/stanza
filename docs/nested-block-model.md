@@ -365,33 +365,8 @@ Measured on `~/Documents/Projects/test/main.tex`:
 - **Cosmetic**: the rail `TaskCard`/`BlockTag` glyph for a multi-block *container*
   selection (e.g. theorem+equation) reads as a section/per-child tag rather than a
   single container badge. Renders fine; polish only.
+- **Native TikZ bbox** in `pdfGraphics` (path ops) is still not captured, so a
+  pure-drawing figure's box comes from its text rows (labels/caption) — adequate
+  on the demo; a future enhancement for caption-less, text-less figures.
 - **Item interiors** are not yet recursed (an equation inside a list item is part
   of the item, not its own block) — rare; deferrable.
-
-## 9. Figures decompose like tables (native vector capture)
-
-A `table` already split into a `tabular` block + a `caption` block (the tabular
-boxes from its cell text). A `figure` did not — its `tikzpicture`/`pgfplots`
-drawing left no glyph rows and `pdfGraphics` only captured images/Form XObjects,
-so the graphic child had **no box** and the figure read as one undivided thing.
-Two changes make figures decompose the same way:
-
-- **`pdfGraphics` captures native vector paths.** pdf.js v6 folds the paint type
-  into `OPS.constructPath` (`args = [paintOp, coords, bbox]`); emit a graphic box
-  per painted path (bbox in arg[2], under the CTM), skipping `endPath`/`clip` and
-  null bboxes. A pure-TikZ figure now produces graphic boxes like an image does.
-- **The binner routes the drawing to the graphic child.** synctex attaches the
-  float's bounding-box rect to *every* interior line (drawing AND caption). For a
-  **drawing env** (`isDrawingEnv`: tikzpicture/pgfpicture/picture/axis) that rect
-  IS the graphic's extent — keep it so the captured paths bind to a wide x-band.
-  For the **caption** (a text child) that rect is the wrong (drawing) box — drop it
-  (keeping the caption's own text rect) so the caption gets a distinct low region
-  instead of tying to the float top and swallowing the drawing. Keep the big rect
-  when it is a block's sole rect, so `\includegraphics` still gets a region.
-
-Live-gated on the real doc: each figure now yields a `tikzpicture` graphic block
-covering the full drawing (FIG1 x[161,451] y[443,537], an exact match to the path
-union) plus a distinct caption block below it — the same shape as `tabular` +
-`caption`. Tables, the FIG2 cross-page phantom fix, and prose-bleed all unchanged.
-Caveat: a label-less, path-only drawing whose synctex gives *only* the bbox rect
-still relies on that rect for its region (no finer anchor); adequate on the demo.
