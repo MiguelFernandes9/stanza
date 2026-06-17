@@ -47,9 +47,10 @@ describe('real-doc block geometry (flat model + rendered-ink walls)', () => {
   it('B2: the align box does not steal the paragraph tail line', () => {
     const p = one('paraAlign')
     const a = one('align')
-    // the paragraph keeps its real last line ("gradient and Hessian are", y≈504);
-    // it was truncated at ~494 before.
-    expect(p.y + p.height).toBeGreaterThan(500)
+    // the paragraph keeps its real last line ("gradient and Hessian are"); it was
+    // truncated to one line before. Two wrapped lines ⇒ height > one line (~13pt),
+    // layout-independent (the absolute y shifts as the doc grows).
+    expect(p.height).toBeGreaterThan(18)
     // align begins at/below the paragraph's end — it never reaches up into prose.
     expect(a.y).toBeGreaterThanOrEqual(p.y + p.height - 2)
   })
@@ -145,5 +146,38 @@ describe('real-doc block geometry (flat model + rendered-ink walls)', () => {
     const table = at('appendix.tex', 30)
     expect(table).toHaveLength(1) // its own box, no longer eaten by the phantom
     expect(table[0]!.page).not.toBe(biblio[0]!.page) // table and bibliography are on different pages
+  })
+
+  // Complex constructs (ink-grounded binder). Two root causes measured on the real
+  // doc: (A) a float's vector graphic renders ABOVE its caption anchor, so the box
+  // covered only the caption; (B) multi-line in-flow display math forward-maps to a
+  // phantom rect on a neighbour page, producing a spurious second box (and starving
+  // the paragraph it collides with).
+
+  it('A: a pgfplots figure box covers the plot above the caption, not just the caption', () => {
+    // fig:plot graphic spans y≈305–498; the box was pinned at the caption (y410 h110),
+    // missing the top ~105pt. The float must claim the graphic above its anchor.
+    const f = one('figPlot')
+    expect(f.height).toBeGreaterThan(150) // plot + caption, was ~110
+    expect(f.y).toBeLessThan(360) // reaches up to the plot ink (~305), not pinned at the caption
+  })
+
+  it('A: a tikz-matrix figure box covers the whole diagram', () => {
+    // fig:cd (commutative diagram) box was h78 — only part of the matrix.
+    const f = one('figCd')
+    expect(f.height).toBeGreaterThan(110)
+  })
+
+  it('B: a multi-line align with \\intertext is ONE box, no phantom on the neighbour page', () => {
+    // align rendered on its real page but ALSO produced a phantom box on the prior
+    // page (galley + spurious synctex rects). The phantom must drop (no distinctive ink).
+    expect(box('alignIntertext')).toHaveLength(1)
+  })
+
+  it('B: a gather is ONE box and the paragraph before it is not starved', () => {
+    // gather produced a phantom box on the prior page; the paragraph before it shares
+    // an exact synctex rect with the gather and got ZERO boxes (the collision starved it).
+    expect(box('gatherInflow')).toHaveLength(1)
+    expect(box('paraBeforeGather').length).toBeGreaterThanOrEqual(1) // keeps its own box
   })
 })

@@ -24,12 +24,20 @@ import type { BlockSpan, PdfRect } from '../src/shared/ipc'
 // The compiled demo project: override with GEOM_DOC=/abs/path when regenerating.
 const ROOT = process.env.GEOM_DOC ?? '/Users/miguelfernandes/Documents/Projects/test'
 const PDF = join(ROOT, 'main.pdf')
+// Discover the .tex set from main.tex's \input/\include order so the harness never
+// goes stale as the doc grows (it did: listings/worked-examples/further-constructs
+// were added). main.tex first, then each include in source order.
 const TEX_FILES = [
-  'main.tex', 'sections/foundations.tex', 'sections/tables.tex', 'sections/diagrams.tex',
-  'sections/discussion.tex', 'extra/appendix.tex', 'sections/bibliography.tex',
+  'main.tex',
+  ...[...readFileSync(join(ROOT, 'main.tex'), 'utf8').matchAll(/\\(?:input|include)\{([^}]+)\}/g)]
+    .map((m) => (m[1]!.endsWith('.tex') ? m[1]! : `${m[1]}.tex`)),
 ]
-// The four bug constructs, addressed by (file-suffix, startLine) so the fixture
-// labels them for the assertion test.
+// Bug constructs, addressed by (file-suffix, startLine) so the fixture labels them
+// for the assertion test. The first six are the flat-model constructs; the rest are
+// the complex-construct geometry bugs (ink-grounded binder): a pgfplots figure and a
+// tikz-matrix figure whose graphic sits above the caption anchor, a multi-line align
+// with \intertext and a gather that synctex maps onto a phantom neighbour page, and
+// the paragraph before that gather (it shares an exact synctex rect with the gather).
 const CONSTRUCTS: Record<string, [string, number]> = {
   paraAlign: ['foundations.tex', 51],
   align: ['foundations.tex', 54],
@@ -37,6 +45,11 @@ const CONSTRUCTS: Record<string, [string, number]> = {
   equation: ['foundations.tex', 60],
   table: ['foundations.tex', 90],
   figure: ['diagrams.tex', 41],
+  figPlot: ['diagrams.tex', 41],
+  figCd: ['listings.tex', 58],
+  alignIntertext: ['worked-examples.tex', 15],
+  gatherInflow: ['further-constructs.tex', 62],
+  paraBeforeGather: ['further-constructs.tex', 60],
 }
 
 describe.skipIf(!process.env.GEOM_CAPTURE)('capture real-doc geometry fixture', () => {
