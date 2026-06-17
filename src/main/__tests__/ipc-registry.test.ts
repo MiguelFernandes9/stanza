@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { BrowserWindow } from 'electron'
 import { IpcChannels } from '../../shared/ipc'
 import type { ClaudeResult } from '../../shared/ipc/claude'
+import type { ReviewResolution } from '../../shared/ipc/review'
 import type { CommitInfo, FileEntry, FileMutationResult, HistoryDiff, PrimeStep } from '../../shared/ipc/document'
 import { DefaultProcessRunner } from '../infra/ProcessRunner'
 import { GitClient } from '../infra/GitClient'
@@ -492,5 +493,49 @@ describe('multi-window sessions', () => {
     )
     expect(settingsIds.has(launcher.webContents.id)).toBe(true)
     expect(settingsIds.has(winB.webContents.id)).toBe(true)
+  }, 20_000)
+})
+
+describe('reviewResolve re-derives the document on accept (BUG-53)', () => {
+  // The op call (--resume) adds a new \input'd section file; the prime call
+  // just establishes the session.
+  const addSectionStub = () =>
+    makeClaudeStub(`case "$*" in
+  *--resume*) sleep 0.2; mkdir -p sections; echo '\\section{Extra}' > sections/extra.tex; echo '\\input{sections/extra}' >> main.tex; echo '{"result":"added a section"}' ;;
+  *) echo '{"result":"primed"}' ;;
+esac`)
+
+  test('a committed accept that adds a .tex returns a fresh DocumentInfo with the new file', async () => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', addSectionStub())
+    const root = makeProject()
+    await invoke('document:open', root)
+    const before = (await invoke('document:projectBlocks')) as unknown[]
+
+    const run = (await invoke('claude:run', { instruction: 'add a section', spans: [] })) as ClaudeResult
+    const resolution = (await invoke('review:resolve', {
+      opId: run.proposal!.opId,
+      accept: true,
+    })) as ReviewResolution
+
+    // The merge added sections/extra.tex → fresh DocumentInfo carries it.
+    expect(resolution.committed).toBe(true)
+    expect(resolution.doc).toBeDefined()
+    expect(resolution.doc!.texFiles).toContain('sections/extra.tex')
+
+    // session.info is now fresh, so project blocks include the new file's section.
+    const after = (await invoke('document:projectBlocks')) as unknown[]
+    expect(after.length).toBeGreaterThan(before.length)
+  }, 20_000)
+
+  test('a reject does not attach a DocumentInfo', async () => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', addSectionStub())
+    const root = makeProject()
+    await invoke('document:open', root)
+    const run = (await invoke('claude:run', { instruction: 'add a section', spans: [] })) as ClaudeResult
+    const resolution = (await invoke('review:resolve', {
+      opId: run.proposal!.opId,
+      accept: false,
+    })) as ReviewResolution
+    expect(resolution.doc).toBeUndefined()
   }, 20_000)
 })

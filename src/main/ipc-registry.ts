@@ -192,6 +192,21 @@ export function registerIpcHandlers(): void {
     if (resolution.committed || !decision.accept) {
       patchOpRecord(doc.info.root, decision.opId, { accepted: decision.accept })
     }
+    // A committed accept merges Claude's branch into the working tree — Claude
+    // may have added sections/*.tex, dirs, or renamed files (runClaudeOp itself
+    // restored the tree clean; the files land HERE). Re-derive THIS window's
+    // session.info so document:projectBlocks parses the current texFiles, and
+    // hand a fresh DocumentInfo back when the file set changed (the renderer
+    // re-keys + reloads the sidebar/blocks — same contract as app file ops,
+    // BUG-53).
+    if (decision.accept && resolution.committed) {
+      const before = doc.info
+      const fresh = await documents.open(before.root)
+      if (fresh) {
+        doc.info = fresh
+        if (fileSetChanged(before, fresh)) return { ...resolution, doc: fresh }
+      }
+    }
     return resolution
   })
 
@@ -472,19 +487,23 @@ async function fileMutationResult(
 ): Promise<FileMutationResult> {
   const before = doc.info
   const info = await documents.open(doc.info.root)
-  let changed = false
-  if (info) {
-    changed =
-      info.mainFile !== before.mainFile ||
-      info.texFiles.length !== before.texFiles.length ||
-      info.texFiles.some((file, i) => file !== before.texFiles[i])
-    doc.info = info
-  }
+  const changed = info ? fileSetChanged(before, info) : false
+  if (info) doc.info = info
   return {
     files: listFiles(doc.info.root),
     ...(changed && info ? { doc: info } : {}),
     ...(newRelPath ? { newRelPath } : {}),
   }
+}
+
+/** Did a re-derived DocumentInfo's file set change (mainFile or texFiles)? Drives
+ *  the renderer re-key after a file op or a Claude accept (BUG-53). */
+function fileSetChanged(before: DocumentInfo, after: DocumentInfo): boolean {
+  return (
+    after.mainFile !== before.mainFile ||
+    after.texFiles.length !== before.texFiles.length ||
+    after.texFiles.some((file, i) => file !== before.texFiles[i])
+  )
 }
 
 /** Best-effort guard (FR5 sibling): don't rename/delete a path an unresolved

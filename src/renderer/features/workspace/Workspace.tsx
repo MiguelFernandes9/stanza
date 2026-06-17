@@ -578,6 +578,15 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
         if (accept) {
           runCompile()
           loadHistory()
+          // Claude's op may have added/renamed files (a new \input'd section, a
+          // dir). When the file set changed, re-key on the fresh DocumentInfo and
+          // refresh the sidebar + blocks — the same re-derive app file ops get,
+          // so multi-file blocks + new dirs appear without a restart (BUG-53).
+          if (resolution.doc) {
+            onDocChanged?.(resolution.doc)
+            loadFiles()
+            loadBlocks()
+          }
         }
       },
       (err: unknown) =>
