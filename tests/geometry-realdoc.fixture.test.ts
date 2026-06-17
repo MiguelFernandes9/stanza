@@ -22,12 +22,11 @@ interface Fx { constructs: Record<string, string>; blocks: FxBlock[]; rowsByPage
 const fx: Fx = JSON.parse(readFileSync(fileURLToPath(new URL('./__fixtures__/geometry-realdoc.json', import.meta.url)), 'utf8'))
 
 const rectsById = new Map(fx.blocks.map((b) => [b.id, b.rects] as const))
-const envNames = new Map(fx.blocks.filter((b) => b.envName).map((b) => [b.id, b.envName!] as const))
 const meta = new Map<string, BlockMeta>(fx.blocks.map((b) => [b.id, { parentId: b.parentId, isFloat: b.isFloat, isSection: b.isSection }] as const))
 const rowsByPage = new Map(Object.entries(fx.rowsByPage).map(([p, r]) => [Number(p), r] as const))
 const graphicsByPage = new Map(Object.entries(fx.graphicsByPage).map(([p, g]) => [Number(p), g] as const))
 
-const { boxesById } = binContentToBlocks(rectsById, rowsByPage, graphicsByPage, envNames, meta)
+const { boxesById } = binContentToBlocks(rectsById, rowsByPage, graphicsByPage, meta)
 const box = (key: string): PdfRect[] => boxesById.get(fx.constructs[key]!) ?? []
 const one = (key: string): PdfRect => {
   const bs = box(key)

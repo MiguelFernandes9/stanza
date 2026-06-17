@@ -206,12 +206,10 @@ export function PaperPane(props: Props): JSX.Element {
         new Map(perBlock.map(({ b, rects }) => [b.id, rects])),
         rowsByPage,
         graphicsByPage,
-        // env name per block so the binner can snap a MATH region's top to its
-        // rendered ink (synctex is ~a line off for display math) — M2-9.
-        new Map(perBlock.flatMap(({ b }) => (b.envName ? [[b.id, b.envName] as const] : []))),
-        // structural meta so the binner NESTS boxes: a container env encloses its
-        // children, a float (figure/table) takes its children's box (no source-
-        // site phantom), a section keeps its heading line only.
+        // Per-block meta: isFloat marks a placement-displaced env (figure / table /
+        // thebibliography) whose box comes from its RENDER page, dropping the
+        // origin-page phantom. parentId/isSection carry tree shape (unused by the
+        // flat wall binner today).
         new Map(
           perBlock.map(
             ({ b }) =>
@@ -219,9 +217,8 @@ export function PaperPane(props: Props): JSX.Element {
           )
         )
       )
-      // Nested boxes (a parent encloses its children) DO overlap by design — the
-      // old "disjoint partition" assumption is retired; innermost-wins resolves a
-      // click to the deepest box (selection layer).
+      // One box per block from its rendered ink; a section's box is its heading
+      // line, selection expands to its members via expandIds (selection layer).
       setBlockRects(boxesById)
       setContentTops(contentTopByPage)
       columnsByPage.current = cols // Phase 2 (two-rail bubbles) will consume this

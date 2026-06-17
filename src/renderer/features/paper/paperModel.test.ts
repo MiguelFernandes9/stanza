@@ -464,8 +464,7 @@ describe('binContentToBlocks — one row-union builder for every text block', ()
       trow(261.6, 273.1, 282, 354), // equation subscript
       trow(281.0, 289.5, 72, 297) // next paragraph
     ]
-    const envNames = new Map([['env2#b', 'equation']])
-    const { boxesById } = binContentToBlocks(rects, new Map([[2, rows]]), new Map(), envNames)
+    const { boxesById } = binContentToBlocks(rects, new Map([[2, rows]]))
     // the prose paragraph regains its wrapped last line (was clipped/orphaned)
     expect(boxBottom(boxesById.get('par1#a')![0]!)).toBeCloseTo(250.1, 1)
     // the equation box hugs the formula ink and does not reach up over the prose
@@ -592,7 +591,7 @@ describe('binContentToBlocks — flat model: absorbed math, floats, section head
       ['fig#1', { parentId: null, isFloat: true, isSection: false }],
       ['para#1', { parentId: null, isFloat: false, isSection: false }]
     ])
-    const { boxesById } = binContentToBlocks(rects, rowsByPage, graphics, new Map(), meta)
+    const { boxesById } = binContentToBlocks(rects, rowsByPage, graphics, meta)
     const figBoxes = boxesById.get('fig#1')!
     expect(figBoxes).toHaveLength(1) // no phantom page-1 box
     expect(figBoxes[0]!.page).toBe(2)
@@ -619,7 +618,7 @@ describe('binContentToBlocks — flat model: absorbed math, floats, section head
       ['sec#1', { parentId: null, isFloat: false, isSection: true }],
       ['par#1', { parentId: 'sec#1', isFloat: false, isSection: false }]
     ])
-    const { boxesById } = binContentToBlocks(rects, new Map([[1, rows]]), new Map(), new Map(), meta)
+    const { boxesById } = binContentToBlocks(rects, new Map([[1, rows]]), new Map(), meta)
     const sec = boxesById.get('sec#1')![0]!
     expect(boxBottom(sec)).toBeCloseTo(110, 1) // heading row only — NOT down to the prose at 144
     expect(boxBottom(boxesById.get('par#1')![0]!)).toBeCloseTo(144, 1)

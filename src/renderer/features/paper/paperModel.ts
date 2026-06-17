@@ -26,12 +26,12 @@ export interface PageBlock {
   /** Nearest-ancestor section id (a heading row points at its own section);
    *  null above the first section. */
   sectionId: string | null
-  /** Immediate parent block id — a child equation's theorem, a caption's figure,
-   *  a paragraph's section. null at the document root. Drives nested geometry
-   *  (parent box = union of own ∪ children) and innermost-wins selection. */
+  /** Immediate parent in the block tree — a content block's section, a
+   *  subsection's parent section; null at the document root. Tree-structure info
+   *  (the flat geometry binner keys on synctex anchors, not the tree). */
   parentId: string | null
-  /** Nesting depth (0 at the document root) so the binner can pick the deepest
-   *  containing region for a rendered row. */
+  /** Nesting depth (0 at the document root) — outline/tree-structure info; the
+   *  flat binner does not use it. */
   depth: number
   /** First content line of an environment when leading invisible macros
    *  (\label/…) push it past span.startLine+1 — environmentInteriorSpan starts
@@ -39,15 +39,14 @@ export interface PageBlock {
   contentStartLine?: number
 }
 
-/** Flatten the whole block tree to one row per selectable unit, in reading
- *  order. Walks to any depth: every section (chapter, section, subsection…)
- *  becomes a heading row; every paragraph/environment at any depth becomes its
- *  own row, tagged with its nearest-ancestor section, immediate parent, and
- *  depth. A CONTAINER environment (theorem⊃equation, figure⊃caption) recurses
- *  too, so each descendant is its own selectable row parented to the container.
- *  A heading row's geometry spans only its heading line — selection expands to
- *  the whole section via expandIds, so the box doesn't blanket nested content
- *  (BUG-5/9). */
+/** Flatten the block tree to one row per selectable unit, in reading order.
+ *  Sections nest (the only nesting axis): every section (chapter, section,
+ *  subsection…) becomes a heading row and recurses into its members. Every
+ *  paragraph and environment is a LEAF row (flat content model — a theorem, a
+ *  figure, a table is one selectable unit, its interior absorbed), tagged with
+ *  its nearest-ancestor section, parent, and depth. A heading row's geometry
+ *  spans only its heading line — selection expands to the whole section via
+ *  expandIds, so the box doesn't blanket the section's content (BUG-5/9). */
 export function flattenBlocks(roots: BlockNode[]): PageBlock[] {
   const out: PageBlock[] = []
   const walk = (
@@ -80,7 +79,8 @@ export function flattenBlocks(roots: BlockNode[]): PageBlock[] {
           depth,
           contentStartLine: node.contentStartLine
         })
-        // A container env's children each become their own row, parented here.
+        // The parser produces flat content (environments are leaves); recurse
+        // generically anyway so flattenBlocks stays a general tree-flatten.
         if (node.children.length) walk(node.children, sectionId, node.id, depth + 1)
       }
     }
@@ -353,7 +353,6 @@ export function binContentToBlocks(
   rectsById: Map<string, PdfRect[]>,
   rowsByPage: Map<number, TextRow[]>,
   graphicsByPage: Map<number, GraphicBox[]> = new Map(),
-  _envNames: Map<string, string> = new Map(),
   meta: Map<string, BlockMeta> = new Map()
 ): BinnedContent {
   const metaOf = (id: string): BlockMeta =>
@@ -387,8 +386,7 @@ export function binContentToBlocks(
   const cleanRects = (id: string, rects: PdfRect[]): PdfRect[] => {
     if (!metaOf(id).isFloat) return rects
     const kept = rects.filter((r) => {
-      for (const n of nonFloatRectsByPage.get(r.page) ?? [])
-        if (r.x < n.x + n.width && n.x < r.x + r.width && r.y < n.y + n.height && n.y < r.y + r.height) return false
+      for (const n of nonFloatRectsByPage.get(r.page) ?? []) if (boxesOverlap(r, n)) return false // already same-page
       return true
     })
     // Drop the galley-origin rect (coincides with the in-flow text), but NEVER
