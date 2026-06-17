@@ -1,25 +1,34 @@
 import { describe, expect, test, vi } from 'vitest'
 import type { BlockChange } from '../../../shared/blocks/changes'
+import type { BlockSpan } from '../../../shared/ipc/claude'
 import type { DocumentInfo } from '../../../shared/ipc/document'
 import type { GitClient } from '../../infra/GitClient'
 import type { SnippetCompiler, SnippetResult } from '../SnippetCompiler'
 import { DiffPreviewService } from '../DiffPreviewService'
 
 const info: DocumentInfo = { root: '/proj', mainFile: 'main.tex', texFiles: ['main.tex'] }
-const MAIN = '\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\nbody\n\\end{document}\n'
 
+const OLD_MAIN = ['\\documentclass{article}', '\\begin{document}', '\\section{Intro}', 'old para.', '\\begin{equation}', 'x=1', '\\end{equation}', '\\end{document}', ''].join('\n')
+const NEW_MAIN = ['\\documentclass{article}', '\\begin{document}', '\\section{Intro}', 'new para.', '\\begin{equation}', 'x=2', '\\end{equation}', '\\end{document}', ''].join('\n')
+
+const span = (s: number, e: number): BlockSpan => ({ file: 'main.tex', startLine: s, endLine: e })
 const block = (over: Partial<BlockChange>): BlockChange => ({
   status: 'modified',
   kind: 'paragraph',
   file: 'main.tex',
-  beforeText: 'old',
-  afterText: 'new',
+  beforeText: '',
+  afterText: '',
   ...over,
 })
 
 function setup(blocks: BlockChange[]) {
-  const show = vi.fn(async () => MAIN)
-  const renderDiff = vi.fn(async (): Promise<SnippetResult> => ({ pdf: Buffer.from('PDF') }))
+  const show = vi.fn(async (rev: string, file: string) => {
+    if (file !== 'main.tex') return ''
+    return rev === 'HEAD' ? OLD_MAIN : NEW_MAIN
+  })
+  const renderDiff = vi.fn(
+    async (_preamble: string, _before: string, _after: string): Promise<SnippetResult> => ({ pdf: Buffer.from('PDF') })
+  )
   const git = { show } as unknown as GitClient
   const snippets = { renderDiff } as unknown as SnippetCompiler
   const svc = new DiffPreviewService(git, snippets, info)
@@ -28,32 +37,39 @@ function setup(blocks: BlockChange[]) {
 }
 
 describe('DiffPreviewService', () => {
-  test('renders each block once with the branch preamble (memoized across get)', async () => {
-    const { svc, show, renderDiff } = setup([block({ beforeText: 'a', afterText: 'b' }), block({ beforeText: 'c', afterText: 'd' })])
+  test('renders the union region of a file as ONE marked diff (paragraph + equation)', async () => {
+    const { svc, renderDiff } = setup([
+      block({ kind: 'paragraph', beforeSpan: span(4, 4), afterSpan: span(4, 4) }),
+      block({ kind: 'environment', name: 'equation', beforeSpan: span(5, 7), afterSpan: span(5, 7) })
+    ])
 
-    const r0 = await svc.get('op1', 0)
-    const r1 = await svc.get('op1', 1)
-    await svc.get('op1', 0) // second fetch — must not recompile
+    const results = await svc.get('op1')
 
-    expect('pdf' in r0 && 'pdf' in r1).toBe(true)
-    expect(renderDiff).toHaveBeenCalledTimes(2)
-    // preamble = everything before \begin{document}; passed to renderDiff
-    expect(renderDiff).toHaveBeenCalledWith(expect.stringContaining('\\usepackage{amsmath}'), 'a', 'b')
-    expect(show).toHaveBeenCalledWith('stanza/op-op1', 'main.tex')
+    expect(results).toHaveLength(1) // one changed file → one render
+    expect('pdf' in results[0]).toBe(true)
+    expect(renderDiff).toHaveBeenCalledTimes(1)
+    const [preamble, oldRegion, newRegion] = renderDiff.mock.calls[0]
+    expect(preamble).toContain('\\documentclass{article}') // preamble from the main file
+    expect(preamble).not.toContain('old para.') // body excluded from preamble
+    // region = union span lines 4–7, both sides
+    expect(oldRegion).toContain('old para.')
+    expect(oldRegion).toContain('x=1')
+    expect(newRegion).toContain('new para.')
+    expect(newRegion).toContain('x=2')
   })
 
-  test('skips preamble blocks (no rendered preview)', async () => {
-    const { svc, renderDiff } = setup([block({ kind: 'preamble', beforeText: 'x', afterText: 'y' })])
-    const res = await svc.get('op1', 0)
-    expect('error' in res && res.error).toContain('Preamble')
+  test('a preamble-only change has no rendered preview', async () => {
+    const { svc, renderDiff } = setup([block({ kind: 'preamble', beforeSpan: span(1, 1), afterSpan: span(1, 2) })])
+    expect(await svc.get('op1')).toEqual([])
     expect(renderDiff).not.toHaveBeenCalled()
   })
 
   test('invalidate drops the cache', async () => {
-    const { svc } = setup([block({})])
-    await svc.get('op1', 0)
+    const { svc } = setup([block({ beforeSpan: span(4, 4), afterSpan: span(4, 4) })])
+    await svc.get('op1')
     svc.invalidate('op1')
-    const res = await svc.get('op1', 0)
-    expect('error' in res && res.error).toContain('Preview unavailable')
+    const res = await svc.get('op1')
+    expect(res).toHaveLength(1)
+    expect('error' in res[0] && res[0].error).toContain('Preview unavailable')
   })
 })

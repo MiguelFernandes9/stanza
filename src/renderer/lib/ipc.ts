@@ -19,10 +19,10 @@ import type {
   InversePoint,
   OpRecord,
   PdfRect,
+  PreviewRequest,
+  PreviewResult,
   PrimeStep,
   RecentProject,
-  RenderBlockRequest,
-  RenderBlockResult,
   ReviewDecision,
   ReviewProposal,
   ReviewResolution,
@@ -92,9 +92,9 @@ export const api = {
   claudeHistory: () => invoke<OpRecord[]>(IpcChannels.claudeHistory),
   reviewResolve: (d: ReviewDecision) => invoke<ReviewResolution>(IpcChannels.reviewResolve, d),
   reviewList: () => invoke<ReviewProposal[]>(IpcChannels.reviewList),
-  /** Typeset one changed block in isolation → page-1 PDF (base64) or an error. */
-  reviewRenderBlock: (req: RenderBlockRequest) =>
-    invoke<RenderBlockResult>(IpcChannels.reviewRenderBlock, req),
+  /** The marked (latexdiff) render of the complete edit — one item per changed
+   *  file (base64 PDF) or an error; compiled eagerly so usually instant. */
+  reviewPreview: (req: PreviewRequest) => invoke<PreviewResult>(IpcChannels.reviewPreview, req),
   /** Abort the priming pipeline (manager-approved addition; handler is a
    *  backend follow-up — callers must tolerate rejection until it lands). */
   primeCancel: () => invoke<void>(IpcChannels.primeCancel),

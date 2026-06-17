@@ -15,8 +15,8 @@ import type {
   InversePoint,
   IpcChannel,
   OpRecord,
+  PreviewRequest,
   RecentProject,
-  RenderBlockRequest,
   ReviewDecision,
   GlobalSettings,
   DocumentSettings,
@@ -228,11 +228,13 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IpcChannels.reviewList, (event) => sessionFor(event).review.list())
 
-  ipcMain.handle(IpcChannels.reviewRenderBlock, async (event, req: RenderBlockRequest) => {
+  ipcMain.handle(IpcChannels.reviewPreview, async (event, req: PreviewRequest) => {
     const doc = sessionFor(event)
     // Eager build (primed at capture) usually means this resolves from cache.
-    const result = await doc.diffPreview.get(req.opId, req.index)
-    return 'pdf' in result ? { pdf: result.pdf.toString('base64') } : { error: result.error }
+    const results = await doc.diffPreview.get(req.opId)
+    return {
+      items: results.map((r) => ('pdf' in r ? { pdf: r.pdf.toString('base64') } : { error: r.error })),
+    }
   })
 
   // v0.2 sidebar file management — each op mutates the doc repo (commit-per-op

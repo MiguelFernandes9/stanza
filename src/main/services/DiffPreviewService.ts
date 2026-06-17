@@ -4,16 +4,15 @@ import type { DocumentInfo } from '../../shared/ipc/document'
 import type { GitClient } from '../infra/GitClient'
 import type { SnippetCompiler, SnippetResult } from './SnippetCompiler'
 
-/** Eager, cached block-diff previews. The moment a proposal is captured, prime()
- *  starts compiling every changed block's marked render (latexdiff of its
- *  before↔after, via SnippetCompiler) in the background — concurrency-capped so a
- *  big proposal doesn't spawn a tectonic per block at once. By the time the user
- *  opens Review, get() returns the already-resolved render instantly; if they
- *  open it sooner, get() awaits the in-flight build. One entry per (opId, block);
- *  invalidate() drops an op's cache when it resolves. */
+/** Eager, cached "complete edit" preview. The moment a proposal is captured,
+ *  prime() starts compiling the marked render of the edited REGION — per changed
+ *  file, the union span of that file's changed blocks, latexdiff'd before↔after
+ *  and compiled (via SnippetCompiler) — so by the time the user opens Review the
+ *  render is ready; get() awaits the in-flight build if they open it sooner. One
+ *  build per op (usually one file → one render); invalidate() drops it on resolve. */
 export class DiffPreviewService {
-  private ops = new Map<string, OpCtx>()
-  private sem = new Semaphore(3)
+  private ops = new Map<string, Promise<SnippetResult[]>>()
+  private sem = new Semaphore(2)
 
   constructor(
     private git: GitClient,
@@ -21,57 +20,81 @@ export class DiffPreviewService {
     private info: DocumentInfo,
   ) {}
 
-  /** Begin compiling all renderable blocks for an op (idempotent per opId). */
+  /** Begin compiling the edit's region render(s) (idempotent per opId). */
   prime(opId: string, branch: string, blocks: BlockChange[]): void {
     if (this.ops.has(opId)) return
-    const preamble = this.git
-      .show(branch, this.info.mainFile)
-      .then(splitPreamble)
-      .catch(() => '')
-    const ctx: OpCtx = { preamble, blocks, renders: new Map() }
-    this.ops.set(opId, ctx)
-    for (let i = 0; i < blocks.length; i++) {
-      if (renderable(blocks[i])) void this.render(ctx, i)
-    }
+    this.ops.set(opId, this.build(branch, blocks))
   }
 
-  /** The marked render for one block — cached promise, or a fresh build. */
-  get(opId: string, index: number): Promise<SnippetResult> {
-    const ctx = this.ops.get(opId)
-    if (!ctx) return Promise.resolve({ error: 'Preview unavailable — reopen the document.' })
-    const block = ctx.blocks[index]
-    if (!block) return Promise.resolve({ error: 'No such block.' })
-    if (!renderable(block)) return Promise.resolve({ error: 'Preamble changes have no rendered preview.' })
-    return this.render(ctx, index)
+  /** The render(s) for the edit — one per changed file. Empty when the op only
+   *  touched the preamble (nothing to typeset). */
+  get(opId: string): Promise<SnippetResult[]> {
+    return this.ops.get(opId) ?? Promise.resolve([{ error: 'Preview unavailable — reopen the document.' }])
   }
 
   invalidate(opId: string): void {
     this.ops.delete(opId)
   }
 
-  private render(ctx: OpCtx, index: number): Promise<SnippetResult> {
-    const hit = ctx.renders.get(index)
-    if (hit) return hit
-    const block = ctx.blocks[index]
-    const p = this.sem.run(async () => {
-      const preamble = await ctx.preamble
-      return this.snippets.renderDiff(preamble, block.beforeText, block.afterText)
-    })
-    ctx.renders.set(index, p)
-    return p
+  private async build(branch: string, blocks: BlockChange[]): Promise<SnippetResult[]> {
+    // The preamble (\documentclass + packages) always lives in the main file —
+    // even when the edit is in an \input'd chapter — so the snippet compiles.
+    const preamble = this.git.show(branch, this.info.mainFile).then(splitPreamble).catch(() => '')
+    const byFile = groupRenderableByFile(blocks)
+    const out: SnippetResult[] = []
+    for (const [file, fileBlocks] of byFile) {
+      out.push(await this.sem.run(() => this.renderRegion(branch, file, fileBlocks, preamble)))
+    }
+    return out
+  }
+
+  private async renderRegion(
+    branch: string,
+    file: string,
+    blocks: BlockChange[],
+    preamble: Promise<string>,
+  ): Promise<SnippetResult> {
+    const [oldText, newText, pre] = await Promise.all([
+      this.git.show('HEAD', file).catch(() => ''),
+      this.git.show(branch, file).catch(() => ''),
+      preamble,
+    ])
+    const oldRegion = sliceRegion(oldText, bounds(blocks, 'before'))
+    const newRegion = sliceRegion(newText, bounds(blocks, 'after'))
+    return this.snippets.renderDiff(pre, oldRegion, newRegion)
   }
 }
 
-interface OpCtx {
-  preamble: Promise<string>
-  blocks: BlockChange[]
-  renders: Map<number, Promise<SnippetResult>>
+/** Renderable (non-preamble) changes grouped by file, first-seen order. */
+function groupRenderableByFile(blocks: BlockChange[]): Map<string, BlockChange[]> {
+  const byFile = new Map<string, BlockChange[]>()
+  for (const b of blocks) {
+    if (b.kind === 'preamble') continue
+    const list = byFile.get(b.file) ?? []
+    list.push(b)
+    byFile.set(b.file, list)
+  }
+  return byFile
 }
 
-/** Preamble changes are package/macro edits with no body output — nothing to
- *  typeset, so they get no rendered preview (the card still shows the diff). */
-function renderable(block: BlockChange): boolean {
-  return block.kind !== 'preamble'
+/** The min-start..max-end span of the given side over the blocks, or null when
+ *  no block has that side (e.g. all-added blocks have no `before`). */
+function bounds(blocks: BlockChange[], side: 'before' | 'after'): { start: number; end: number } | null {
+  let start = Infinity
+  let end = -Infinity
+  for (const b of blocks) {
+    const span = side === 'before' ? b.beforeSpan : b.afterSpan
+    if (!span) continue
+    start = Math.min(start, span.startLine)
+    end = Math.max(end, span.endLine)
+  }
+  return end < 0 ? null : { start, end }
+}
+
+/** 1-based inclusive line range from file text; '' when there is no range. */
+function sliceRegion(text: string, range: { start: number; end: number } | null): string {
+  if (!range) return ''
+  return text.split('\n').slice(range.start - 1, range.end).join('\n')
 }
 
 /** Caps concurrent builds: extra calls wait until a slot frees. */
