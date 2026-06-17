@@ -242,9 +242,18 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
   // files, and the initial listing).
   useEffect(() => loadProjectCtx(), [files, loadProjectCtx])
 
-  // External fs changes (delete/add/rename done outside the app) → re-list, so
-  // the sidebar tracks disk without a reopen.
-  useEffect(() => client.onDocumentFilesChanged(() => loadFiles()), [loadFiles])
+  // External fs changes (delete/add/rename done outside the app) → re-list AND
+  // reparse blocks, so the sidebar, outline, and PDF-selection model all track
+  // disk without a reopen (re-listing alone left the outline pointing at gone
+  // sections).
+  useEffect(
+    () =>
+      client.onDocumentFilesChanged(() => {
+        loadFiles()
+        loadBlocks()
+      }),
+    [loadFiles, loadBlocks],
+  )
 
   // Pending proposals re-emitted on open (crash recovery, FR7).
   useEffect(

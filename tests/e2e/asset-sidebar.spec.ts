@@ -84,3 +84,11 @@ test('an external delete refreshes the sidebar without reopening', async () => {
   // The live watcher fires document:files-changed → the renderer re-lists.
   await expect(row('refs.bib')).toHaveCount(0)
 })
+
+test('an external delete of a FIGURE pdf also refreshes (watcher keeps pdfs)', async () => {
+  // The watcher ignores the COMPILED pdf + build artifacts but must still fire
+  // for a figure pdf — the sidebar shows it, so a change to it must refresh.
+  await expect(row('figs/plot.pdf')).toBeVisible()
+  rmSync(join(projectRoot, 'figs/plot.pdf'))
+  await expect(row('figs/plot.pdf')).toHaveCount(0)
+})

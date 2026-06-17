@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import type { IpcMainInvokeEvent, WebContents } from 'electron'
 import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { IpcChannels } from '@shared/ipc'
 import type {
   BlockSpan,
@@ -387,10 +387,28 @@ function bindSession(wc: WebContents, info: DocumentInfo): void {
   fileWatchers.get(wc.id)?.()
   fileWatchers.set(
     wc.id,
-    watchSettled(info.root, FILE_WATCH_SETTLE_MS, () => {
-      if (!wc.isDestroyed()) wc.send(IpcChannels.documentFilesChanged)
-    }),
+    watchSettled(
+      info.root,
+      FILE_WATCH_SETTLE_MS,
+      () => {
+        if (!wc.isDestroyed()) wc.send(IpcChannels.documentFilesChanged)
+      },
+      sidebarWatchIgnore(outputPdfRel(info)),
+    ),
   )
+}
+
+/** Ignore predicate for the tree watcher: skip exactly what the sidebar hides
+ *  (dotfiles, build artifacts, compiled pdf — so compile churn never refreshes)
+ *  plus the heavy dirs the walk omits, while still firing for figure pdfs and
+ *  every other displayed file. Keeps the watcher consistent with listFiles by
+ *  construction. */
+function sidebarWatchIgnore(outPdf: string): (relPath: string) => boolean {
+  return (relPath) => {
+    const segments = relPath.split('/')
+    if (segments.includes('.git') || segments.includes('node_modules')) return true
+    return isHiddenInSidebar(relPath, outPdf)
+  }
 }
 
 /** The window currently holding `root`, or undefined — drives duplicate-focus. */
@@ -573,11 +591,13 @@ const FILE_KINDS: [RegExp, FileEntry['kind']][] = [
   [/\.(md|txt)$/, 'text'],
 ]
 
-/** The compiled output pdf, root-relative: tectonic writes `<mainBase>.pdf` at
- *  the repo root (CompileService.pdfPath). Hidden from the sidebar by name so a
- *  figure pdf elsewhere stays visible. */
+/** The compiled output pdf, root-relative. Mirrors CompileService.pdfPath /
+ *  docGitignore exactly: tectonic writes `<mainFile sans .tex>.pdf` NEXT TO the
+ *  main file (CompileService.lastBase keeps the dir), so a main in a subdir
+ *  (src/main.tex → src/main.pdf) is matched. Hidden from the sidebar by this
+ *  name so figure pdfs elsewhere stay visible. */
 function outputPdfRel(info: DocumentInfo): string {
-  return basename(info.mainFile).replace(/\.tex$/i, '.pdf')
+  return info.mainFile.replace(/\.tex$/i, '.pdf')
 }
 
 function listFiles(root: string, outPdf: string, dir = ''): FileEntry[] {
