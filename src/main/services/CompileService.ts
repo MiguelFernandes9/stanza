@@ -128,9 +128,11 @@ export class CompileService {
       })
     } catch (err) {
       const missing = (err as NodeJS.ErrnoException).code === 'ENOENT'
+      const message = missing ? TECTONIC_HINT : String(err)
       return {
         ok: false,
-        errors: [{ file: '', line: null, message: missing ? TECTONIC_HINT : String(err) }],
+        errors: [{ file: '', line: null, message }],
+        log: message,
       }
     } finally {
       if (scoped) rmSync(join(this.root, target), { force: true })
@@ -149,7 +151,7 @@ export class CompileService {
       }
     }
     const log = this.readLog(join(this.root, `${base}.log`)) ?? proc.stderr
-    return { ok: false, errors: parseCompileLog(log, this.doc.mainFile) }
+    return { ok: false, errors: parseCompileLog(log, this.doc.mainFile), log }
   }
 
   async inverse(p: InversePoint): Promise<SourceLocation | null> {
