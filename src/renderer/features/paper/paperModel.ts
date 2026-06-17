@@ -1,8 +1,10 @@
 import type { BlockNode } from '../../../shared/blocks/types'
-import type { BlockSpan, PdfRect } from '../../../shared/ipc'
+import type { BlockSpan, PdfCol, PdfRect } from '../../../shared/ipc'
 import type { TaskPhase } from '../tasks/taskStore'
 import type { TextRow } from './pdfTextRows'
 import type { GraphicBox } from './pdfGraphics'
+import type { ColumnLayout } from './columnLayout'
+import { columnLayoutByPage, columnOf } from './columnLayout'
 import { isMathEnvName } from '../../../shared/blocks/container'
 
 /** Selection state a task stamps on a block — drives the edge bar, the
@@ -310,12 +312,17 @@ export function contentBand(rowsByPage: Map<number, TextRow[]>): { top: number; 
 }
 
 export interface BinnedContent {
-  /** Per-page boxes per block, built from the rendered text rows. */
+  /** Per-page boxes per block, built from the rendered text rows. Each box
+   *  carries its `col` (full/l/r); a block flowing across the column break has a
+   *  left box AND a right box. */
   boxesById: Map<string, PdfRect[]>
   /** Per page, the top (min PDF-pt y) of the page's content band — the topmost
    *  binned box's top — so the editing pill clamps out of the running head
    *  (M2-6). */
   contentTopByPage: Map<number, number>
+  /** Per-page column geometry (gutter + bands) the boxes were binned against —
+   *  Phase 2's two-rail layout reads this to place bubbles per column. */
+  columnsByPage: Map<number, ColumnLayout>
 }
 
 /** Per-block structural metadata the binner needs to NEST boxes. A missing entry
@@ -369,6 +376,12 @@ export function binContentToBlocks(
   const inBand = (yTop: number, yBottom: number): boolean =>
     !band || (yBottom >= band.top - BAND_EPS && yTop <= band.bottom + BAND_EPS)
 
+  // Where the columns are on each page (gutter + bands), from the rendered text
+  // layer. A column is a property of the BOX, not the source block: every rect /
+  // row is tagged its column here so a block emits one box per (page × column).
+  // Single-column pages tag everything 'full', collapsing to one box per page.
+  const columnsByPage = columnLayoutByPage(rowsByPage)
+
   // A float's RENDER page = where the bulk of its own synctex rects land (the
   // page LaTeX placed it on); its thin source-site rect on the origin page is the
   // minority. A float DESCENDANT (graphic / caption) ALSO leaves a source-site
@@ -400,6 +413,7 @@ export function binContentToBlocks(
 
   interface Region {
     id: string
+    col: PdfCol
     top: number
     bottom: number
     xLeft: number
@@ -420,16 +434,35 @@ export function binContentToBlocks(
       // A float descendant lives only on the float's render page; drop its
       // origin-page source-site rect (it would otherwise steal that page's prose).
       if (floatPage !== null && page !== floatPage) continue
-      const region: Region = {
-        id,
-        top: Math.min(...rs.map((r) => r.y)),
-        bottom: Math.max(...rs.map((r) => r.y + r.height)),
-        xLeft: Math.min(...rs.map((r) => r.x)),
-        xRight: Math.max(...rs.map((r) => r.x + r.width))
+      const layout = columnsByPage.get(page)
+      // Split this block's rects on the page BY COLUMN, so a paragraph that flows
+      // across the break becomes a left region AND a right region — each
+      // column-pure — instead of one gutter-crossing region whose huge span (its
+      // right-column continuation reaches up to the top of the page) would steal a
+      // neighbour's rows. Single-column pages tag every rect 'full' → exactly one
+      // region per (id, page), identical to the pre-two-column partition.
+      const byCol = new Map<PdfCol, PdfRect[]>()
+      for (const r of rs) {
+        const col = layout
+          ? columnOf(layout, { yTop: r.y, yBottom: r.y + r.height, xLeft: r.x, xRight: r.x + r.width })
+          : 'full'
+        const arr = byCol.get(col)
+        if (arr) arr.push(r)
+        else byCol.set(col, [r])
       }
-      const arr = regionsByPage.get(page)
-      if (arr) arr.push(region)
-      else regionsByPage.set(page, [region])
+      for (const [col, crs] of byCol) {
+        const region: Region = {
+          id,
+          col,
+          top: Math.min(...crs.map((r) => r.y)),
+          bottom: Math.max(...crs.map((r) => r.y + r.height)),
+          xLeft: Math.min(...crs.map((r) => r.x)),
+          xRight: Math.max(...crs.map((r) => r.x + r.width))
+        }
+        const arr = regionsByPage.get(page)
+        if (arr) arr.push(region)
+        else regionsByPage.set(page, [region])
+      }
     }
   }
 
@@ -440,18 +473,27 @@ export function binContentToBlocks(
     yTop: number
     yBottom: number
   }
-  // Own rendered items per (id, page): what the block itself painted, before its
-  // children's boxes are composed in.
-  const ownItems = new Map<string, Map<number, Item[]>>()
-  const addOwn = (id: string, page: number, item: Item): void => {
+  // Own rendered items per (id, page, column) CELL: what the block itself
+  // painted, before its children's boxes are composed in. The column axis is the
+  // 2nd binning dimension (after page) — a block flowing across the break owns a
+  // left cell AND a right cell.
+  interface Cell {
+    page: number
+    col: PdfCol
+    items: Item[]
+  }
+  const cellKey = (page: number, col: PdfCol): string => `${page}|${col}`
+  const ownItems = new Map<string, Map<string, Cell>>()
+  const addOwn = (id: string, page: number, col: PdfCol, item: Item): void => {
     let pm = ownItems.get(id)
     if (!pm) {
       pm = new Map()
       ownItems.set(id, pm)
     }
-    const arr = pm.get(page)
-    if (arr) arr.push(item)
-    else pm.set(page, [item])
+    const key = cellKey(page, col)
+    const cell = pm.get(key)
+    if (cell) cell.items.push(item)
+    else pm.set(key, { page, col, items: [item] })
   }
 
   for (const [page, regions] of regionsByPage) {
@@ -480,48 +522,70 @@ export function binContentToBlocks(
       // No rendered content measured for this page → coarse synctex union as each
       // region's own item; composition (float → children, etc.) still applies.
       for (const reg of regions)
-        addOwn(reg.id, page, { key: reg.top, xLeft: reg.xLeft, xRight: reg.xRight, yTop: reg.top, yBottom: reg.bottom })
+        addOwn(reg.id, page, reg.col, { key: reg.top, xLeft: reg.xLeft, xRight: reg.xRight, yTop: reg.top, yBottom: reg.bottom })
       continue
     }
 
     // Floats own no rows (their source-site region would steal a sibling's prose,
     // possibly on another page). Exclude them; their box is composed from children.
     const partRegions = regions.filter((reg) => !metaOf(reg.id).isFloat)
-    const regionById = new Map(partRegions.map((reg) => [reg.id, reg] as const))
-    // Forest parent = nearest ancestor that is a non-float region present on this
-    // page (skip floats and absent ancestors); else top-level.
+    // A block can have an l AND an r region on one page (it flowed across the
+    // break), so index by (id, col); a child nests under its parent's region in
+    // the SAME column (else the parent's full-width region).
+    const regKey = (reg: Region): string => `${reg.id}|${reg.col}`
+    const byIdCol = new Map<string, Map<PdfCol, Region>>()
+    for (const reg of partRegions) {
+      let m = byIdCol.get(reg.id)
+      if (!m) {
+        m = new Map()
+        byIdCol.set(reg.id, m)
+      }
+      m.set(reg.col, reg)
+    }
+    const parentRegionOf = (reg: Region): Region | undefined => {
+      let pid = metaOf(reg.id).parentId
+      while (pid) {
+        const m = byIdCol.get(pid)
+        if (m && !metaOf(pid).isFloat) return m.get(reg.col) ?? m.get('full') ?? [...m.values()][0]
+        pid = metaOf(pid).parentId
+      }
+      return undefined
+    }
     const forestChildren = new Map<string, Region[]>()
     const topLevel: Region[] = []
     for (const reg of partRegions) {
-      let pid = metaOf(reg.id).parentId
-      let parent: Region | undefined
-      while (pid) {
-        const cand = regionById.get(pid)
-        if (cand && !metaOf(pid).isFloat) {
-          parent = cand
-          break
-        }
-        pid = metaOf(pid).parentId
-      }
+      const parent = parentRegionOf(reg)
       if (parent) {
-        const arr = forestChildren.get(parent.id)
+        const k = regKey(parent)
+        const arr = forestChildren.get(k)
         if (arr) arr.push(reg)
-        else forestChildren.set(parent.id, [reg])
+        else forestChildren.set(k, [reg])
       } else topLevel.push(reg)
     }
     const byTop = (a: Region, b: Region): number => a.top - b.top
     topLevel.sort(byTop)
     for (const arr of forestChildren.values()) arr.sort(byTop)
 
-    // Assign an item to the DEEPEST region whose [top-ε, sibling-ceiling) × x-band
-    // contains its partition key: siblings give the ceiling (the dropped last line
-    // lands in its own block), children win over parents (innermost).
+    // The ceiling for a region is the next sibling (in reading order) that shares
+    // its column — i.e. x-overlaps it. This is what makes columns work: a left
+    // region's ceiling is the NEXT LEFT region, not whatever right-column region
+    // happens to start a few points below it (which would orphan the left
+    // column's rows). In a single-column page every sibling x-overlaps, so this
+    // is the immediate next sibling — identical to the pre-two-column behaviour.
+    const xOverlap = (a: Region, b: Region): boolean => a.xRight > b.xLeft && a.xLeft < b.xRight
+    const ceilingFor = (siblings: Region[], i: number, parentCeiling: number): number => {
+      for (let j = i + 1; j < siblings.length; j++) if (xOverlap(siblings[j]!, siblings[i]!)) return siblings[j]!.top
+      return parentCeiling
+    }
+
+    // Assign an item to the DEEPEST region whose [top-ε, same-column-ceiling) ×
+    // x-band contains its partition key: children win over parents (innermost).
     const descend = (item: Item, siblings: Region[], parentCeiling: number): Region | null => {
       for (let i = 0; i < siblings.length; i++) {
         const reg = siblings[i]!
-        const ceiling = i + 1 < siblings.length ? siblings[i + 1]!.top : parentCeiling
+        const ceiling = ceilingFor(siblings, i, parentCeiling)
         if (item.key >= reg.top - BAND_EPS && item.key < ceiling && item.xRight > reg.xLeft && item.xLeft < reg.xRight) {
-          const deeper = descend(item, forestChildren.get(reg.id) ?? [], ceiling)
+          const deeper = descend(item, forestChildren.get(regKey(reg)) ?? [], ceiling)
           return deeper ?? reg
         }
       }
@@ -529,15 +593,18 @@ export function binContentToBlocks(
     }
     const assign = (item: Item): void => {
       const owner = descend(item, topLevel, Infinity)
-      if (owner) addOwn(owner.id, page, item)
+      if (owner) addOwn(owner.id, page, owner.col, item)
     }
     for (const r of rows) assign({ key: r.baseline, xLeft: r.xLeft, xRight: r.xRight, yTop: r.yTop, yBottom: r.yBottom })
     for (const g of graphics) assign({ key: g.yTop, xLeft: g.xLeft, xRight: g.xRight, yTop: g.yTop, yBottom: g.yBottom })
   }
 
-  // Compose final boxes bottom-up: box(page) = own items (skip if float) ∪ child
-  // boxes (skip if section). Env container → encloses descendants; float → exactly
-  // its children; section → heading line only; leaf → own rows. Memoised.
+  // Compose final boxes bottom-up, per (page × column) CELL: box(cell) = own
+  // items (skip if float) ∪ child boxes in the SAME cell (skip if section). Env
+  // container → encloses descendants; float → exactly its children; section →
+  // heading line only; leaf → own rows. A block with items in two columns (a
+  // paragraph flowing across the break) yields a left box AND a right box; a
+  // single-column block yields one 'full' box. Memoised.
   const childrenOf = new Map<string, string[]>()
   for (const id of rectsById.keys()) {
     const pid = metaOf(id).parentId
@@ -548,14 +615,17 @@ export function binContentToBlocks(
     }
   }
   interface Acc {
+    page: number
+    col: PdfCol
     x: number
     y: number
     right: number
     bottom: number
   }
-  const grow = (acc: Map<number, Acc>, page: number, x: number, y: number, right: number, bottom: number): void => {
-    const cur = acc.get(page)
-    if (!cur) acc.set(page, { x, y, right, bottom })
+  const grow = (acc: Map<string, Acc>, page: number, col: PdfCol, x: number, y: number, right: number, bottom: number): void => {
+    const key = cellKey(page, col)
+    const cur = acc.get(key)
+    if (!cur) acc.set(key, { page, col, x, y, right, bottom })
     else {
       cur.x = Math.min(cur.x, x)
       cur.y = Math.min(cur.y, y)
@@ -563,30 +633,30 @@ export function binContentToBlocks(
       cur.bottom = Math.max(cur.bottom, bottom)
     }
   }
-  const boxCache = new Map<string, Map<number, PdfRect>>()
-  const boxesFor = (id: string): Map<number, PdfRect> => {
+  const boxCache = new Map<string, Map<string, PdfRect>>()
+  const boxesFor = (id: string): Map<string, PdfRect> => {
     const cached = boxCache.get(id)
     if (cached) return cached
     const m = metaOf(id)
-    const acc = new Map<number, Acc>()
+    const acc = new Map<string, Acc>()
     if (!m.isFloat) {
       const pm = ownItems.get(id)
-      if (pm) for (const [page, items] of pm) for (const it of items) grow(acc, page, it.xLeft, it.yTop, it.xRight, it.yBottom)
+      if (pm) for (const cell of pm.values()) for (const it of cell.items) grow(acc, cell.page, cell.col, it.xLeft, it.yTop, it.xRight, it.yBottom)
     }
     if (!m.isSection) {
       for (const child of childrenOf.get(id) ?? [])
-        for (const [page, b] of boxesFor(child)) grow(acc, page, b.x, b.y, b.x + b.width, b.y + b.height)
+        for (const b of boxesFor(child).values()) grow(acc, b.page, b.col ?? 'full', b.x, b.y, b.x + b.width, b.y + b.height)
     }
-    const out = new Map<number, PdfRect>()
-    for (const [page, b] of acc) out.set(page, { page, x: b.x, y: b.y, width: b.right - b.x, height: b.bottom - b.y })
+    const out = new Map<string, PdfRect>()
+    for (const [key, b] of acc) out.set(key, { page: b.page, x: b.x, y: b.y, width: b.right - b.x, height: b.bottom - b.y, col: b.col })
     boxCache.set(id, out)
     return out
   }
 
   const boxesById = new Map<string, PdfRect[]>()
   for (const id of rectsById.keys()) {
-    const perPage = boxesFor(id)
-    if (perPage.size) boxesById.set(id, [...perPage.values()].sort((a, b) => a.page - b.page))
+    const perCell = boxesFor(id)
+    if (perCell.size) boxesById.set(id, [...perCell.values()].sort((a, b) => a.page - b.page || a.x - b.x))
   }
 
   const contentTopByPage = new Map<number, number>()
@@ -595,7 +665,7 @@ export function binContentToBlocks(
       const cur = contentTopByPage.get(b.page)
       if (cur === undefined || b.y < cur) contentTopByPage.set(b.page, b.y)
     }
-  return { boxesById, contentTopByPage }
+  return { boxesById, contentTopByPage, columnsByPage }
 }
 
 /** Geometry query span for a block, excluding an environment's \begin/\end

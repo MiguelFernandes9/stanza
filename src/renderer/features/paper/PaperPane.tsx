@@ -19,6 +19,7 @@ import { PaperToolbar } from './PaperToolbar'
 import { binContentToBlocks, blockGeometryRects, cardAnchorTops, combinedSpanLabel, expandIds, isMathEnvName, isTightAbove, spanLabel, washBoxes } from './paperModel'
 import { isFloatEnv } from '../../../shared/blocks/container'
 import type { BlockMark, PageBlock } from './paperModel'
+import type { ColumnLayout } from './columnLayout'
 import { pageTextRows } from './pdfTextRows'
 import type { TextRow } from './pdfTextRows'
 import { pageTextTokens } from './pdfTextTokens'
@@ -94,6 +95,9 @@ export function PaperPane(props: Props): JSX.Element {
   const [activeFlash, setActiveFlash] = useState<PdfFlash | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const cardEls = useRef<Record<number, HTMLDivElement | null>>({})
+  // Per-page column geometry from the binner — Phase 1 produces it; Phase 2's
+  // two-rail bubble layout will read it. Held in a ref (no UI consumes it yet).
+  const columnsByPage = useRef<Map<number, ColumnLayout>>(new Map())
   // Anchor (block top) per task and the collision-stacked top per open bubble.
   // A scoped task whose geometry isn't resolved yet anchors to null (BUG-32) —
   // its badge/connector/bubble are skipped until a real box lands.
@@ -198,7 +202,7 @@ export function PaperPane(props: Props): JSX.Element {
       // band drops running heads / folios / footers and header-margin stray rects
       // first (M2-6, BUG-30); a region's box runs to the next region's top, so a
       // dropped last line is included and a figure covers its image + caption.
-      const { boxesById, contentTopByPage } = binContentToBlocks(
+      const { boxesById, contentTopByPage, columnsByPage: cols } = binContentToBlocks(
         new Map(perBlock.map(({ b, rects }) => [b.id, rects])),
         rowsByPage,
         graphicsByPage,
@@ -220,6 +224,7 @@ export function PaperPane(props: Props): JSX.Element {
       // click to the deepest box (selection layer).
       setBlockRects(boxesById)
       setContentTops(contentTopByPage)
+      columnsByPage.current = cols // Phase 2 (two-rail bubbles) will consume this
       // Rendered figure/equation numbers for the outline (Part B): read each
       // float/math block's number from the tokens inside its box, lift to
       // Workspace → Sidebar → OutlineTree.

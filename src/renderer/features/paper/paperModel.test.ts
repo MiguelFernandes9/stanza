@@ -513,7 +513,8 @@ describe('binContentToBlocks — one row-union builder for every text block', ()
       ['p#1', [prect(3, 100, 50, 200, 40), prect(3, 120, 60, 150, 20)]]
     ])
     const { boxesById } = binContentToBlocks(rects, new Map()) // text layer unavailable
-    expect(boxesById.get('p#1')).toEqual([{ page: 3, x: 100, y: 50, width: 200, height: 40 }])
+    // No text layer → no columns detected → the box is 'full' (single-column).
+    expect(boxesById.get('p#1')).toEqual([{ page: 3, x: 100, y: 50, width: 200, height: 40, col: 'full' }])
   })
 
   it('folds a figure image bbox into the box — covers image + caption, not caption alone (2b)', () => {
@@ -958,5 +959,104 @@ describe('pillPlacement (BUG-35)', () => {
     const p = pillPlacement({ math: true, tight: false, atBandTop: true })
     expect(p.left).toBe(-PILL_MARGIN_GAP)
     expect(p.transform).toBe('translateX(-100%)')
+  })
+})
+
+// Column geometry: a box is per (page × column). Coordinates mirror the measured
+// fixture (left col x[54,293], right col x[319,558], gutter ~25pt at x≈306). Rows
+// are column-split (pdfTextRows now keeps left/right lines separate), so every
+// baseline carries one left row and/or one right row.
+const lineRows = (baselines: number[], xL: number, xR: number): TextRow[] =>
+  baselines.map((b) => trow(b - 11, b, xL, xR))
+const LCOL = [54, 293] as const
+const RCOL = [319, 558] as const
+
+describe('binContentToBlocks — column axis (two-column papers)', () => {
+  it('a left-column block excludes right-column rows (one box per side)', () => {
+    const ys = [250, 263, 276, 289, 302, 315]
+    const rows = new Map([[1, [...lineRows(ys, ...LCOL), ...lineRows(ys, ...RCOL)]]])
+    const rects = new Map<string, PdfRect[]>([
+      ['L#1', [prect(1, 54, 250, 239, 78)]], // left column region
+      ['R#1', [prect(1, 319, 250, 239, 78)]] // right column region
+    ])
+    const { boxesById } = binContentToBlocks(rects, rows)
+    const l = boxesById.get('L#1')!
+    const r = boxesById.get('R#1')!
+    expect(l).toHaveLength(1)
+    expect(r).toHaveLength(1)
+    expect(l[0]!.col).toBe('l')
+    expect(r[0]!.col).toBe('r')
+    // the left box stops at the gutter — it never reached across to the right rows
+    expect(l[0]!.x + l[0]!.width).toBeLessThan(319)
+    expect(r[0]!.x).toBeGreaterThan(293)
+  })
+
+  it('keeps a left-column block whole when a right-column block starts just below its top (no orphaned rows)', () => {
+    // Interleaved tops: the right block begins 6pt below the left block. With a
+    // page-wide ceiling the left block would be cut at the right block's top and
+    // its lower rows orphaned; the column-scoped ceiling keeps it whole.
+    const left = [250, 263, 276, 289, 302, 315, 328, 341, 354, 367]
+    const right = [256, 269, 282, 295, 308, 321, 334, 347, 360]
+    const rows = new Map([[1, [...lineRows(left, ...LCOL), ...lineRows(right, ...RCOL)]]])
+    const rects = new Map<string, PdfRect[]>([
+      ['L#1', [prect(1, 54, 250, 239, 128)]],
+      ['R#1', [prect(1, 319, 256, 239, 116)]]
+    ])
+    const { boxesById } = binContentToBlocks(rects, rows)
+    const l = boxesById.get('L#1')!
+    expect(l).toHaveLength(1)
+    expect(l[0]!.col).toBe('l')
+    // bottom reaches the LAST left row (367), not the right block's top (~256)
+    expect(boxBottom(l[0]!)).toBeCloseTo(367, 0)
+  })
+
+  it('emits a left box AND a right box for a paragraph that flows across the break', () => {
+    // Full two-column band: P (left top), F flows (left bottom + right top), Q
+    // (right bottom). F has rects in both columns.
+    const ys = [250, 263, 276, 289, 302, 315, 328, 341, 354, 367, 380]
+    const rows = new Map([[1, [...lineRows(ys, ...LCOL), ...lineRows(ys, ...RCOL)]]])
+    const rects = new Map<string, PdfRect[]>([
+      ['P#1', [prect(1, 54, 250, 239, 58)]], // left, top
+      ['F#1', [prect(1, 54, 320, 239, 60), prect(1, 319, 250, 239, 58)]], // flow: left-bottom + right-top
+      ['Q#1', [prect(1, 319, 320, 239, 60)]] // right, bottom
+    ])
+    const { boxesById } = binContentToBlocks(rects, rows)
+    const f = boxesById.get('F#1')!
+    expect(f).toHaveLength(2)
+    const byCol = new Map(f.map((b) => [b.col, b]))
+    expect([...byCol.keys()].sort()).toEqual(['l', 'r'])
+    expect(byCol.get('l')!.y).toBeGreaterThan(315) // left box is the lower (left-column bottom)
+    expect(byCol.get('r')!.y).toBeLessThan(315) // right box is the upper (right-column top)
+  })
+
+  it('emits one full-width box for a block that spans both columns (title / figure*)', () => {
+    // A full-width title+abstract band on top (enough lines that it isn't peeled
+    // as furniture), a two-column body below.
+    const title = [96, 109, 122, 135, 148]
+    const body = [250, 263, 276, 289, 302, 315]
+    const rows = new Map([
+      [1, [...lineRows(title, 54, 558), ...lineRows(body, ...LCOL), ...lineRows(body, ...RCOL)]]
+    ])
+    const rects = new Map<string, PdfRect[]>([
+      ['T#1', [prect(1, 54, 96, 504, 64)]], // full-width title+abstract
+      ['L#1', [prect(1, 54, 250, 239, 78)]],
+      ['R#1', [prect(1, 319, 250, 239, 78)]]
+    ])
+    const { boxesById } = binContentToBlocks(rects, rows)
+    const t = boxesById.get('T#1')!
+    expect(t).toHaveLength(1)
+    expect(t[0]!.col).toBe('full')
+    expect(t[0]!.x).toBeLessThan(293)
+    expect(t[0]!.x + t[0]!.width).toBeGreaterThan(319) // truly spans the gutter
+  })
+
+  it('tags every box full on a single-column page (zero regression)', () => {
+    const rows = new Map([[1, bodyRun(250, 380)]]) // full-width single column
+    const rects = new Map<string, PdfRect[]>([['p#1', [prect(1, 90, 250, 432, 130)]]])
+    const { boxesById, columnsByPage } = binContentToBlocks(rects, rows)
+    const b = boxesById.get('p#1')!
+    expect(b).toHaveLength(1)
+    expect(b[0]!.col).toBe('full')
+    expect(columnsByPage.get(1)!.bands.every((band) => band.kind === 'single')).toBe(true)
   })
 })
