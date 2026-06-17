@@ -17,7 +17,6 @@ import { WholeDocRail } from './WholeDocRail'
 import { FillerPage } from './FillerPage'
 import { PaperToolbar } from './PaperToolbar'
 import { binContentToBlocks, blockGeometryRects, cardAnchorTops, combinedSpanLabel, expandIds, isMathEnvName, isTightAbove, spanLabel, washBoxes } from './paperModel'
-import { isFloatEnv } from '../../../shared/blocks/container'
 import type { BlockMark, PageBlock } from './paperModel'
 import type { ColumnLayout } from './columnLayout'
 import { pageTextRows } from './pdfTextRows'
@@ -205,17 +204,7 @@ export function PaperPane(props: Props): JSX.Element {
       const { boxesById, contentTopByPage, columnsByPage: cols } = binContentToBlocks(
         new Map(perBlock.map(({ b, rects }) => [b.id, rects])),
         rowsByPage,
-        graphicsByPage,
-        // Per-block meta: isFloat marks a placement-displaced env (figure / table /
-        // thebibliography) whose box comes from its RENDER page, dropping the
-        // origin-page phantom. parentId/isSection carry tree shape (unused by the
-        // flat wall binner today).
-        new Map(
-          perBlock.map(
-            ({ b }) =>
-              [b.id, { parentId: b.parentId, isFloat: isFloatEnv(b.envName), isSection: b.kind === 'heading' }] as const
-          )
-        )
+        graphicsByPage
       )
       // One box per block from its rendered ink; a section's box is its heading
       // line, selection expands to its members via expandIds (selection layer).

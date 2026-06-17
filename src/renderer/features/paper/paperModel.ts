@@ -264,6 +264,15 @@ const FURNITURE_SHARE = 0.25
  *  sub-pt drift between a synctex rect's baseline (v) and the converted pdf.js
  *  text-row baseline (the bullet measured 719.86 vs 717.7 on the demo). */
 const BAND_EPS = 2
+/** A block with synctex regions on several (page, column) cells keeps a cell only
+ *  when the rendered ink it WON (in the tightest-containing assignment) is at least
+ *  this fraction of the block's richest cell. A galley/phantom cell (a `\begin`
+ *  mapped onto the in-flow text it sits beside, or a multi-line equation's scattered
+ *  spurious rects on a neighbour page) is looser than the real blocks it overlaps, so
+ *  the assignment routes its units to those tighter blocks and it wins ~nothing → it
+ *  drops; a block that genuinely spans pages wins distinctive ink on each cell, so
+ *  all are kept. */
+const INK_KEEP_FRAC = 0.2
 
 /** The document's body text-area vertical band `{top, bottom}` (PDF pt),
  *  inferred from the pdf.js text rows of EVERY page overlaid: the body is the
@@ -311,51 +320,41 @@ export interface BinnedContent {
   columnsByPage: Map<number, ColumnLayout>
 }
 
-/** Per-block structural metadata the binner needs to place boxes (a float's
- *  render page, a section's heading-line). A missing entry defaults to a
- *  top-level, non-float, non-section block — the flat one-region-per-block
- *  partition (back-compat). */
-export interface BlockMeta {
-  parentId: string | null
-  isFloat: boolean
-  isSection: boolean
-}
-
 /** Build every block's box from what it RENDERED (glyph rows + graphic bboxes).
- *  synctex only says WHERE a block starts (and on which page); the EXTENT comes
- *  from the rendered ink. Flat content model — every block is a leaf on the
- *  content axis, so there is no nesting forest: one reading-order WALL partition
- *  per (page × column).
+ *  synctex is only a COARSE LOCATOR: it says roughly WHERE a block's lines map,
+ *  but its rects are noisy at boundaries — galley origins (a `\begin` mapped onto
+ *  the in-flow text it sits beside), cross-page spill, and scattered/garbage rects
+ *  for multi-line math and tikz. The rendered ink is the source of truth for a
+ *  block's existence, render page, and extent. Flat content model — every block is
+ *  a leaf on the content axis. No per-kind gate (floats and in-flow blocks share
+ *  one rule); pure, inputs untouched.
  *
- *  1. ANCHOR: each block's synctex region top per (page, column), after dropping
- *     furniture (the content band) and, for a FLOAT, keeping only its render page
- *     — where the bulk of its ink lands — so the origin-page `\begin` phantom is
- *     ignored. This LOCATES a block; it never bounds it.
+ *  1. REGION: each block's synctex rects union into a region per (page, column),
+ *     after dropping furniture (the content band) and header/footer-margin strays.
+ *     Every rect is kept — no float galley-drop, no render-page pre-pick.
  *
- *  2. WALLS: within a (page, column) the anchors, sorted top→down, are the walls.
- *     A rendered unit (a text row's BASELINE — never the font-inflated yTop,
- *     BUG-41 — or a graphic's TOP) belongs to the block with the greatest anchor
- *     at/above it; ink above the topmost anchor (a plot that paints a hair above
- *     its synctex top) falls to that first block. No synctex EXTENT is trusted and
- *     there is no per-kind heuristic: a paragraph keeps its last wrapped line, an
- *     adjacent display equation takes only the formula below it (its interior-span
- *     anchor sits below the prose), and a float takes ALL the ink in its slot on
- *     its render page — graphic ∪ caption ∪ rules — as one box.
+ *  2. ASSIGN: each rendered unit (a text row's BASELINE — never the font-inflated
+ *     yTop, BUG-41 — or a graphic's TOP) goes to the region that most TIGHTLY (by
+ *     smallest span) contains it. A loose galley/equation region whose extent
+ *     reaches over a paragraph never out-tights that paragraph, and a graphic BELOW
+ *     a paragraph (outside its extent) falls only inside the float — so a figure
+ *     box covers graphic ∪ caption with no snap and no float exemption. A unit no
+ *     region contains joins the nearest region above whose ink is CONTIGUOUS
+ *     (within MAX_LINE_GAP of its growing box) — the wrapped lines synctex drops.
  *
- *  3. BOX: a block's box per cell = the union of its assigned units; a block that
- *     binds nothing yields no box. A page with anchors but no rendered ink falls
- *     back to the coarse synctex region so a box is never lost. The content band
- *     drops running head / folio / header-margin strays first (BUG-30, M2-6).
- *     Pure; inputs untouched. */
+ *  3. KEEP / BOX: a block with cells on several (page, col) keeps only those that
+ *     WON ≥ INK_KEEP_FRAC of its richest — a galley/phantom cell wins ~nothing (its
+ *     units go to the tighter real blocks it overlaps) and drops, replacing the old
+ *     float cleanRects/floatRenderPage; a block that genuinely spans pages keeps
+ *     every cell. A block's box per cell = the union of its won units; a page with
+ *     regions but no ink falls back to the coarse synctex region so a box is never
+ *     lost. The content band drops running head / folio / margin strays (BUG-30,
+ *     M2-6). */
 export function binContentToBlocks(
   rectsById: Map<string, PdfRect[]>,
   rowsByPage: Map<number, TextRow[]>,
-  graphicsByPage: Map<number, GraphicBox[]> = new Map(),
-  meta: Map<string, BlockMeta> = new Map()
+  graphicsByPage: Map<number, GraphicBox[]> = new Map()
 ): BinnedContent {
-  const metaOf = (id: string): BlockMeta =>
-    meta.get(id) ?? { parentId: null, isFloat: false, isSection: false }
-
   const band = contentBand(rowsByPage)
   const inBand = (yTop: number, yBottom: number): boolean =>
     !band || (yBottom >= band.top - BAND_EPS && yTop <= band.bottom + BAND_EPS)
@@ -366,64 +365,21 @@ export function binContentToBlocks(
   // Single-column pages tag everything 'full', collapsing to one box per page.
   const columnsByPage = columnLayoutByPage(rowsByPage)
 
-  // Galley-origin drop (floats only): a float's `\begin` line forward-maps onto the
-  // in-flow text it sits beside on the SAME page, so one of its synctex rects
-  // coincides with a paragraph/heading rect. That stray must not seed the float's
-  // box — else a figure placed under a paragraph eats that paragraph's last line.
-  // Drop a float rect that overlaps any non-float block's rect (same page, x ∧ y).
-  const nonFloatRectsByPage = new Map<number, PdfRect[]>()
+  // Region per (block, page, column): the union of the block's synctex rects there
+  // (degenerate + header/footer-margin strays dropped). synctex is only a COARSE
+  // LOCATOR — every rect is kept (no float galley-drop, no render-page pre-pick, no
+  // kind gate): a rendered unit is assigned to the region that most tightly contains
+  // it, so a galley/phantom region (a `\begin` mapped onto the in-flow text it sits
+  // beside, or a multi-line equation's spurious rects on a neighbour page) contains
+  // no distinctive ink, collects nothing, and yields no box — dissolving the
+  // float-only cleanRects / floatRenderPage machinery into one ink-grounded rule.
+  interface Region { id: string; page: number; col: PdfCol; top: number; bottom: number; xLeft: number; xRight: number }
+  const regionsByPage = new Map<number, Region[]>()
   for (const [id, rects] of rectsById) {
-    if (metaOf(id).isFloat) continue
+    const byCell = new Map<string, Region>()
     for (const r of rects) {
       if (r.width <= 0 || r.height <= 0) continue
-      const arr = nonFloatRectsByPage.get(r.page)
-      if (arr) arr.push(r)
-      else nonFloatRectsByPage.set(r.page, [r])
-    }
-  }
-  const cleanRects = (id: string, rects: PdfRect[]): PdfRect[] => {
-    if (!metaOf(id).isFloat) return rects
-    const kept = rects.filter((r) => {
-      for (const n of nonFloatRectsByPage.get(r.page) ?? []) if (boxesOverlap(r, n)) return false // already same-page
-      return true
-    })
-    // Drop the galley-origin rect (coincides with the in-flow text), but NEVER
-    // empty the float: if every rect collides with some block's synctex (a stray
-    // map onto the float's own region), keep them all — a box, even overlapping,
-    // beats none.
-    return kept.length ? kept : rects
-  }
-
-  // A FLOAT's render page = where the bulk of its synctex ink lands (the page
-  // LaTeX placed it on); its thin source-site rect on the `\begin` origin page is
-  // the minority and is dropped, so the box comes only from where the float really
-  // is. Non-floats render where their source is, so they keep every page.
-  const floatRenderPage = new Map<string, number>()
-  for (const [id, rects] of rectsById) {
-    if (!metaOf(id).isFloat) continue
-    const heightByPage = new Map<number, number>()
-    for (const r of cleanRects(id, rects)) {
-      if (r.width <= 0 || r.height <= 0) continue
-      heightByPage.set(r.page, (heightByPage.get(r.page) ?? 0) + r.height)
-    }
-    let best: number | undefined
-    let bestH = -1
-    for (const [p, h] of heightByPage) if (h > bestH) { bestH = h; best = p }
-    if (best !== undefined) floatRenderPage.set(id, best)
-  }
-
-  // Reading-order anchor per (block, page, column): the synctex region's top/extent
-  // there. A float anchors only on its render page. The extent is the fallback box
-  // when a page rendered no ink.
-  interface Anchor { id: string; page: number; col: PdfCol; top: number; bottom: number; xLeft: number; xRight: number }
-  const anchorsByPage = new Map<number, Anchor[]>()
-  for (const [id, rects] of rectsById) {
-    const renderPage = metaOf(id).isFloat ? floatRenderPage.get(id) ?? null : null
-    const byCell = new Map<string, Anchor>()
-    for (const r of cleanRects(id, rects)) {
-      if (r.width <= 0 || r.height <= 0) continue
       if (!inBand(r.y, r.y + r.height)) continue // header/footer-margin stray (BUG-30)
-      if (renderPage !== null && r.page !== renderPage) continue
       const layout = columnsByPage.get(r.page)
       const col = layout
         ? columnOf(layout, { yTop: r.y, yBottom: r.y + r.height, xLeft: r.x, xRight: r.x + r.width })
@@ -436,141 +392,124 @@ export function binContentToBlocks(
         cur.xLeft = Math.min(cur.xLeft, r.x); cur.xRight = Math.max(cur.xRight, r.x + r.width)
       }
     }
-    for (const a of byCell.values()) {
-      const arr = anchorsByPage.get(a.page)
-      if (arr) arr.push(a)
-      else anchorsByPage.set(a.page, [a])
+    for (const rg of byCell.values()) {
+      const arr = regionsByPage.get(rg.page)
+      if (arr) arr.push(rg)
+      else regionsByPage.set(rg.page, [rg])
     }
   }
 
-  // Accumulate each block's box per (page × column) from the units the walls give
-  // it.
+  // Assign every rendered unit to the region that most TIGHTLY contains it (the
+  // block whose synctex extent ends soonest after the unit) — else, for a unit no
+  // region contains, the nearest region above whose ink is CONTIGUOUS (within
+  // MAX_LINE_GAP of its growing box), the wrapped lines synctex drops. One rule,
+  // both directions: a loose float/equation region (its `\begin` galley or a tall
+  // `v−H` top reaching up over a paragraph) never steals a row a tighter paragraph
+  // encloses; a graphic BELOW a paragraph (outside its extent) falls only inside the
+  // float. `won` records the ink each region is assigned — used to drop phantom
+  // cells. Pure over `active`; runs twice (provisional → filter → final).
   interface Acc { page: number; col: PdfCol; x: number; y: number; right: number; bottom: number }
-  const boxAcc = new Map<string, Map<string, Acc>>()
-  const addUnit = (id: string, page: number, col: PdfCol, xLeft: number, yTop: number, xRight: number, yBottom: number): void => {
-    let m = boxAcc.get(id)
-    if (!m) { m = new Map(); boxAcc.set(id, m) }
-    const key = `${page}|${col}`
-    const cur = m.get(key)
-    if (!cur) m.set(key, { page, col, x: xLeft, y: yTop, right: xRight, bottom: yBottom })
-    else {
-      cur.x = Math.min(cur.x, xLeft); cur.y = Math.min(cur.y, yTop)
-      cur.right = Math.max(cur.right, xRight); cur.bottom = Math.max(cur.bottom, yBottom)
+  const assign = (active: Map<number, Region[]>): { boxAcc: Map<string, Map<string, Acc>>; won: Map<Region, number> } => {
+    const boxAcc = new Map<string, Map<string, Acc>>()
+    const won = new Map<Region, number>()
+    const addUnit = (rg: Region, page: number, xLeft: number, yTop: number, xRight: number, yBottom: number): void => {
+      won.set(rg, (won.get(rg) ?? 0) + Math.max(1, yBottom - yTop))
+      let m = boxAcc.get(rg.id)
+      if (!m) { m = new Map(); boxAcc.set(rg.id, m) }
+      const key = `${page}|${rg.col}`
+      const cur = m.get(key)
+      if (!cur) m.set(key, { page, col: rg.col, x: xLeft, y: yTop, right: xRight, bottom: yBottom })
+      else {
+        cur.x = Math.min(cur.x, xLeft); cur.y = Math.min(cur.y, yTop)
+        cur.right = Math.max(cur.right, xRight); cur.bottom = Math.max(cur.bottom, yBottom)
+      }
     }
+    for (const [page, regions] of active) {
+      const layout = columnsByPage.get(page)
+      const rows = (rowsByPage.get(page) ?? []).filter((r) => inBand(r.baseline, r.baseline))
+      const graphics = graphicsByPage.get(page) ?? []
+
+      // A page with regions but no rendered ink → the coarse synctex region IS the
+      // box, so a box is never lost (e.g. a page whose text layer failed to extract).
+      if (!rows.length && !graphics.length) {
+        for (const rg of regions) addUnit(rg, page, rg.xLeft, rg.top, rg.xRight, rg.bottom)
+        continue
+      }
+
+      const colOf = (u: { yTop: number; yBottom: number; xLeft: number; xRight: number }): PdfCol =>
+        layout ? columnOf(layout, u) : 'full'
+      // A region is a candidate for a unit when they share a column (or either is
+      // 'full') and overlap in x — so a region never claims ink in another column.
+      const candidate = (rg: Region, col: PdfCol, xLeft: number, xRight: number): boolean =>
+        (rg.col === col || rg.col === 'full' || col === 'full') && xRight > rg.xLeft && xLeft < rg.xRight
+      const runningBottom = (rg: Region): number =>
+        boxAcc.get(rg.id)?.get(`${page}|${rg.col}`)?.bottom ?? -Infinity
+      const span = (rg: Region): number => rg.bottom - rg.top
+      const ownerOf = (key: number, col: PdfCol, xLeft: number, xRight: number): Region | null => {
+        let inside: Region | null = null
+        for (const rg of regions) {
+          if (!candidate(rg, col, xLeft, xRight)) continue
+          if (key < rg.top - BAND_EPS || key > rg.bottom + BAND_EPS) continue
+          // Tightest = smallest SPAN (not lowest bottom edge): a sprawling galley
+          // region whose bottom happens to sit a hair inside a real block must not
+          // out-tight it — the real block's extent is far shorter. Tie → lower
+          // bottom, then higher top, then id (deterministic).
+          if (!inside || span(rg) < span(inside) ||
+              (span(rg) === span(inside) && (rg.bottom < inside.bottom ||
+                (rg.bottom === inside.bottom && (rg.top > inside.top || (rg.top === inside.top && rg.id < inside.id)))))) inside = rg
+        }
+        if (inside) return inside
+        let above: Region | null = null
+        for (const rg of regions) {
+          if (!candidate(rg, col, xLeft, xRight)) continue
+          const frontier = Math.max(rg.bottom, runningBottom(rg))
+          if (frontier > key + BAND_EPS || key - frontier > MAX_LINE_GAP) continue
+          if (!above || frontier > Math.max(above.bottom, runningBottom(above)) ||
+              (rg.bottom === above.bottom && rg.id < above.id)) above = rg
+        }
+        return above
+      }
+      // Sweep units in key (baseline / graphic-top) order so the contiguity frontier
+      // grows as ink is added.
+      const units = [
+        ...rows.map((r) => ({ key: r.baseline, xLeft: r.xLeft, yTop: r.yTop, xRight: r.xRight, yBottom: r.yBottom })),
+        ...graphics.map((g) => ({ key: g.yTop, xLeft: g.xLeft, yTop: g.yTop, xRight: g.xRight, yBottom: g.yBottom }))
+      ].sort((a, b) => a.key - b.key)
+      for (const u of units) {
+        const o = ownerOf(u.key, colOf(u), u.xLeft, u.xRight)
+        if (o) addUnit(o, page, u.xLeft, u.yTop, u.xRight, u.yBottom)
+      }
+    }
+    return { boxAcc, won }
   }
 
-  for (const [page, anchors] of anchorsByPage) {
-    const layout = columnsByPage.get(page)
-    const rows = (rowsByPage.get(page) ?? []).filter((r) => inBand(r.baseline, r.baseline))
-    const graphics = graphicsByPage.get(page) ?? []
-
-    // A page with anchors but no rendered ink → the coarse synctex region IS the
-    // box, so a box is never lost (e.g. a page whose text layer failed to extract).
-    if (!rows.length && !graphics.length) {
-      for (const a of anchors) addUnit(a.id, page, a.col, a.xLeft, a.top, a.xRight, a.bottom)
-      continue
-    }
-
-    // Walls = anchors per column, sorted top→down. Build the columns once, snap
-    // each wall DOWN to its block's first rendered ink, then re-sort.
-    //
-    // Snap rationale: a block whose synctex region top reaches a line above its
-    // glyphs — a tall display equation's `v−H` — would otherwise pull its wall up
-    // over the previous block's last line (M2-9; one rule for every block, no math
-    // gating). The wall is keyed on the BASELINE, not yTop: rows partition by
-    // baseline, and a tall math glyph's yTop sits a line ABOVE its baseline, so a
-    // yTop wall would still swallow the prose baseline beside it. The snap is
-    // BOUNDED by the next wall in the column — the ink it accepts must sit above the
-    // successor's anchor — so a loose region can never snap PAST its successor and
-    // invert reading order (which would let the later block steal this block's first
-    // line). wallCmp (top, then xLeft, then id) makes wall order deterministic, not
-    // a sort-stability/input-order accident.
-    const wallCmp = (a: Anchor, b: Anchor): number =>
-      a.top - b.top || a.xLeft - b.xLeft || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
-    const wallsByCol = new Map<PdfCol, Anchor[]>()
-    for (const a of anchors) {
-      const arr = wallsByCol.get(a.col)
-      if (arr) arr.push(a)
-      else wallsByCol.set(a.col, [a])
-    }
-    for (const arr of wallsByCol.values()) {
-      arr.sort(wallCmp)
-      for (let i = 0; i < arr.length; i++) {
-        const a = arr[i]!
-        // The next wall STRICTLY below (skip equal-top siblings — they share this
-        // position, so they don't bound this block's ink, and using their equal top
-        // as the ceiling would exclude every row and zero out the snap).
-        let ceil = Infinity
-        for (let j = i + 1; j < arr.length; j++) if (arr[j]!.top > a.top) { ceil = arr[j]!.top; break }
-        let inkKey = Infinity
-        for (const r of rows) {
-          if (r.baseline < a.top - BAND_EPS || r.baseline > a.bottom + BAND_EPS || r.baseline >= ceil) continue
-          if (r.xRight <= a.xLeft || r.xLeft >= a.xRight) continue
-          inkKey = Math.min(inkKey, r.baseline)
-        }
-        for (const g of graphics) {
-          if (g.yTop < a.top - BAND_EPS || g.yTop > a.bottom + BAND_EPS || g.yTop >= ceil) continue
-          if (g.xRight <= a.xLeft || g.xLeft >= a.xRight) continue
-          inkKey = Math.min(inkKey, g.yTop)
-        }
-        if (inkKey !== Infinity) a.top = inkKey
-      }
-      arr.sort(wallCmp) // snap moved tops down — re-sort so the walls stay ordered
-    }
-
-    const colOf = (u: { yTop: number; yBottom: number; xLeft: number; xRight: number }): PdfCol =>
-      layout ? columnOf(layout, u) : 'full'
-    // The wall whose anchor (post-snap, at the block's first ink) is the greatest
-    // at/above `key`. On a TIE (two blocks whose first ink shares a baseline) the
-    // earlier wall by wallCmp wins — it keeps its own first line rather than ceding
-    // it to its successor (strict `>`, so the first of an equal-top run is kept).
-    // Ink above EVERY anchor is a header stray the band missed — it binds to
-    // nothing.
-    const greatest = (arr: Anchor[] | undefined, key: number): Anchor | null => {
-      if (!arr) return null
-      let hit: Anchor | null = null
-      for (const a of arr) {
-        if (a.top > key) break
-        if (!hit || a.top > hit.top) hit = a
-      }
-      return hit
-    }
-    // A unit tagged l/r with no own-column wall falls back to the full walls; a
-    // gutter-spanning 'full' unit with no full wall falls back to the nearer l/r
-    // wall — so a wide row on a two-column page is never silently dropped for want
-    // of a full-width anchor.
-    const owner = (key: number, col: PdfCol): Anchor | null => {
-      if (col !== 'full') return greatest(wallsByCol.get(col), key) ?? greatest(wallsByCol.get('full'), key)
-      const full = greatest(wallsByCol.get('full'), key)
-      if (full) return full
-      const l = greatest(wallsByCol.get('l'), key)
-      const r = greatest(wallsByCol.get('r'), key)
-      if (!l || !r) return l ?? r
-      return l.top >= r.top ? l : r
-    }
-    // An IN-FLOW block binds its synctex-region ink AND any run CONTIGUOUS below it
-    // — each unit within MAX_LINE_GAP of the box's current bottom — so it keeps ALL
-    // the wrapped lines synctex drops (one or many), yet stops at a margin-sized
-    // gap: content the map never anchored (an auto "References" heading, a stray
-    // past a \bigskip) is the next block's, not this tail. FLOATS are exempt — a
-    // caption sits well below the graphic, and a float is already bounded to its
-    // render page. Units are swept in key order so the box bottom (the frontier)
-    // grows as ink is added.
-    const accepts = (o: Anchor, key: number): boolean => {
-      if (metaOf(o.id).isFloat) return true
-      const cur = boxAcc.get(o.id)?.get(`${page}|${o.col}`)
-      const bottom = cur ? Math.max(cur.bottom, o.bottom) : o.bottom
-      return key <= bottom + MAX_LINE_GAP
-    }
-    const units = [
-      ...rows.map((r) => ({ key: r.baseline, xLeft: r.xLeft, yTop: r.yTop, xRight: r.xRight, yBottom: r.yBottom })),
-      ...graphics.map((g) => ({ key: g.yTop, xLeft: g.xLeft, yTop: g.yTop, xRight: g.xRight, yBottom: g.yBottom }))
-    ].sort((a, b) => a.key - b.key)
-    for (const u of units) {
-      const o = owner(u.key, colOf(u))
-      if (o && accepts(o, u.key)) addUnit(o.id, page, o.col, u.xLeft, u.yTop, u.xRight, u.yBottom)
-    }
+  // Pass 1: provisional assignment over ALL regions → the ink each cell WON. A block
+  // with cells on several (page, col) keeps only those that won ≥ INK_KEEP_FRAC of
+  // its richest: a galley/phantom cell is looser than the real blocks it overlaps, so
+  // the tightest-containing pass routes its units to those tighter blocks and it wins
+  // ~nothing → it drops; a block that genuinely spans pages wins distinctive ink on
+  // each page → all kept. This dissolves the float-only cleanRects + floatRenderPage.
+  const { won } = assign(regionsByPage)
+  const regionsByBlock = new Map<string, Region[]>()
+  for (const arr of regionsByPage.values()) for (const rg of arr) {
+    const b = regionsByBlock.get(rg.id)
+    if (b) b.push(rg)
+    else regionsByBlock.set(rg.id, [rg])
   }
+  const phantom = new Set<Region>()
+  for (const rgs of regionsByBlock.values()) {
+    if (rgs.length <= 1) continue
+    const max = Math.max(...rgs.map((r) => won.get(r) ?? 0))
+    if (max <= 0) continue // won nothing anywhere → keep all (a box beats none)
+    for (const r of rgs) if ((won.get(r) ?? 0) < INK_KEEP_FRAC * max) phantom.add(r)
+  }
+  const activeRegions = new Map<number, Region[]>()
+  for (const [page, arr] of regionsByPage) {
+    const k = arr.filter((rg) => !phantom.has(rg))
+    if (k.length) activeRegions.set(page, k)
+  }
+  // Pass 2: final assignment over the surviving (non-phantom) regions.
+  const { boxAcc } = assign(activeRegions)
 
   const boxesById = new Map<string, PdfRect[]>()
   for (const [id, cells] of boxAcc) {

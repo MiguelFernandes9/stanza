@@ -21,7 +21,7 @@ import {
   taskSpans,
   washBoxes
 } from './paperModel'
-import type { BlockMeta, PageBlock } from './paperModel'
+import type { PageBlock } from './paperModel'
 import type { TextRow } from './pdfTextRows'
 import type { GraphicBox } from './pdfGraphics'
 
@@ -622,13 +622,9 @@ describe('binContentToBlocks — flat model: absorbed math, floats, section head
     const graphics = new Map<number, GraphicBox[]>([
       [2, [{ yTop: 79, yBottom: 204, xLeft: 159, xRight: 489 }]] // the native vector plot on p2
     ])
-    const meta = new Map<string, BlockMeta>([
-      ['fig#1', { parentId: null, isFloat: true, isSection: false }],
-      ['para#1', { parentId: null, isFloat: false, isSection: false }]
-    ])
-    const { boxesById } = binContentToBlocks(rects, rowsByPage, graphics, meta)
+    const { boxesById } = binContentToBlocks(rects, rowsByPage, graphics)
     const figBoxes = boxesById.get('fig#1')!
-    expect(figBoxes).toHaveLength(1) // no phantom page-1 box
+    expect(figBoxes).toHaveLength(1) // page-1 galley cell wins ~nothing vs the p2 render → dropped
     expect(figBoxes[0]!.page).toBe(2)
     expect(figBoxes[0]!.y).toBeCloseTo(79, 0) // plot top (the graphic)
     expect(boxBottom(figBoxes[0]!)).toBeCloseTo(254, 0) // caption bottom — plot ∪ caption, one box
@@ -649,11 +645,7 @@ describe('binContentToBlocks — flat model: absorbed math, floats, section head
       trow(120, 131, 90, 522), // prose
       trow(133, 144, 90, 522) // prose
     ]
-    const meta = new Map<string, BlockMeta>([
-      ['sec#1', { parentId: null, isFloat: false, isSection: true }],
-      ['par#1', { parentId: 'sec#1', isFloat: false, isSection: false }]
-    ])
-    const { boxesById } = binContentToBlocks(rects, new Map([[1, rows]]), new Map(), meta)
+    const { boxesById } = binContentToBlocks(rects, new Map([[1, rows]]))
     const sec = boxesById.get('sec#1')![0]!
     expect(boxBottom(sec)).toBeCloseTo(110, 1) // heading row only — NOT down to the prose at 144
     expect(boxBottom(boxesById.get('par#1')![0]!)).toBeCloseTo(144, 1)

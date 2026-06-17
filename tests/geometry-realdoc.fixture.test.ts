@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { binContentToBlocks } from '../src/renderer/features/paper/paperModel'
-import type { BlockMeta } from '../src/renderer/features/paper/paperModel'
 import type { PdfRect } from '../src/shared/ipc'
 import type { TextRow } from '../src/renderer/features/paper/pdfTextRows'
 import type { GraphicBox } from '../src/renderer/features/paper/pdfGraphics'
@@ -22,11 +21,10 @@ interface Fx { constructs: Record<string, string>; blocks: FxBlock[]; rowsByPage
 const fx: Fx = JSON.parse(readFileSync(fileURLToPath(new URL('./__fixtures__/geometry-realdoc.json', import.meta.url)), 'utf8'))
 
 const rectsById = new Map(fx.blocks.map((b) => [b.id, b.rects] as const))
-const meta = new Map<string, BlockMeta>(fx.blocks.map((b) => [b.id, { parentId: b.parentId, isFloat: b.isFloat, isSection: b.isSection }] as const))
 const rowsByPage = new Map(Object.entries(fx.rowsByPage).map(([p, r]) => [Number(p), r] as const))
 const graphicsByPage = new Map(Object.entries(fx.graphicsByPage).map(([p, g]) => [Number(p), g] as const))
 
-const { boxesById } = binContentToBlocks(rectsById, rowsByPage, graphicsByPage, meta)
+const { boxesById } = binContentToBlocks(rectsById, rowsByPage, graphicsByPage)
 const box = (key: string): PdfRect[] => boxesById.get(fx.constructs[key]!) ?? []
 const one = (key: string): PdfRect => {
   const bs = box(key)
@@ -163,15 +161,20 @@ describe('real-doc block geometry (flat model + rendered-ink walls)', () => {
   })
 
   it('A: a tikz-matrix figure box covers the whole diagram', () => {
-    // fig:cd (commutative diagram) box was h78 — only part of the matrix.
+    // fig:cd (commutative diagram) box was h78 — only part of the matrix. The real
+    // matrix ink + caption spans ~y317–417 (h100); the box must cover it.
     const f = one('figCd')
-    expect(f.height).toBeGreaterThan(110)
+    expect(f.height).toBeGreaterThan(90)
   })
 
-  it('B: a multi-line align with \\intertext is ONE box, no phantom on the neighbour page', () => {
-    // align rendered on its real page but ALSO produced a phantom box on the prior
-    // page (galley + spurious synctex rects). The phantom must drop (no distinctive ink).
-    expect(box('alignIntertext')).toHaveLength(1)
+  it('B: a multi-line align with \\intertext spans the page break cleanly — no phantom', () => {
+    // The align renders eq:exp1-2 at the bottom of one page and \intertext + eq:exp3-4
+    // at the top of the next — a genuine 2-page span (2 boxes). The bug was a THIRD,
+    // phantom box at the TOP of the first page (spurious synctex rects at the table's
+    // x); ink-grounding drops it, leaving the two real equation boxes.
+    const a = box('alignIntertext').slice().sort((x, y) => x.page - y.page)
+    expect(a).toHaveLength(2)
+    expect(a[0]!.y).toBeGreaterThan(400) // eq:exp1-2 at the page BOTTOM, not the old phantom at y73
   })
 
   it('B: a gather is ONE box and the paragraph before it is not starved', () => {
