@@ -84,6 +84,54 @@ describe('computeBlockChanges', () => {
     expect(added!.beforeText).toBe('')
   })
 
+  test('a nested change splits into non-overlapping cards (parent excludes the child)', async () => {
+    const lines = (eq: string, defArg: string): string =>
+      [
+        '\\documentclass{article}',
+        '\\begin{document}',
+        `\\begin{definition}[${defArg}]`,
+        'A function $f$ obeys',
+        '\\begin{equation}',
+        eq,
+        '\\end{equation}',
+        '\\end{definition}',
+        '\\end{document}',
+        '',
+      ].join('\n')
+    const before = lines('\\| f(x) - f(y) \\| \\leq L \\| x-y \\|', 'Lipschitz')
+    const after = lines('\\| f(x) - f(y) \\| \\leq L \\| x-y \\| + \\varepsilon', 'Lipschitz continuity')
+    // both the definition's own line (3) and the equation's line (6) changed
+    const diff =
+      fileHeader('main.tex') +
+      '@@ -3 +3 @@\n-\\begin{definition}[Lipschitz]\n+\\begin{definition}[Lipschitz continuity]\n' +
+      '@@ -6 +6 @@\n-\\| f(x) - f(y) \\| \\leq L \\| x-y \\|\n+\\| f(x) - f(y) \\| \\leq L \\| x-y \\| + \\varepsilon\n'
+
+    const changes = await computeBlockChanges(diff, 'HEAD', 'branch', show({ HEAD: { 'main.tex': before }, branch: { 'main.tex': after } }))
+
+    const eq = changes.find((c) => c.name === 'equation')
+    expect(eq?.status).toBe('modified')
+    expect(eq!.afterText).toContain('varepsilon')
+
+    const def = changes.find((c) => c.name === 'definition')
+    expect(def?.status).toBe('modified')
+    expect(def!.afterText).toContain('Lipschitz continuity') // its own change is shown
+    expect(def!.afterText).not.toContain('\\leq') // the nested equation body is NOT re-shown
+    expect(def!.afterText).toContain('shown in its own card') // sentinel marks the elided child
+  })
+
+  test('a change touching only the nested block yields no parent card', async () => {
+    const lines = (eq: string): string =>
+      ['\\documentclass{article}', '\\begin{document}', '\\begin{definition}[Bound]', '\\begin{equation}', eq, '\\end{equation}', '\\end{definition}', '\\end{document}', ''].join('\n')
+    const before = lines('\\| f(x) \\| \\leq M')
+    const after = lines('\\| f(x) \\| \\leq 2M')
+    const diff = fileHeader('main.tex') + '@@ -5 +5 @@\n-\\| f(x) \\| \\leq M\n+\\| f(x) \\| \\leq 2M\n'
+
+    const changes = await computeBlockChanges(diff, 'HEAD', 'branch', show({ HEAD: { 'main.tex': before }, branch: { 'main.tex': after } }))
+
+    expect(changes.find((c) => c.name === 'equation')).toBeDefined()
+    expect(changes.find((c) => c.name === 'definition')).toBeUndefined()
+  })
+
   test('drops a block whose source is unchanged on both sides', async () => {
     const same = '\\documentclass{article}\n\\begin{document}\n\\section{Intro}\nStable.\n\\end{document}\n'
     // A hunk that maps onto a block but leaves its text identical → no change.

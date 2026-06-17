@@ -235,10 +235,7 @@ export function registerIpcHandlers(): void {
     const rev = req.side === 'before' ? 'HEAD' : `stanza/op-${req.opId}`
     try {
       const mainText = await doc.git.show(rev, doc.info.mainFile)
-      const fileText =
-        req.span.file === doc.info.mainFile ? mainText : await doc.git.show(rev, req.span.file)
-      const block = lineSlice(fileText, req.span.startLine, req.span.endLine)
-      const result = await doc.snippets.render(splitPreamble(mainText), block)
+      const result = await doc.snippets.render(splitPreamble(mainText), req.text)
       return 'pdf' in result ? { pdf: result.pdf.toString('base64') } : { error: result.error }
     } catch (err) {
       return { error: String(err) }
@@ -592,11 +589,6 @@ function atomicWrite(absPath: string, content: string): void {
   const tempPath = `${absPath}.stanza-tmp`
   writeFileSync(tempPath, content)
   renameSync(tempPath, absPath)
-}
-
-/** 1-based inclusive line range from file text (block span → its source). */
-function lineSlice(text: string, startLine: number, endLine: number): string {
-  return text.split('\n').slice(startLine - 1, endLine).join('\n')
 }
 
 const FILE_KINDS: [RegExp, FileEntry['kind']][] = [

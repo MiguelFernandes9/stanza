@@ -1,5 +1,4 @@
 import type { BlockChange } from '../blocks/changes'
-import type { BlockSpan } from './claude'
 import type { DocumentInfo } from './document'
 
 export interface ReviewProposal {
@@ -12,12 +11,13 @@ export interface ReviewProposal {
   blocks: BlockChange[]  // per-block changes for the review cards (Source = diff)
 }
 /** review:renderBlock — typeset one changed block in isolation for the preview.
- *  `side` selects the revision (before = HEAD, after = op branch) and which
- *  span to render. */
+ *  `side` selects the revision for the preamble (before = HEAD, after = op
+ *  branch); `text` is the block's own source (already clipped of nested cards by
+ *  computeBlockChanges) so the render shows exactly what the card shows. */
 export interface RenderBlockRequest {
   opId: string
   side: 'before' | 'after'
-  span: BlockSpan
+  text: string
 }
 /** Page-1 PDF of the isolated block as base64, or a short compile error. */
 export type RenderBlockResult = { pdf: string } | { error: string }

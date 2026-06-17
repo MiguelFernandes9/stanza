@@ -46,12 +46,12 @@ export function ReviewOverlay({ proposal, note, blockTag, renderBlock, onClose, 
   const makeRender =
     (change: BlockChange) =>
     async (side: 'before' | 'after'): Promise<RenderOutcome> => {
-      const span = side === 'before' ? change.beforeSpan : change.afterSpan
-      if (!span) return { error: 'No content on this side.' }
-      const key = `${side}:${span.file}:${span.startLine}-${span.endLine}`
+      const text = side === 'before' ? change.beforeText : change.afterText
+      if (!text) return { error: 'No content on this side.' }
+      const key = `${side}:${text}`
       const hit = cache.current.get(key)
       if (hit) return hit
-      const res = await renderBlock({ opId: proposal.opId, side, span })
+      const res = await renderBlock({ opId: proposal.opId, side, text })
       let out: RenderOutcome
       if ('error' in res) {
         out = { error: res.error }
