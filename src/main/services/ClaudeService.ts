@@ -5,7 +5,12 @@ import type { ProcessRunner, ProcResult } from '../infra/ProcessRunner'
 import type { Store } from '../infra/Store'
 import { opPrompt, primePrompt } from './prompts'
 
-const DEFAULT_TIMEOUT_MS = 120_000
+// A Claude op is an agentic CLI run — extended thinking plus many tool
+// calls and recompiles — so it can legitimately run for many minutes. This
+// cap is only a backstop to reap a genuinely hung process; the user can end
+// a slow-but-live op themselves via the abort signal (op:cancel). Keep it
+// generous so a real op is never cut short, but finite so a deadlock frees.
+const DEFAULT_TIMEOUT_MS = 1_800_000 // 30 min
 
 /** One Claude Code CLI session per document: primed on first op,
  *  resumed for every op after (also across app restarts via Store).
