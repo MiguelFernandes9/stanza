@@ -43,12 +43,14 @@ const MIN_SIDE = 2
 /** Half-line slack (pt) for matching an item's y to a band — an item sitting
  *  between two baselines still lands in the right band. */
 const BAND_SLACK = 7
-/** Two-column is a PAGE property: a genuine two-column page has its two-column
- *  bands covering a majority of its rows. A lone band can look two-column on an
+/** Two-column is a PAGE property: a genuine two-column body is TALL — its
+ *  two-column bands cover most of the page's text height. A local x-cluster on an
  *  otherwise single-column page — a numbered display equation (formula left,
- *  number right), a table's own columns, a plot's tick labels — so demote the
- *  two-column verdict unless this fraction of the page's rows lives in two-column
- *  bands. Without this, those local x-clusters split single-column block boxes. */
+ *  number right), a multi-line aligned equation, a table's own columns, a plot's
+ *  tick labels — is SHORT relative to the page, so demote the two-column verdict
+ *  unless two-column bands cover this fraction of the page's text height. (Height,
+ *  not row count: a dense equation can have many rows yet occupy little height.)
+ *  Without this, those clusters split single-column block boxes. */
 const TWO_COL_PAGE_FRAC = 0.5
 
 /** Cluster rows into vertical bands by baseline gap (reuses the MAX_LINE_GAP
@@ -63,11 +65,13 @@ export function pageColumnLayout(rows: TextRow[]): ColumnLayout {
     groups[groups.length - 1]!.push(sorted[i]!)
   }
   const bands = groups.map(detectBand)
-  // Page-level gate: keep two-column bands only when they dominate the page;
-  // otherwise a single isolated cluster (equation+number, table cells, plot ticks)
-  // would falsely split an otherwise single-column page's boxes.
-  const twoRows = groups.reduce((n, g, i) => n + (bands[i]!.kind === 'two' ? g.length : 0), 0)
-  if (twoRows < TWO_COL_PAGE_FRAC * rows.length)
+  // Page-level gate: keep two-column bands only when they cover most of the page's
+  // text HEIGHT; otherwise an isolated cluster (equation+number, a multi-line
+  // aligned equation, table cells, plot ticks) would falsely split an otherwise
+  // single-column page's boxes.
+  const twoHeight = bands.reduce((h, b) => h + (b.kind === 'two' ? b.bottom - b.top : 0), 0)
+  const textHeight = bands[bands.length - 1]!.bottom - bands[0]!.top
+  if (textHeight > 0 && twoHeight < TWO_COL_PAGE_FRAC * textHeight)
     return { bands: bands.map((b) => (b.kind === 'two' ? { top: b.top, bottom: b.bottom, kind: 'single' as const } : b)) }
   return { bands }
 }

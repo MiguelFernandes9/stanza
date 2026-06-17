@@ -64,4 +64,43 @@ describe('real-doc block geometry (flat model + rendered-ink walls)', () => {
     const f = one('figure')
     expect(f.height).toBeGreaterThan(100) // covers the vector plot (was: no box)
   })
+
+  // Live-found edge cases (second dogfood pass), addressed by the float galley-drop
+  // and the height-based two-column page gate. Located by source line.
+  const at = (fileSuffix: string, startLine: number): PdfRect[] => {
+    const b = fx.blocks.find((x) => x.file.endsWith(fileSuffix) && x.startLine === startLine)
+    expect(b, `block ${fileSuffix}:${startLine} in fixture`).toBeTruthy()
+    return boxesById.get(b!.id) ?? []
+  }
+  const overlap = (a: PdfRect, b: PdfRect): boolean =>
+    a.page === b.page && a.y < b.y + b.height && b.y < a.y + a.height
+
+  it('a table float does not swallow the heading rendered below it', () => {
+    // tab:ablation (tables.tex:41) is placed [h] just above \subsection{Inline
+    // Reasoning} (:59). The table box must stop at its tabular, leaving the heading
+    // its own box — before the fix the float ran down over the heading + prose.
+    const table = at('tables.tex', 41)
+    const heading = at('tables.tex', 59)
+    expect(table).toHaveLength(1)
+    expect(heading).toHaveLength(1) // had NO box before (swallowed)
+    expect(overlap(table[0]!, heading[0]!)).toBe(false)
+  })
+
+  it('a figure float does not eat the previous paragraph last line (galley-drop)', () => {
+    // fig:flow (diagrams.tex:14) sits under a paragraph (:10); its \begin galley
+    // rect coincided with that paragraph's last line and the float ate it.
+    const figure = at('diagrams.tex', 14)
+    const para = at('diagrams.tex', 10)
+    expect(figure).toHaveLength(1)
+    expect(para).toHaveLength(1)
+    expect(overlap(figure[0]!, para[0]!)).toBe(false)
+  })
+
+  it('a multi-line display equation is ONE box, not split by a false two-column gate', () => {
+    // discussion.tex:21 is a big aligned equation whose formula/number x-clusters
+    // looked two-column; it split into 3 full-height boxes covering the page.
+    const eqn = at('discussion.tex', 21)
+    expect(eqn).toHaveLength(1)
+    expect(eqn[0]!.height).toBeLessThan(120) // the formula, not the whole column
+  })
 })

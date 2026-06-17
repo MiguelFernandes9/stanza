@@ -362,6 +362,30 @@ export function binContentToBlocks(
   // Single-column pages tag everything 'full', collapsing to one box per page.
   const columnsByPage = columnLayoutByPage(rowsByPage)
 
+  // Galley-origin drop (floats only): a float's `\begin` line forward-maps onto the
+  // in-flow text it sits beside on the SAME page, so one of its synctex rects
+  // coincides with a paragraph/heading rect. That stray must not seed the float's
+  // box — else a figure placed under a paragraph eats that paragraph's last line.
+  // Drop a float rect that overlaps any non-float block's rect (same page, x ∧ y).
+  const nonFloatRectsByPage = new Map<number, PdfRect[]>()
+  for (const [id, rects] of rectsById) {
+    if (metaOf(id).isFloat) continue
+    for (const r of rects) {
+      if (r.width <= 0 || r.height <= 0) continue
+      const arr = nonFloatRectsByPage.get(r.page)
+      if (arr) arr.push(r)
+      else nonFloatRectsByPage.set(r.page, [r])
+    }
+  }
+  const cleanRects = (id: string, rects: PdfRect[]): PdfRect[] => {
+    if (!metaOf(id).isFloat) return rects
+    return rects.filter((r) => {
+      for (const n of nonFloatRectsByPage.get(r.page) ?? [])
+        if (r.x < n.x + n.width && n.x < r.x + r.width && r.y < n.y + n.height && n.y < r.y + r.height) return false
+      return true
+    })
+  }
+
   // A FLOAT's render page = where the bulk of its synctex ink lands (the page
   // LaTeX placed it on); its thin source-site rect on the `\begin` origin page is
   // the minority and is dropped, so the box comes only from where the float really
@@ -370,7 +394,7 @@ export function binContentToBlocks(
   for (const [id, rects] of rectsById) {
     if (!metaOf(id).isFloat) continue
     const heightByPage = new Map<number, number>()
-    for (const r of rects) {
+    for (const r of cleanRects(id, rects)) {
       if (r.width <= 0 || r.height <= 0) continue
       heightByPage.set(r.page, (heightByPage.get(r.page) ?? 0) + r.height)
     }
@@ -388,7 +412,7 @@ export function binContentToBlocks(
   for (const [id, rects] of rectsById) {
     const renderPage = metaOf(id).isFloat ? floatRenderPage.get(id) ?? null : null
     const byCell = new Map<string, Anchor>()
-    for (const r of rects) {
+    for (const r of cleanRects(id, rects)) {
       if (r.width <= 0 || r.height <= 0) continue
       if (!inBand(r.y, r.y + r.height)) continue // header/footer-margin stray (BUG-30)
       if (renderPage !== null && r.page !== renderPage) continue
