@@ -370,6 +370,12 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
         setChatOpen((v) => !v)
         return
       }
+      // Cmd/Ctrl+B → flip the preview between Read and Select-blocks mode.
+      if (key === 'b') {
+        e.preventDefault()
+        dispatch({ type: 'toggle-view' })
+        return
+      }
 
       // Tab navigation — only when the editor pane is open. Sets the active tab
       // through the live ref; no-op when there's no matching tab.

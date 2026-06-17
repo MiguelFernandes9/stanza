@@ -65,6 +65,7 @@ export type TaskAction =
   | { type: 'activate'; taskId: number }
   | { type: 'set-adding'; adding: boolean }
   | { type: 'set-view'; view: PaneView }
+  | { type: 'toggle-view' }
 
 const patchTask = (s: TaskState, id: number, patch: Partial<EditTask>): TaskState => ({
   ...s,
@@ -151,6 +152,14 @@ export function dismissRoute(task: Pick<EditTask, 'phase'>): DismissRoute {
       return 'drop'
   }
 }
+
+/** Switch the preview pane's view. Entering Read tears down the live selection
+ *  (a Select-mode concept): drop the abandoned compose draft (its wash) via the
+ *  BUG-27 helper and null activeTask (removeTask may have reassigned it). A
+ *  typed-but-unsubmitted draft is kept per dropAbandonedDraft's policy. Select
+ *  is a plain passthrough. Shared by `set-view` and `toggle-view`. */
+const applyView = (s: TaskState, view: PaneView): TaskState =>
+  view === 'read' ? { ...dropAbandonedDraft(s), activeTask: null, view: 'read' } : { ...s, view }
 
 export function taskReducer(s: TaskState, a: TaskAction): TaskState {
   switch (a.type) {
@@ -245,13 +254,8 @@ export function taskReducer(s: TaskState, a: TaskAction): TaskState {
     case 'set-adding':
       return { ...s, adding: a.adding }
     case 'set-view':
-      // Selection is a Select-mode concept; Read carries none. Entering Read
-      // tears down the live selection: drop the abandoned compose draft (its
-      // wash) via the BUG-27 helper, and null activeTask (removeTask may have
-      // reassigned it). A typed-but-unsubmitted draft is kept per
-      // dropAbandonedDraft's policy. Select is a plain passthrough.
-      return a.view === 'read'
-        ? { ...dropAbandonedDraft(s), activeTask: null, view: 'read' }
-        : { ...s, view: a.view }
+      return applyView(s, a.view)
+    case 'toggle-view':
+      return applyView(s, s.view === 'read' ? 'select' : 'read')
   }
 }
