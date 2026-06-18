@@ -25,12 +25,11 @@ export class DocumentSession {
    *  new layout. The root never changes, so git/claude/files stay valid. */
   info: DocumentInfo
 
-  /** >0 while the app itself is mutating the MAIN working tree for accept's merge
-   *  (or prepare's wip-commit). The file watcher reads this to ignore the app's
-   *  OWN churn — otherwise it fires documentFilesChanged → loadBlocks and the
-   *  proposal bubble re-anchors away for a beat. (An op's edits now land in a
-   *  per-op worktree, so they no longer churn this tree at all.) A counter, so
-   *  overlapping ops don't clear it early. */
+  /** >0 while the app itself is mutating the working tree for a Claude op (the
+   *  capture branch-dance edits then reverts the .tex on disk). The file watcher
+   *  reads this to ignore the app's OWN churn — otherwise it fires
+   *  documentFilesChanged → loadBlocks and the proposal bubble re-anchors away
+   *  for a beat. A counter, so overlapping ops don't clear it early. */
   private ops = 0
   get opActive(): boolean {
     return this.ops > 0
@@ -42,27 +41,18 @@ export class DocumentSession {
     if (this.ops > 0) this.ops--
   }
 
-  /** Crash recovery, kicked off at construction: clear op worktrees orphaned by a
-   *  prior process. The first op AWAITS this before opening its own worktree, so
-   *  the prune's `git worktree remove --force` sweep can never delete a freshly
-   *  created live worktree out from under an in-flight op. Best-effort (never
-   *  rejects), so a prune failure doesn't block ops. */
-  readonly worktreesPruned: Promise<void>
-
-  /** Serialises ONLY the brief git ops that mutate the MAIN tree — prepare's
-   *  wip-commit and accept's merge — so two concurrent accepts (or an accept
-   *  during a wip-commit) never race git's index.lock. Op CLI runs happen in
-   *  per-op worktrees and stay OUTSIDE this, so it is held for milliseconds
-   *  only and never makes Accept wait behind a running edit (spec §11). The old
-   *  wide runExclusive (which made Accept wait behind a whole in-flight op) is
-   *  gone — worktree isolation removed the need for it. */
-  private mainTreeChain: Promise<unknown> = Promise.resolve()
-
-  runMainTreeExclusive<T>(fn: () => Promise<T>): Promise<T> {
-    const result = this.mainTreeChain.then(fn, fn)
-    this.mainTreeChain = result.then(
-      () => {},
-      () => {},
+  /** Serializes tree-mutating work (Claude ops + accept/merge) per document.
+   *  The whole branch-dance — prepare → run → capture, and resolve's merge —
+   *  needs EXCLUSIVE working-tree access: `git add -A` would otherwise bundle a
+   *  concurrent op's edits into the wrong branch, so accepting one proposal
+   *  applied another. Chains each call after the previous settles (ok or fail).
+   *  Same-repo across windows uses separate sessions/chains — not covered. */
+  private opChain: Promise<unknown> = Promise.resolve()
+  runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const result = this.opChain.then(fn, fn)
+    this.opChain = result.then(
+      () => undefined,
+      () => undefined,
     )
     return result
   }
@@ -78,7 +68,6 @@ export class DocumentSession {
     this.files = new FileService(info.root, this.git)
     this.snippets = new SnippetCompiler(runner, info.root)
     this.diffPreview = new DiffPreviewService(this.git, this.snippets, info)
-    this.worktreesPruned = this.review.pruneWorktrees().catch(() => {})
     // No external-edit watcher: compile fires only on explicit user actions
     // (⌘S / accept / ⌘R) — disk is the source of truth, and an external edit
     // surfaces on the next save or recompile (docs/compile-triggers.md). This

@@ -1,8 +1,7 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
-import type { BlockSpan } from '../../../shared/ipc/claude'
 import { DefaultProcessRunner } from '../../infra/ProcessRunner'
 import { GitClient } from '../../infra/GitClient'
 import { ReviewService } from '../ReviewService'
@@ -27,19 +26,6 @@ const write = (relPath: string, content: string) =>
   writeFileSync(join(root, relPath), content)
 const read = (relPath: string) => readFileSync(join(root, relPath), 'utf8')
 
-/** Simulate an op: open its isolated worktree, apply `edits` there (as claude
- *  would, in cwd=worktree), then capture onto the proposal branch. */
-async function captureOp(
-  opId: string,
-  instruction: string,
-  spans: BlockSpan[],
-  edits: Record<string, string>,
-) {
-  const dir = await review.openWorktree()
-  for (const [rel, content] of Object.entries(edits)) writeFileSync(join(dir, rel), content)
-  return review.captureWorktree(opId, dir, instruction, spans)
-}
-
 describe('ReviewService.prepare', () => {
   test('dirty tree is committed as wip before the op', async () => {
     write('main.tex', 'manual edit\nline2\nline3\n')
@@ -50,15 +36,16 @@ describe('ReviewService.prepare', () => {
 
   test('clean tree adds no commit', async () => {
     await review.prepare()
-    expect(await git.log(5)).toHaveLength(1)
+    expect((await git.log(5))).toHaveLength(1)
   })
 })
 
-describe('ReviewService.captureWorktree', () => {
-  test('commits the worktree edits to a branch and never touches the main tree', async () => {
-    const proposal = await captureOp('op1', 'rewrite line one', [{ file: 'main.tex', startLine: 1, endLine: 1 }], {
-      'main.tex': 'CLAUDE\nline2\nline3\n',
-    })
+describe('ReviewService.capture', () => {
+  test('moves op edits to a branch and leaves the tree clean', async () => {
+    write('main.tex', 'CLAUDE\nline2\nline3\n')
+    const proposal = await review.capture('op1', 'rewrite line one', [
+      { file: 'main.tex', startLine: 1, endLine: 1 },
+    ])
 
     expect(proposal).toMatchObject({
       opId: 'op1',
@@ -68,21 +55,23 @@ describe('ReviewService.captureWorktree', () => {
       outsideSpan: [],
     })
     expect(proposal!.diff).toContain('+CLAUDE')
-    // main tree never touched (the op edited a worktree) and the worktree is gone
+    // tree restored to pre-op state, next op can start
     expect(read('main.tex')).toBe('line1\nline2\nline3\n')
     expect(await git.isClean()).toBe(true)
     expect(await git.listBranches('stanza/op-*')).toEqual(['stanza/op-op1'])
   })
 
   test('no changes means no proposal and no branch', async () => {
-    const proposal = await captureOp('op1', 'noop', [], {})
+    const proposal = await review.capture('op1', 'noop', [])
     expect(proposal).toBe(null)
     expect(await git.listBranches('stanza/op-*')).toEqual([])
   })
 
   test('two captured ops coexist as two reviewable branches', async () => {
-    await captureOp('op1', 'first', [], { 'main.tex': 'A\nline2\nline3\n' })
-    await captureOp('op2', 'second', [], { 'main.tex': 'line1\nB\nline3\n' })
+    write('main.tex', 'A\nline2\nline3\n')
+    await review.capture('op1', 'first', [])
+    write('main.tex', 'line1\nB\nline3\n')
+    await review.capture('op2', 'second', [])
 
     expect((await git.listBranches('stanza/op-*')).sort()).toEqual([
       'stanza/op-op1',
@@ -93,65 +82,35 @@ describe('ReviewService.captureWorktree', () => {
   })
 
   test('edits in unrequested files land in outsideSpan', async () => {
-    const proposal = await captureOp('op1', 'edit main only', [{ file: 'main.tex', startLine: 1, endLine: 1 }], {
-      'main.tex': 'CLAUDE\nline2\nline3\n',
-      'rogue.tex': 'should not have touched this\n',
-    })
+    write('main.tex', 'CLAUDE\nline2\nline3\n')
+    write('rogue.tex', 'should not have touched this\n')
+    const proposal = await review.capture('op1', 'edit main only', [
+      { file: 'main.tex', startLine: 1, endLine: 1 },
+    ])
     expect(proposal!.files.sort()).toEqual(['main.tex', 'rogue.tex'])
     expect(proposal!.outsideSpan).toEqual(['rogue.tex'])
   })
 
   test('hunks fully outside the requested lines flag the file', async () => {
-    const proposal = await captureOp('op1', 'edit line 1 only', [{ file: 'main.tex', startLine: 1, endLine: 1 }], {
-      'main.tex': 'line1\nline2\nEDITED FAR AWAY\n',
-    })
+    write('main.tex', 'line1\nline2\nEDITED FAR AWAY\n')
+    const proposal = await review.capture('op1', 'edit line 1 only', [
+      { file: 'main.tex', startLine: 1, endLine: 1 },
+    ])
     expect(proposal!.outsideSpan).toEqual(['main.tex'])
   })
 
   test('empty spans (whole document) never flags outsideSpan', async () => {
-    const proposal = await captureOp('op1', 'global rewrite', [], {
-      'main.tex': 'x\ny\nz\n',
-      'other.tex': 'new\n',
-    })
+    write('main.tex', 'x\ny\nz\n')
+    write('other.tex', 'new\n')
+    const proposal = await review.capture('op1', 'global rewrite', [])
     expect(proposal!.outsideSpan).toEqual([])
-  })
-
-  test('a mid-capture git failure leaks neither the worktree nor a phantom branch', async () => {
-    const dir = await review.openWorktree()
-    writeFileSync(join(dir, 'main.tex'), 'EDIT\n')
-    // Force switchCreate to fail: the op branch already exists. The capture must
-    // tear down the worktree + branch instead of stranding an empty phantom.
-    await git.switchCreate('stanza/op-dup')
-    await git.switchBack()
-
-    await expect(review.captureWorktree('dup', dir, 'x', [])).rejects.toThrow()
-
-    expect(existsSync(dir)).toBe(false) // worktree removed
-    expect(await git.listBranches('stanza/op-*')).toEqual([]) // no phantom branch left
-    expect(await review.list()).toEqual([]) // …so list() surfaces no bogus proposal
-  })
-
-  test('a concurrent op edits its own worktree without seeing the other', async () => {
-    // Two worktrees open at once (no FIFO queue): each isolated, neither bundles
-    // the other's edits — the corruption the wide mutex used to guard against.
-    const dirA = await review.openWorktree()
-    const dirB = await review.openWorktree()
-    writeFileSync(join(dirA, 'main.tex'), 'FROM_A\nline2\nline3\n')
-    writeFileSync(join(dirB, 'main.tex'), 'line1\nFROM_B\nline3\n')
-    const a = await review.captureWorktree('opA', dirA, 'a', [])
-    const b = await review.captureWorktree('opB', dirB, 'b', [])
-
-    expect(a!.diff).toContain('+FROM_A')
-    expect(a!.diff).not.toContain('FROM_B')
-    expect(b!.diff).toContain('+FROM_B')
-    expect(b!.diff).not.toContain('FROM_A')
-    expect(read('main.tex')).toBe('line1\nline2\nline3\n') // main untouched throughout
   })
 })
 
 describe('ReviewService.resolve', () => {
   test('accept merges the branch, deletes it, reports the claude subject', async () => {
-    await captureOp('op1', 'rewrite line one', [], { 'main.tex': 'ACCEPTED\nline2\nline3\n' })
+    write('main.tex', 'ACCEPTED\nline2\nline3\n')
+    await review.capture('op1', 'rewrite line one', [])
 
     const resolution = await review.resolve({ opId: 'op1', accept: true })
 
@@ -160,14 +119,15 @@ describe('ReviewService.resolve', () => {
     expect(resolution).toEqual({
       committed: true,
       commitSubject: 'claude: rewrite line one',
-      changedFiles: ['main.tex'],
+      changedFiles: ['main.tex']
     })
     expect(read('main.tex')).toBe('ACCEPTED\nline2\nline3\n')
     expect(await git.listBranches('stanza/op-*')).toEqual([])
   })
 
   test('reject deletes the branch and leaves the tree untouched', async () => {
-    await captureOp('op1', 'bad idea', [], { 'main.tex': 'REJECTED\nline2\nline3\n' })
+    write('main.tex', 'REJECTED\nline2\nline3\n')
+    await review.capture('op1', 'bad idea', [])
 
     const resolution = await review.resolve({ opId: 'op1', accept: false })
 
@@ -177,7 +137,8 @@ describe('ReviewService.resolve', () => {
   })
 
   test('conflicting accept aborts, reports conflicts, keeps the branch', async () => {
-    await captureOp('op1', 'rewrite', [], { 'main.tex': 'CLAUDE VERSION\nline2\nline3\n' })
+    write('main.tex', 'CLAUDE VERSION\nline2\nline3\n')
+    await review.capture('op1', 'rewrite', [])
     // user edits the same line before accepting
     write('main.tex', 'USER VERSION\nline2\nline3\n')
     await git.commitAll('wip: manual edits')
@@ -193,13 +154,15 @@ describe('ReviewService.resolve', () => {
 
   test('instruction is truncated to 60 chars in the commit subject', async () => {
     const long = 'x'.repeat(80)
-    await captureOp('op1', long, [], { 'main.tex': 'Y\nline2\nline3\n' })
+    write('main.tex', 'Y\nline2\nline3\n')
+    await review.capture('op1', long, [])
     const resolution = await review.resolve({ opId: 'op1', accept: true })
     expect(resolution.commitSubject).toBe(`claude: ${'x'.repeat(60)}`)
   })
 
   test('re-accepting an op whose branch was already merged+deleted is a no-op, not a throw (BUG-18)', async () => {
-    await captureOp('op1', 'rewrite', [], { 'main.tex': 'ACCEPTED\nline2\nline3\n' })
+    write('main.tex', 'ACCEPTED\nline2\nline3\n')
+    await review.capture('op1', 'rewrite', [])
     await review.resolve({ opId: 'op1', accept: true }) // merges + deletes the branch
     expect(await git.listBranches('stanza/op-*')).toEqual([])
 
@@ -210,7 +173,8 @@ describe('ReviewService.resolve', () => {
   })
 
   test('re-rejecting an op whose branch is gone returns committed:false, not a throw (BUG-18)', async () => {
-    await captureOp('op2', 'bad', [], { 'main.tex': 'X\nline2\nline3\n' })
+    write('main.tex', 'X\nline2\nline3\n')
+    await review.capture('op2', 'bad', [])
     await review.resolve({ opId: 'op2', accept: false }) // deletes the branch
     const again = await review.resolve({ opId: 'op2', accept: false })
     expect(again).toEqual({ committed: false })
@@ -229,7 +193,8 @@ describe('ReviewService.list (crash recovery)', () => {
   })
 
   test('a fresh instance rebuilds proposals from op branches', async () => {
-    await captureOp('op9', 'survive a crash', [], { 'main.tex': 'RECOVER ME\nline2\nline3\n' })
+    write('main.tex', 'RECOVER ME\nline2\nline3\n')
+    await review.capture('op9', 'survive a crash', [])
 
     const reborn = new ReviewService(new GitClient(runner, root))
     const list = await reborn.list()
@@ -246,30 +211,12 @@ describe('ReviewService.list (crash recovery)', () => {
   })
 })
 
-describe('ReviewService.pruneWorktrees (crash recovery)', () => {
-  test('removes an orphaned op worktree but keeps its proposal branch', async () => {
-    // Simulate a process that died mid-op: a worktree left behind with edits,
-    // committed to its op branch but never removed.
-    const dir = await review.openWorktree()
-    writeFileSync(join(dir, 'main.tex'), 'ORPHAN\nline2\nline3\n')
-    const wt = git.worktreeClient(dir)
-    await wt.switchCreate('stanza/op-crashed')
-    await wt.commitAll('claude: crashed op')
-    expect((await git.listBranches('stanza/op-*'))).toContain('stanza/op-crashed')
-
-    await review.pruneWorktrees()
-
-    // worktree gone, branch (the recoverable proposal) intact
-    const list = await review.list()
-    expect(list.map((p) => p.opId)).toContain('crashed')
-  })
-})
-
 describe('ReviewService span locking', () => {
   test('overlapping spans of an unresolved proposal are locked', async () => {
-    await captureOp('op1', 'edit lines 1-2', [{ file: 'main.tex', startLine: 1, endLine: 2 }], {
-      'main.tex': 'CLAUDE\nline2\nline3\n',
-    })
+    write('main.tex', 'CLAUDE\nline2\nline3\n')
+    await review.capture('op1', 'edit lines 1-2', [
+      { file: 'main.tex', startLine: 1, endLine: 2 },
+    ])
 
     expect(() =>
       review.assertSpansFree([{ file: 'main.tex', startLine: 2, endLine: 5 }]),
@@ -280,9 +227,8 @@ describe('ReviewService span locking', () => {
   })
 
   test('resolving the proposal releases its lock', async () => {
-    await captureOp('op1', 'edit', [{ file: 'main.tex', startLine: 1, endLine: 2 }], {
-      'main.tex': 'CLAUDE\nline2\nline3\n',
-    })
+    write('main.tex', 'CLAUDE\nline2\nline3\n')
+    await review.capture('op1', 'edit', [{ file: 'main.tex', startLine: 1, endLine: 2 }])
     await review.resolve({ opId: 'op1', accept: false })
     review.assertSpansFree([{ file: 'main.tex', startLine: 1, endLine: 2 }])
   })
@@ -290,10 +236,9 @@ describe('ReviewService span locking', () => {
 
 describe('ReviewService whole-document (unscoped) ops', () => {
   test('empty-spans capture proposes every changed file as one proposal', async () => {
-    const proposal = await captureOp('op1', 'global rewrite', [], {
-      'main.tex': 'x\ny\nz\n',
-      'other.tex': 'new\n',
-    })
+    write('main.tex', 'x\ny\nz\n')
+    write('other.tex', 'new\n')
+    const proposal = await review.capture('op1', 'global rewrite', [])
     expect(proposal!.files.sort()).toEqual(['main.tex', 'other.tex'])
     expect(proposal!.outsideSpan).toEqual([]) // unscoped op flags nothing
     expect(proposal!.branch).toBe('stanza/op-op1')
@@ -305,27 +250,29 @@ describe('ReviewService whole-document (unscoped) ops', () => {
   })
 
   test('a whole-doc op is blocked while a scoped proposal is pending', async () => {
-    await captureOp('op1', 'edit line 1', [{ file: 'main.tex', startLine: 1, endLine: 1 }], {
-      'main.tex': 'CLAUDE\nline2\nline3\n',
-    })
+    write('main.tex', 'CLAUDE\nline2\nline3\n')
+    await review.capture('op1', 'edit line 1', [{ file: 'main.tex', startLine: 1, endLine: 1 }])
     // unscoped op needs a clean slate — it could clobber the scoped span
     expect(() => review.assertSpansFree([])).toThrow('SPANS_LOCKED')
   })
 
   test('a whole-doc op is blocked while another whole-doc proposal is pending', async () => {
-    await captureOp('op1', 'global rewrite', [], { 'main.tex': 'X\nline2\nline3\n' })
+    write('main.tex', 'X\nline2\nline3\n')
+    await review.capture('op1', 'global rewrite', [])
     expect(() => review.assertSpansFree([])).toThrow('SPANS_LOCKED')
   })
 
   test('a scoped op is blocked while a whole-doc proposal is pending', async () => {
-    await captureOp('op1', 'global rewrite', [], { 'main.tex': 'CLAUDE\nline2\nline3\n' })
+    write('main.tex', 'CLAUDE\nline2\nline3\n')
+    await review.capture('op1', 'global rewrite', []) // pending whole-doc owns everything
     expect(() =>
       review.assertSpansFree([{ file: 'main.tex', startLine: 1, endLine: 1 }]),
     ).toThrow('SPANS_LOCKED')
   })
 
   test('resolving a whole-doc proposal releases the global lock', async () => {
-    await captureOp('op1', 'global rewrite', [], { 'main.tex': 'X\nline2\nline3\n' })
+    write('main.tex', 'X\nline2\nline3\n')
+    await review.capture('op1', 'global rewrite', [])
     await review.resolve({ opId: 'op1', accept: false })
     expect(() => review.assertSpansFree([])).not.toThrow()
     review.assertSpansFree([{ file: 'main.tex', startLine: 1, endLine: 1 }])

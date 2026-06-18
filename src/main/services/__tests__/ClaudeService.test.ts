@@ -69,12 +69,7 @@ describe('ClaudeService.runOp', () => {
 
     const op = runner.calls[1]!
     expect(op.args.slice(0, 3)).toEqual(['-p', '--resume', prime.args[2]])
-    // --fork-session: concurrent ops never share a session log. --add-dir is the
-    // op's cwd (defaults to the doc root when no worktree is passed).
     expect(op.args.slice(3)).toEqual([
-      '--fork-session',
-      '--add-dir',
-      '/proj',
       '--output-format',
       'json',
       '--permission-mode',
@@ -82,20 +77,6 @@ describe('ClaudeService.runOp', () => {
       'Instruction: tighten the intro\nScope: whole document.\nApply the edits directly to the files. Reply with a one-paragraph summary.',
     ])
     expect(note).toBe('done')
-  })
-
-  test('an op runs in its worktree cwd and forks the session (spec §11)', async () => {
-    store.setProject('/proj', { sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' })
-    const runner = new MockRunner(() => claudeJson('ok'))
-    const service = new ClaudeService(runner, store, doc)
-
-    await service.runOp({ instruction: 'x', spans: [] }, () => {}, { cwd: '/tmp/stanza-op-123' })
-
-    const op = runner.calls[0]!
-    expect(op.cwd).toBe('/tmp/stanza-op-123') // claude edits the isolated worktree
-    const addDir = op.args.indexOf('--add-dir')
-    expect(op.args.slice(addDir, addDir + 2)).toEqual(['--add-dir', '/tmp/stanza-op-123'])
-    expect(op.args).toContain('--fork-session')
   })
 
   test('strips ANTHROPIC_API_KEY / AUTH_TOKEN so claude uses the subscription (BUG-29)', async () => {
@@ -196,12 +177,12 @@ describe('ClaudeService.runOp', () => {
     )
   })
 
-  test('ops run concurrently — no FIFO queue (spec §11 isolation)', async () => {
+  test('ops serialize through a FIFO queue (v1, spec FR6)', async () => {
     store.setProject('/proj', { sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' })
     let release!: () => void
     const gate = new Promise<void>((resolve) => (release = resolve))
     const runner = new MockRunner(async (_spec, call) => {
-      if (call === 0) await gate // first op blocks mid-run
+      if (call === 0) await gate
       return claudeJson(`op${call}`)
     })
     const service = new ClaudeService(runner, store, doc)
@@ -209,36 +190,13 @@ describe('ClaudeService.runOp', () => {
     const first = service.runOp({ instruction: 'first', spans: [] }, () => {})
     const second = service.runOp({ instruction: 'second', spans: [] }, () => {})
     await new Promise((resolve) => setTimeout(resolve, 20))
-    // The second op started WITHOUT waiting for the first — each runs in its own
-    // worktree, so there is no serialising queue any more.
-    expect(runner.calls).toHaveLength(2)
+    expect(runner.calls).toHaveLength(1) // second op not started yet
 
     release()
     const [a, b] = await Promise.all([first, second])
+    expect(runner.calls).toHaveLength(2)
     expect(a.note).toBe('op0')
     expect(b.note).toBe('op1')
-  })
-
-  test('concurrent first-ops prime the session once (prime-once latch)', async () => {
-    // No stored session: both ops race ensureSession; only ONE --session-id prime
-    // must run, then both fork it.
-    let release!: () => void
-    const gate = new Promise<void>((resolve) => (release = resolve))
-    const runner = new MockRunner(async (spec) => {
-      if (spec.args.includes('--session-id')) await gate // hold the prime
-      return claudeJson('ok')
-    })
-    const service = new ClaudeService(runner, store, doc)
-
-    const first = service.runOp({ instruction: 'a', spans: [] }, () => {})
-    const second = service.runOp({ instruction: 'b', spans: [] }, () => {})
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    release()
-    await Promise.all([first, second])
-
-    const primes = runner.calls.filter((c) => c.args.includes('--session-id'))
-    expect(primes).toHaveLength(1) // primed once despite two concurrent first-ops
-    expect(runner.calls).toHaveLength(3) // 1 prime + 2 ops
   })
 
   test('prime() establishes the session without running an op, idempotently', async () => {

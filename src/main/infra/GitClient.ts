@@ -1,5 +1,4 @@
 import { realpathSync } from 'node:fs'
-import { basename } from 'node:path'
 import type { CommitInfo } from '../../shared/ipc/document'
 import type { ProcessRunner, ProcResult } from './ProcessRunner'
 
@@ -110,41 +109,6 @@ export class GitClient {
 
   async switchBack(): Promise<void> {
     await this.must(['switch', '-'])
-  }
-
-  /** Add a detached worktree at HEAD, sharing this repo's .git. An op edits
-   *  there in isolation so the main tree never churns mid-op; the branch is
-   *  named at capture time off the worktree's commit. */
-  async addWorktree(dir: string): Promise<void> {
-    await this.must(['worktree', 'add', '--detach', dir, 'HEAD'])
-  }
-
-  /** Remove a worktree dir + its admin entry. Force: a discarded/failed op may
-   *  leave uncommitted edits behind. Tolerant — a dir already gone is fine. */
-  async removeWorktree(dir: string): Promise<void> {
-    await this.run(['worktree', 'remove', '--force', dir])
-  }
-
-  /** A GitClient bound to a linked worktree dir, reusing every method here
-   *  (switchCreate, commitAll, isClean) against that tree instead of the main. */
-  worktreeClient(dir: string): GitClient {
-    return new GitClient(this.runner, dir)
-  }
-
-  /** Crash recovery (on open): remove orphaned op worktrees — our temp checkouts
-   *  (basename `stanza-op-*`) left by a process that died mid-op — then prune
-   *  stale admin. Op BRANCHES survive: they are the pending proposals `list()`
-   *  rebuilds (spec §7). */
-  async pruneOpWorktrees(): Promise<void> {
-    const res = await this.run(['worktree', 'list', '--porcelain'])
-    if (res.code === 0) {
-      for (const line of res.stdout.split('\n')) {
-        if (!line.startsWith('worktree ')) continue
-        const path = line.slice('worktree '.length)
-        if (basename(path).startsWith('stanza-op-')) await this.removeWorktree(path)
-      }
-    }
-    await this.run(['worktree', 'prune'])
   }
 
   /** Merge a proposal branch. On conflict: collect the conflicted

@@ -70,17 +70,6 @@ export function setWindowSpawner(fn: () => BrowserWindow): void {
   spawnWindow = fn
 }
 
-/** Read app-wide settings — index.ts's quit guard reads confirmBeforeQuit.
- *  Returns {} before the store exists (pre-whenReady), which no quit precedes. */
-export function getGlobalSettings(): GlobalSettings {
-  return globalSettings?.get() ?? {}
-}
-
-/** Patch app-wide settings — the quit dialog persists "Don't ask again". */
-export function setGlobalSettings(patch: Partial<GlobalSettings>): void {
-  globalSettings?.set(patch)
-}
-
 /** Drop a window's session when it closes (index.ts wires win.on('closed')). */
 export function dropSession(webContentsId: number): void {
   fileWatchers.get(webContentsId)?.()
@@ -205,10 +194,10 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IpcChannels.claudeRun, (event, req: ClaudeRequest) => {
     const doc = sessionFor(event)
-    // No wide mutex: the op runs in its own worktree and only its brief main-tree
-    // touch (prepare's wip-commit) is serialised, inside runClaudeOp. Ops run
-    // concurrently and never block Accept (spec §11).
-    return runClaudeOp(doc, event.sender, req)
+    // Serialize the whole op (prepare → run → capture) — concurrent ops would
+    // race the shared working tree and bundle each other's edits into one branch
+    // (accepting one then applied both).
+    return doc.runExclusive(() => runClaudeOp(doc, event.sender, req))
   })
 
   ipcMain.handle(
@@ -216,32 +205,33 @@ export function registerIpcHandlers(): void {
     (event): OpRecord[] => store.getProject(sessionFor(event).info.root).ops ?? [],
   )
 
-  ipcMain.handle(IpcChannels.reviewResolve, async (event, decision: ReviewDecision) => {
+  ipcMain.handle(IpcChannels.reviewResolve, (event, decision: ReviewDecision) => {
     const doc = sessionFor(event)
-    // The merge mutates the MAIN tree — serialise ONLY it with prepare's
-    // wip-commit (narrow mutex) so concurrent accepts don't race index.lock. It
-    // never waits on a running op: ops edit isolated worktrees, not the main tree
-    // (spec §11) — that is what unblocks Accept.
-    const resolution = await doc.runMainTreeExclusive(() => doc.review.resolve(decision))
-    doc.diffPreview.invalidate(decision.opId) // free the op's cached block previews
-    if (resolution.committed || !decision.accept) {
-      patchOpRecord(doc.info.root, decision.opId, { accepted: decision.accept })
-    }
-    // A committed accept merges Claude's branch into the working tree — Claude
-    // may have added sections/*.tex, dirs, or renamed files. Re-derive THIS
-    // window's session.info so document:projectBlocks parses the current
-    // texFiles, and hand a fresh DocumentInfo back when the file set changed
-    // (renderer re-keys + reloads the sidebar/blocks — same contract as app file
-    // ops, BUG-53).
-    if (decision.accept && resolution.committed) {
-      const before = doc.info
-      const fresh = await documents.open(before.root)
-      if (fresh) {
-        doc.info = fresh
-        if (fileSetChanged(before, fresh)) return { ...resolution, doc: fresh }
+    // Same mutex as ops: the accept merge mutates the working tree and must not
+    // interleave with an in-flight op's branch-dance.
+    return doc.runExclusive(async () => {
+      const resolution = await doc.review.resolve(decision)
+      doc.diffPreview.invalidate(decision.opId) // free the op's cached block previews
+      if (resolution.committed || !decision.accept) {
+        patchOpRecord(doc.info.root, decision.opId, { accepted: decision.accept })
       }
-    }
-    return resolution
+      // A committed accept merges Claude's branch into the working tree — Claude
+      // may have added sections/*.tex, dirs, or renamed files (runClaudeOp itself
+      // restored the tree clean; the files land HERE). Re-derive THIS window's
+      // session.info so document:projectBlocks parses the current texFiles, and
+      // hand a fresh DocumentInfo back when the file set changed (the renderer
+      // re-keys + reloads the sidebar/blocks — same contract as app file ops,
+      // BUG-53).
+      if (decision.accept && resolution.committed) {
+        const before = doc.info
+        const fresh = await documents.open(before.root)
+        if (fresh) {
+          doc.info = fresh
+          if (fileSetChanged(before, fresh)) return { ...resolution, doc: fresh }
+        }
+      }
+      return resolution
+    })
   })
 
   ipcMain.handle(IpcChannels.reviewList, (event) => sessionFor(event).review.list())
@@ -402,10 +392,7 @@ async function loadDoc(
 }
 
 function bindSession(wc: WebContents, info: DocumentInfo): void {
-  const session = new DocumentSession(info, runner, store)
-  sessions.set(wc.id, session)
-  // Crash-recovery worktree prune is kicked off in the DocumentSession ctor
-  // (session.worktreesPruned); the first op awaits it before forking its own.
+  sessions.set(wc.id, new DocumentSession(info, runner, store))
   // Replace any prior watcher (re-opening a doc in the same window), then watch
   // the new root for external changes → tell this window to re-list its files.
   fileWatchers.get(wc.id)?.()
@@ -448,12 +435,11 @@ function windowForRoot(root: string): BrowserWindow | undefined {
   return undefined
 }
 
-/** Diff-gated op pipeline (FR7, §11): lock check → wip-commit main → open an
- *  isolated worktree → arm watcher on it → run op there → await file settle →
- *  capture the worktree to a proposal branch. The op never touches the main
- *  tree, so Accept and concurrent ops never wait on it. The watcher is armed
- *  BEFORE the op so an edit that flushes after claude exits is still seen — a
- *  fixed grace lost that race and stranded edits uncommitted (B11.2). */
+/** Diff-gated op pipeline (FR7): lock check → clean tree → arm watcher →
+ *  run op → await file settle → capture to proposal branch → emit.
+ *  The watcher is armed BEFORE the op so an edit that flushes after
+ *  claude exits is still seen — a fixed grace lost that race and
+ *  stranded edits uncommitted (B11.2 original design). */
 async function runClaudeOp(
   doc: DocumentSession,
   wc: WebContents,
@@ -461,41 +447,32 @@ async function runClaudeOp(
 ): Promise<ClaudeResult> {
   doc.review.assertSpansFree(req.spans)
 
-  // Mute the file watcher for the op window: the eager preview compile + accept's
-  // brief main-tree writes shouldn't blink the proposal bubble (loadBlocks). The
-  // op's OWN edits land in a worktree, so they don't churn this tree at all.
-  // Release a beat after the body so the settle (FILE_WATCH_SETTLE_MS) fires muted.
+  // Mark the op active so the file watcher ignores the tree churn it (and the
+  // capture branch-dance) cause — otherwise documentFilesChanged → loadBlocks
+  // blinks the proposal bubble. Release a beat AFTER the body returns so the
+  // churn's settle (FILE_WATCH_SETTLE_MS) fires while still muted.
   doc.beginOp()
   try {
-    await doc.worktreesPruned // crash-recovery prune must finish before we make a fresh worktree
-    // wip-commit any manual edits, THEN fork the worktree — both in the narrow
-    // main-tree mutex so the worktree forks from a HEAD that includes the manual
-    // edits, and `git worktree add` never races a concurrent accept's merge on
-    // the repo's refs. The long CLI run stays OUTSIDE the mutex (unblocks Accept).
-    const dir = await doc.runMainTreeExclusive(async () => {
-      await doc.review.prepare()
-      return doc.review.openWorktree()
-    })
+    await doc.review.prepare()
 
-    // Watch the WORKTREE for claude's writes (not the main root — the main tree
-    // never churns during an op). It only awaits the writes to land; compile
-    // fires on accept (docs/compile-triggers.md).
-    const watcher = armSettleWatcher(dir, { quietMs: 400, capMs: 3000 })
+    // Arm the settle watcher BEFORE the op so an edit that flushes after claude
+    // exits is still awaited (a fixed grace lost that race, B11.2). It only waits
+    // for the op's writes to land — it never recompiles; compile fires on accept
+    // (docs/compile-triggers.md).
+    const watcher = armSettleWatcher(doc.info.root, { quietMs: 400, capMs: 3000 })
     let op: { opId: string; note: string }
     try {
       // claude:status is per-document → only the owning window.
-      op = await doc.claude.runOp(req, (status) => sendTo(wc, IpcChannels.claudeStatus, status), {
-        cwd: dir,
-      })
+      op = await doc.claude.runOp(req, (status) => sendTo(wc, IpcChannels.claudeStatus, status))
       await watcher.settled() // wait for claude's writes to land (and stop)
     } catch (err) {
-      await doc.git.removeWorktree(dir).catch(() => {}) // failed op: discard the worktree + its edits
+      await doc.git.restoreAll() // failed/timed-out op never leaves edits behind
       throw err
     } finally {
       watcher.dispose()
     }
 
-    const proposal = await doc.review.captureWorktree(op.opId, dir, req.instruction, req.spans)
+    const proposal = await doc.review.capture(op.opId, req.instruction, req.spans)
     // Eager: start compiling every changed block's marked preview now, so opening
     // Review is instant (the renders are cached by the time the user clicks).
     if (proposal) doc.diffPreview.prime(proposal.opId, proposal.branch, proposal.blocks)

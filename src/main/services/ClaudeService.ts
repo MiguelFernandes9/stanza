@@ -5,21 +5,17 @@ import type { ProcessRunner, ProcResult } from '../infra/ProcessRunner'
 import type { Store } from '../infra/Store'
 import { opPrompt, primePrompt } from './prompts'
 
-// A Claude op is an agentic CLI run — extended thinking plus many tool
-// calls and recompiles — so it can legitimately run for many minutes. This
-// cap is only a backstop to reap a genuinely hung process; the user can end
-// a slow-but-live op themselves via the abort signal (op:cancel). Keep it
-// generous so a real op is never cut short, but finite so a deadlock frees.
-const DEFAULT_TIMEOUT_MS = 1_800_000 // 30 min
+const DEFAULT_TIMEOUT_MS = 120_000
 
-/** One Claude Code CLI session per document: primed once (in the main tree),
- *  then FORKED per op via --fork-session so concurrent ops never share a
- *  session log. Each op runs with `cwd` set to its own git worktree (spec §11),
- *  so ops are fully isolated — no FIFO queue, no shared-tree contention. */
+/** One Claude Code CLI session per document: primed on first op,
+ *  resumed for every op after (also across app restarts via Store).
+ *
+ *  v1 serializes ops through a FIFO queue — queued ops report
+ *  'priming' until started. Callers must NOT assume serial execution:
+ *  v1.1 swaps the queue for --fork-session + a doc-repo worktree per
+ *  op behind this same method (spec §11). */
 export class ClaudeService {
-  /** Prime-once latch: concurrent first-ops share a single priming call.
-   *  Cleared on failure so a later op can retry. */
-  private primePromise?: Promise<string>
+  private queue: Promise<unknown> = Promise.resolve()
 
   constructor(
     private runner: ProcessRunner,
@@ -34,43 +30,35 @@ export class ClaudeService {
     await this.ensureSession(signal)
   }
 
-  /** Run one op. `opts.cwd` is the op's isolated worktree (defaults to the
-   *  doc root when unset). Ops may run concurrently — each forks the session. */
   runOp(
     req: ClaudeRequest,
     onStatus: (s: ClaudeStatus) => void,
-    opts?: { cwd?: string },
   ): Promise<{ opId: string; note: string }> {
     const opId = randomUUID()
     onStatus({ opId, state: 'priming' })
-    return this.execute(opId, req, onStatus, opts?.cwd)
+    const result = this.queue.then(() => this.execute(opId, req, onStatus))
+    this.queue = result.catch(() => {}) // a failed op must not poison the queue
+    return result
   }
 
   private async execute(
     opId: string,
     req: ClaudeRequest,
     onStatus: (s: ClaudeStatus) => void,
-    cwd?: string,
   ): Promise<{ opId: string; note: string }> {
     try {
       const sessionId = await this.ensureSession()
       onStatus({ opId, state: 'running' })
-      const proc = await this.claude(
-        [
-          '-p',
-          '--resume',
-          sessionId,
-          '--fork-session',
-          '--add-dir',
-          cwd ?? this.doc.root,
-          '--output-format',
-          'json',
-          '--permission-mode',
-          'acceptEdits',
-          opPrompt(req),
-        ],
-        { cwd },
-      )
+      const proc = await this.claude([
+        '-p',
+        '--resume',
+        sessionId,
+        '--output-format',
+        'json',
+        '--permission-mode',
+        'acceptEdits',
+        opPrompt(req),
+      ])
       assertCompleted(proc, this.timeoutMs)
       const note = extractNote(proc.stdout)
       onStatus({ opId, state: 'done' })
@@ -81,22 +69,12 @@ export class ClaudeService {
     }
   }
 
-  /** Returns the persisted session id, priming a new session first when this
-   *  project has none yet. Concurrent callers share one prime (the latch);
-   *  priming always runs in the canonical main tree (no per-op cwd). */
+  /** Returns the persisted session id, priming a new session first
+   *  when this project has none yet. */
   private async ensureSession(signal?: AbortSignal): Promise<string> {
     const existing = this.store.getProject(this.doc.root).sessionId
     if (existing) return existing
-    if (!this.primePromise) {
-      this.primePromise = this.primeNewSession(signal).catch((err: unknown) => {
-        this.primePromise = undefined // a failed prime must not stick — allow retry
-        throw err
-      })
-    }
-    return this.primePromise
-  }
 
-  private async primeNewSession(signal?: AbortSignal): Promise<string> {
     const sessionId = randomUUID()
     const proc = await this.claude(
       [
@@ -109,21 +87,21 @@ export class ClaudeService {
         'json',
         primePrompt(this.doc),
       ],
-      { signal },
+      signal,
     )
     assertCompleted(proc, this.timeoutMs)
     this.store.setProject(this.doc.root, { sessionId })
     return sessionId
   }
 
-  private claude(args: string[], opts?: { cwd?: string; signal?: AbortSignal }): Promise<ProcResult> {
+  private claude(args: string[], signal?: AbortSignal): Promise<ProcResult> {
     return this.runner.run({
       cmd: process.env.STANZA_CLAUDE_BIN ?? 'claude',
       args,
-      cwd: opts?.cwd ?? this.doc.root,
+      cwd: this.doc.root,
       timeoutMs: this.timeoutMs,
       env: claudeEnv(),
-      ...(opts?.signal ? { signal: opts.signal } : {}),
+      ...(signal ? { signal } : {}),
     })
   }
 }
