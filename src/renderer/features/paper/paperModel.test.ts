@@ -697,6 +697,10 @@ describe('binContentToBlocks — galley collision resolved by forced owners (bac
     // the two caption rows fall inside BOTH the figure and the itemize galley → contested
     expect(contested).toHaveLength(2)
     expect(contested.every((c) => c.page === 1)).toBe(true)
+    // the caption's tightest owner is the itemize, which ALSO renders its real list on
+    // p2 → a multi-region (galley) owner → eligible for the backward-map override.
+    expect(contested.every((c) => c.tightestOwner === 'it#1')).toBe(true)
+    expect(contested.every((c) => c.tightestOwnerMultiRegion)).toBe(true)
     // the figure box stops at the plot — it never reaches the caption (bug)
     const fig = boxesById.get('fig#1')!
     expect(boxBottom(fig[0]!)).toBeLessThan(460)
@@ -725,6 +729,95 @@ describe('binContentToBlocks — galley collision resolved by forced owners (bac
     const it = boxesById.get('it#1')!
     expect(it.length).toBeGreaterThanOrEqual(1)
     expect(it.every((b) => b.page === 2)).toBe(true)
+  })
+})
+
+describe('binContentToBlocks — single-region owner is NOT overridden (Bug A guard)', () => {
+  // test_2 again: the paragraph "Figure 1 shows … $f(x_t)-f^\\star$ …" (line 179) renders
+  // ONE line INSIDE the figure's oversized pgfplots axis bbox (the empty top margin
+  // above the visible plot). `synctex edit` returns the AXIS line for the mid-line math
+  // glyphs, so a naive backward-map force would steal them into the figure and pull its
+  // box UP over the paragraph. The paragraph is a SINGLE-region block (it renders only
+  // here), so its tightest ownership is trusted and the override is suppressed.
+  const rectsById = new Map<string, PdfRect[]>([
+    // figure: tall axis bbox (galley top y258 + plot + caption) → ONE region y258–501
+    ['fig#1', [prect(1, 72, 258, 468, 50), prect(1, 110, 305, 380, 158), prect(1, 72, 474, 468, 27)]],
+    // paragraph: one tight line inside the bbox's empty top margin
+    ['par#1', [prect(1, 72, 278, 449, 12)]]
+  ])
+  const rowsByPage = new Map<number, TextRow[]>([
+    [1, [
+      trow(277, 283, 238, 320), // the inline-math run (the f-star) — mid-line, raised
+      trow(278, 289, 72, 521), //  the paragraph's main text run
+      trow(474, 485, 72, 480), //  caption line (figure-only, below the plot)
+      trow(488, 497, 72, 480)
+    ]]
+  ])
+  const graphics = new Map<number, GraphicBox[]>([
+    [1, [{ yTop: 305, yBottom: 435, xLeft: 110, xRight: 490 }]] // the visible plot
+  ])
+
+  it('the f-star line is contested but owned by the single-region paragraph', () => {
+    const { contested } = binContentToBlocks(rectsById, rowsByPage, graphics)
+    const fstar = contested.find((c) => Math.round(c.y) === 283)
+    expect(fstar).toBeTruthy()
+    expect(fstar!.tightestOwner).toBe('par#1')
+    expect(fstar!.tightestOwnerMultiRegion).toBe(false) // → PaperPane will NOT force it
+  })
+
+  it('with the override suppressed, the figure box stays at the plot and the paragraph keeps its line', () => {
+    // PaperPane forces only multi-region owners → the f-star is skipped → pure geometry.
+    const { boxesById } = binContentToBlocks(rectsById, rowsByPage, graphics)
+    const fig = boxesById.get('fig#1')![0]!
+    expect(fig.y).toBeGreaterThan(300) // ~305 plot top, NOT pulled up to the paragraph (~277)
+    expect(boxBottom(fig)).toBeGreaterThan(495) // still covers the caption below the plot
+    expect(boxesById.get('par#1')![0]!.y).toBeLessThan(285) // paragraph keeps its row
+  })
+
+  it('forcing it (the old ungated bug) WOULD pull the figure up over the paragraph', () => {
+    // Why the gate matters: trusting synctex's wrong backward map here inflates the
+    // figure box upward. PaperPane's multi-region filter is what prevents this.
+    const { contested } = binContentToBlocks(rectsById, rowsByPage, graphics)
+    const fstar = contested.find((c) => Math.round(c.y) === 283)!
+    const bad = binContentToBlocks(rectsById, rowsByPage, graphics, new Map([[fstar.key, 'fig#1']]))
+    expect(bad.boxesById.get('fig#1')![0]!.y).toBeLessThan(290) // regressed: figure top at the paragraph
+  })
+})
+
+describe('binContentToBlocks — a multi-region (galley) owner IS overridden (Bug B: longtable/theorem)', () => {
+  // A long table (§8.2) spills onto p11 as a continuation; its continuation rows
+  // synctex-map to a loose, wide region. The theorem (§8.4) AFTER it forward-maps its
+  // \\end{theorem} onto p11 as a TIGHTER galley, so tightest-span gives the table's p11
+  // rows to the theorem → the table reads as a child of §8.4 and the theorem has no box
+  // on its real page (p12). The theorem is multi-region (p11 galley + p12 real), so the
+  // override fires and the rows return to the table.
+  const rectsById = new Map<string, PdfRect[]>([
+    ['lt#1', [prect(11, 72, 34, 468, 715)]], // longtable: loose continuation region on p11
+    ['thm#1', [prect(11, 170, 447, 266, 179), prect(12, 72, 264, 468, 44)]] // p11 galley (tight) + p12 real
+  ])
+  const rowsByPage = new Map<number, TextRow[]>([
+    [11, [trow(449, 460, 72, 440), trow(469, 480, 72, 440), trow(609, 620, 72, 440)]], // table rows
+    [12, [trow(264, 275, 72, 400), trow(295, 306, 72, 400)]] // theorem content
+  ])
+
+  it('the table p11 rows are stolen by the tighter, multi-region theorem galley', () => {
+    const { contested } = binContentToBlocks(rectsById, rowsByPage)
+    const ltRow = contested.find((c) => c.page === 11)
+    expect(ltRow).toBeTruthy()
+    expect(ltRow!.tightestOwner).toBe('thm#1') // the tighter galley wins under tightest-span
+    expect(ltRow!.tightestOwnerMultiRegion).toBe(true) // theorem also renders on p12 → override eligible
+  })
+
+  it('forcing the stolen rows back to the table fixes both blocks', () => {
+    const { contested } = binContentToBlocks(rectsById, rowsByPage)
+    const forced = new Map(
+      contested.filter((c) => c.page === 11 && c.tightestOwner === 'thm#1').map((c) => [c.key, 'lt#1'])
+    )
+    const { boxesById } = binContentToBlocks(rectsById, rowsByPage, new Map(), forced)
+    // the table reclaims its p11 rows (one tall box)
+    expect(boxesById.get('lt#1')!.some((b) => b.page === 11 && b.height > 100)).toBe(true)
+    // the theorem drops its emptied p11 galley → its box lands on the real page p12
+    expect(boxesById.get('thm#1')!.every((b) => b.page === 12)).toBe(true)
   })
 })
 

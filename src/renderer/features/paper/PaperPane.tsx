@@ -200,14 +200,19 @@ export function PaperPane(props: Props): JSX.Element {
       // true source line → the block that drew it — then re-bin with those forced
       // owners. Only fires when a collision exists (empty in the common case).
       let result = bin
-      if (bin.contested.length) {
+      // Override ONLY contested units whose tightest-span owner has ≥2 regions (a
+      // possible galley that renders elsewhere). A single-region owner genuinely
+      // renders at the unit, so its disagreeing backward map is a synctex error (a
+      // float's bbox overlapping the neighbour above it) — trust tightest-span there.
+      const toForce = bin.contested.filter((c) => c.tightestOwnerMultiRegion)
+      if (toForce.length) {
         const knownFiles = [...new Set(pageBlocks.map((b) => b.span.file))]
         // Units on ONE rendered line share a source line, so backward-map a single
         // representative per (page, baseline, column-ish x) band and apply the owner
         // to the whole band — a dense colliding page (figure + table + list) costs ~a
         // dozen synctex edits, not one per glyph row.
         const bands = new Map<string, typeof bin.contested>()
-        for (const c of bin.contested) {
+        for (const c of toForce) {
           const k = `${c.page}|${Math.round(c.y)}|${Math.round(c.x / 180)}`
           const g = bands.get(k)
           if (g) g.push(c)

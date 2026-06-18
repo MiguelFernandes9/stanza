@@ -317,6 +317,13 @@ export interface ContestedUnit {
   /** PDF pt, top-left (the row's left / baseline) — a valid `synctex edit` point. */
   x: number
   y: number
+  /** The block id tightest-span assigns this unit to (T). */
+  tightestOwner: string
+  /** Does T have ≥2 synctex regions? Only then may T be a galley that renders
+   *  elsewhere — so the caller backward-maps and overrides ONLY these. A
+   *  single-region T genuinely renders here; a disagreeing backward map there is a
+   *  synctex error (a float bbox overlapping a neighbour) and must be ignored. */
+  tightestOwnerMultiRegion: boolean
 }
 
 export interface BinnedContent {
@@ -443,27 +450,49 @@ export function binContentToBlocks(
     ].sort((a, b) => a.key - b.key)
   }
 
+  // A block's cells across pages/columns — lets the contested scan tell a galley
+  // (a block with ≥2 regions, one a spurious galley over another block) from a block
+  // that genuinely renders only here (a single region).
+  const regionsByBlock = new Map<string, Region[]>()
+  for (const arr of regionsByPage.values()) for (const rg of arr) {
+    const b = regionsByBlock.get(rg.id)
+    if (b) b.push(rg)
+    else regionsByBlock.set(rg.id, [rg])
+  }
+
   // A unit inside ≥2 different blocks' regions is a GALLEY COLLISION: tightest-span
   // can't tell which block drew it (a list's `\begin` maps onto a figure's caption).
-  // Report it so the caller backward-maps the point to the true source line; the
-  // common single-owner case yields an empty list and the binner is unchanged.
+  // Report it WITH its tightest-span owner T (same smallest-span pick `ownerOf` makes)
+  // and whether T has ≥2 regions, so the caller backward-maps and overrides ONLY when
+  // T may be a galley. A single-region T is trusted (its disagreeing backward map is a
+  // synctex error). Common single-owner units aren't contested → binner unchanged.
   const contested: ContestedUnit[] = []
   const seenContested = new Set<string>()
+  const spanOf = (rg: Region): number => rg.bottom - rg.top
   for (const [page, regions] of regionsByPage) {
     const layout = columnsByPage.get(page)
     for (const u of unitsForPage(page)) {
       const col = colOf(layout, u)
       const ids = new Set<string>()
+      let tightest: Region | null = null
       for (const rg of regions) {
         if (!candidate(rg, col, u.xLeft, u.xRight)) continue
         if (u.key < rg.top - BAND_EPS || u.key > rg.bottom + BAND_EPS) continue
         ids.add(rg.id)
+        // Same tightest pick as ownerOf: smallest span, tie → lower bottom, then id.
+        if (!tightest || spanOf(rg) < spanOf(tightest) ||
+            (spanOf(rg) === spanOf(tightest) && (rg.bottom < tightest.bottom ||
+              (rg.bottom === tightest.bottom && rg.id < tightest.id)))) tightest = rg
       }
-      if (ids.size < 2) continue
+      if (ids.size < 2 || !tightest) continue
       const key = unitKey(page, u.key, u.xLeft)
       if (seenContested.has(key)) continue
       seenContested.add(key)
-      contested.push({ key, page, x: u.xLeft, y: u.key })
+      contested.push({
+        key, page, x: u.xLeft, y: u.key,
+        tightestOwner: tightest.id,
+        tightestOwnerMultiRegion: (regionsByBlock.get(tightest.id)?.length ?? 1) > 1
+      })
     }
   }
 
@@ -567,12 +596,6 @@ export function binContentToBlocks(
   // ~nothing → it drops; a block that genuinely spans pages wins distinctive ink on
   // each page → all kept. This dissolves the float-only cleanRects + floatRenderPage.
   const { won, boxAcc: provisional } = assign(regionsByPage)
-  const regionsByBlock = new Map<string, Region[]>()
-  for (const arr of regionsByPage.values()) for (const rg of arr) {
-    const b = regionsByBlock.get(rg.id)
-    if (b) b.push(rg)
-    else regionsByBlock.set(rg.id, [rg])
-  }
   const phantom = new Set<Region>()
   for (const rgs of regionsByBlock.values()) {
     if (rgs.length <= 1) continue
