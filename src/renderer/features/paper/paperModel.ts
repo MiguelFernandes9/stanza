@@ -273,6 +273,11 @@ const BAND_EPS = 2
  *  all are kept. */
 const INK_KEEP_FRAC = 0.2
 
+/** A phantom-flagged cell is rescued as a genuine cross-page CONTINUATION only if it
+ *  won at least this much ink (~under one line) — a secondary guard so a zero-ink
+ *  coincidence at a page edge isn't mistaken for a block flowing across the break. */
+const MIN_CONTINUATION_INK = 6
+
 /** The document's body text-area vertical band `{top, bottom}` (PDF pt),
  *  inferred from the pdf.js text rows of EVERY page overlaid: the body is the
  *  single contiguous baseline cluster, while running heads and page-number
@@ -596,12 +601,54 @@ export function binContentToBlocks(
   // ~nothing → it drops; a block that genuinely spans pages wins distinctive ink on
   // each page → all kept. This dissolves the float-only cleanRects + floatRenderPage.
   const { won, boxAcc: provisional } = assign(regionsByPage)
+
+  // Per-page rendered content edges (first-line top / last-line bottom of each page,
+  // from the in-band rows) — the reference for "this cell sits at a page edge". The
+  // global content band and the post-filter contentTopByPage can't give it.
+  const pageTop = new Map<number, number>()
+  const pageBottom = new Map<number, number>()
+  for (const [page, rows] of rowsByPage) for (const r of rows) {
+    if (!inBand(r.baseline, r.baseline)) continue
+    const t = pageTop.get(page); if (t === undefined || r.yTop < t) pageTop.set(page, r.yTop)
+    const b = pageBottom.get(page); if (b === undefined || r.yBottom > b) pageBottom.set(page, r.yBottom)
+  }
+  // A small cell is a genuine CROSS-PAGE CONTINUATION (not a galley) when it forms an
+  // edge-to-edge pair with a sibling cell of the same block/column on the ADJACENT
+  // page — the upper cell reaches its page's content bottom and the lower cell starts
+  // at the next page's content top — and it won ≥ a line of real ink. Positions come
+  // from the assigned (rendered-row) box, not the coarse synctex region. A galley sits
+  // mid-page and/or wins ~0, so it fails this and is still dropped.
+  const accOf = (rg: Region): Acc | undefined => provisional.get(rg.id)?.get(`${rg.page}|${rg.col}`)
+  const atTop = (rg: Region): boolean => { const a = accOf(rg), t = pageTop.get(rg.page); return !!a && t !== undefined && a.y <= t + BAND_EPS }
+  const atBottom = (rg: Region): boolean => { const a = accOf(rg), b = pageBottom.get(rg.page); return !!a && b !== undefined && a.bottom >= b - BAND_EPS }
+  const sameCol = (a: Region, b: Region): boolean => a.col === b.col || a.col === 'full' || b.col === 'full'
+  // A continuation tail sits ALONE at the page edge; a float's source-galley overlaps
+  // the sibling block it landed on (it won that block's rows). So a cell whose region
+  // overlaps ANOTHER block's region (same page/col) is a galley, not a continuation.
+  const overlapsOther = (r: Region): boolean => {
+    for (const s of regionsByPage.get(r.page) ?? []) {
+      if (s.id === r.id || !sameCol(s, r)) continue
+      if (r.top < s.bottom + BAND_EPS && s.top < r.bottom + BAND_EPS) return true
+    }
+    return false
+  }
+  const isContinuation = (r: Region, rgs: Region[]): boolean => {
+    if ((won.get(r) ?? 0) < MIN_CONTINUATION_INK || overlapsOther(r)) return false
+    for (const s of rgs) {
+      if (s === r || !sameCol(s, r)) continue
+      if (s.page === r.page - 1 && atBottom(s) && atTop(r)) return true // r continues from s (above)
+      if (s.page === r.page + 1 && atTop(s) && atBottom(r)) return true // r flows down into s (below)
+    }
+    return false
+  }
+
   const phantom = new Set<Region>()
   for (const rgs of regionsByBlock.values()) {
     if (rgs.length <= 1) continue
     const max = Math.max(...rgs.map((r) => won.get(r) ?? 0))
     if (max <= 0) continue // won nothing anywhere → keep all (a box beats none)
-    for (const r of rgs) if ((won.get(r) ?? 0) < INK_KEEP_FRAC * max) phantom.add(r)
+    // Drop a low-ink cell UNLESS it's a genuine cross-page continuation of a sibling.
+    for (const r of rgs) if ((won.get(r) ?? 0) < INK_KEEP_FRAC * max && !isContinuation(r, rgs)) phantom.add(r)
   }
   // Pass 2 — only when a phantom was dropped (the common single-region case never
   // is): re-assign over the survivors so units off a dropped cell re-home to the

@@ -821,6 +821,46 @@ describe('binContentToBlocks — a multi-region (galley) owner IS overridden (Bu
   })
 })
 
+describe('binContentToBlocks — a small cross-page continuation tail keeps its box', () => {
+  // A definition spans page 2 (bulk) → page 3 (one trailing line). The phantom filter
+  // would drop the tiny page-3 cell (won ≪ 0.2× the bulk), but it is a GENUINE
+  // continuation — the page-2 cell reaches the page bottom and the page-3 cell starts
+  // at the page top, alone — so it must be kept (the block gets a box on both pages).
+  it('keeps the tail box on the next page', () => {
+    const rects = new Map<string, PdfRect[]>([
+      ['def#1', [prect(2, 72, 100, 400, 600), prect(3, 72, 64, 400, 22)]], // bulk p2 + tail p3
+      ['par#2', [prect(3, 72, 90, 400, 600)]] // the next block, below the tail on p3
+    ])
+    const rowsByPage = new Map<number, TextRow[]>([
+      [2, bodyRun(108, 698)], // the definition bulk, down to the page-2 content bottom
+      [3, [trow(68, 77, 72, 380), ...bodyRun(92, 688)]] // tail at the p3 top + par#2 below
+    ])
+    const { boxesById } = binContentToBlocks(rects, rowsByPage)
+    const def = boxesById.get('def#1')!
+    expect(def).toHaveLength(2) // bulk box + tail box (was: the tail was dropped)
+    expect(def.map((b) => b.page).sort()).toEqual([2, 3])
+    expect(def.find((b) => b.page === 3)!.height).toBeLessThan(18) // ~one line
+  })
+
+  it('still DROPS a mid-page galley over a sibling (a float source-site, FIG2)', () => {
+    // fig#1's source-galley sits on p1 over par#1 (winning its rows via the id tie-break)
+    // but RENDERS on p2. The p1 galley OVERLAPS par#1, so it is NOT a continuation and
+    // must be dropped → the figure has ONE box, on its render page.
+    const rects = new Map<string, PdfRect[]>([
+      ['fig#1', [prect(1, 150, 600, 300, 24), prect(2, 150, 73, 330, 183)]],
+      ['par#1', [prect(1, 90, 600, 432, 24)]]
+    ])
+    const rowsByPage = new Map<number, TextRow[]>([
+      [1, [trow(601, 612, 90, 522), trow(611, 622, 90, 522)]],
+      [2, [trow(190, 201, 159, 489), trow(245, 254, 200, 400)]]
+    ])
+    const graphics = new Map<number, GraphicBox[]>([[2, [{ yTop: 79, yBottom: 204, xLeft: 159, xRight: 489 }]]])
+    const fig = binContentToBlocks(rects, rowsByPage, graphics).boxesById.get('fig#1')!
+    expect(fig).toHaveLength(1)
+    expect(fig[0]!.page).toBe(2)
+  })
+})
+
 describe('cardAnchorTops — geometry-anchored rail cards (BUG-17)', () => {
   const geo = { height: 800, gap: 16 }
   const rects = new Map<string, PdfRect[]>([
