@@ -69,6 +69,17 @@ export function setWindowSpawner(fn: () => BrowserWindow): void {
   spawnWindow = fn
 }
 
+/** Read app-wide settings — index.ts's quit guard reads confirmBeforeQuit.
+ *  Returns {} before the store exists (pre-whenReady), which no quit precedes. */
+export function getGlobalSettings(): GlobalSettings {
+  return globalSettings?.get() ?? {}
+}
+
+/** Patch app-wide settings — the quit dialog persists "Don't ask again". */
+export function setGlobalSettings(patch: Partial<GlobalSettings>): void {
+  globalSettings?.set(patch)
+}
+
 /** Drop a window's session when it closes (index.ts wires win.on('closed')). */
 export function dropSession(webContentsId: number): void {
   fileWatchers.get(webContentsId)?.()
