@@ -90,7 +90,10 @@ function PreviewBody({ items, zoom }: { items: PreviewItem[]; zoom: number }): J
 
   useEffect(() => {
     let alive = true
-    const dpr = Math.min(typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1, 2)
+    // Oversample to at least 2× the display density so the marked render is
+    // crisp on retina even if devicePixelRatio reads low, and supersampled (not
+    // soft) on 1× displays. Capped so a 3× display doesn't blow up the canvas.
+    const dpr = Math.max(Math.min(typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1, 3), 2)
     void (async () => {
       const out: (Shot | { error: string })[] = []
       for (const item of items) {
@@ -131,9 +134,9 @@ function PreviewBody({ items, zoom }: { items: PreviewItem[]; zoom: number }): J
             <img
               key={i}
               src={s.url}
-              width={s.w}
-              height={s.h}
-              style={{ display: 'block', background: 'var(--paper-1)', border: '1px solid var(--border-default)', borderRadius: 4 }}
+              // Exact fractional CSS size (no rounding) so the high-res PNG maps
+              // 1:1 onto device pixels — no bilinear resample, as crisp as a canvas.
+              style={{ width: `${s.w}px`, height: `${s.h}px`, display: 'block', background: 'var(--paper-1)', border: '1px solid var(--border-default)', borderRadius: 4 }}
             />
           )
         )}
@@ -194,7 +197,8 @@ function trimCanvas(src: HTMLCanvasElement, ctx: CanvasRenderingContext2D, dpr: 
   const octx = out.getContext('2d')
   if (!octx) return null
   octx.putImageData(ctx.getImageData(minX, minY, w, h), 0, 0)
-  return { url: out.toDataURL('image/png'), w: Math.round(w / dpr), h: Math.round(h / dpr) }
+  // Exact (unrounded) CSS size: the w-px PNG shows in w/dpr CSS px → 1:1 device.
+  return { url: out.toDataURL('image/png'), w: w / dpr, h: h / dpr }
 }
 
 const clamp = (z: number): number => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z))
