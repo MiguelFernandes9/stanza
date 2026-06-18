@@ -42,6 +42,7 @@ const base = {
   onUpdate: vi.fn(),
   onSubmit: vi.fn(),
   onDismiss: vi.fn(),
+  onCollapse: vi.fn(),
   onResolve: vi.fn(),
   onOpenReview: vi.fn()
 }
@@ -75,5 +76,18 @@ describe('WholeDocRail', () => {
   it('renders nothing when there are no whole-doc tasks', () => {
     render(<WholeDocRail {...base} tasks={[]} />)
     expect(container.querySelector('[data-testid="whole-doc-rail"]')).toBeNull()
+  })
+
+  it('the open busy bubble X collapses (onCollapse), never dismisses', () => {
+    const onCollapse = vi.fn()
+    const onDismiss = vi.fn()
+    render(
+      <WholeDocRail {...base} tasks={[wholeDoc]} openIds={[1]} onCollapse={onCollapse} onDismiss={onDismiss} />
+    )
+    const x = container.querySelector('button[aria-label="Collapse"]')
+    expect(x).not.toBeNull() // busy/thinking now shows the header X
+    click(x!)
+    expect(onCollapse).toHaveBeenCalledWith(1)
+    expect(onDismiss).not.toHaveBeenCalled()
   })
 })
