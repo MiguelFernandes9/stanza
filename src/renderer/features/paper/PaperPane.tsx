@@ -591,6 +591,7 @@ export function PaperPane(props: Props): JSX.Element {
                           props.onDismissTask(t.id)
                           setOpenIds((s) => s.filter((x) => x !== t.id))
                         }}
+                        onCollapse={() => setOpenIds((s) => s.filter((x) => x !== t.id))}
                         onResolve={(accept) => props.onResolveTask(t.id, accept)}
                         onOpenReview={() => setReviewId(t.id)}
                       />
@@ -635,6 +636,7 @@ export function PaperPane(props: Props): JSX.Element {
           props.onDismissTask(taskId)
           setOpenIds((s) => s.filter((x) => x !== taskId))
         }}
+        onCollapse={(taskId) => setOpenIds((s) => s.filter((x) => x !== taskId))}
         onResolve={props.onResolveTask}
         onOpenReview={setReviewId}
       />

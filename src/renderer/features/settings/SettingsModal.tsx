@@ -221,6 +221,18 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
               </select>
             </Row>
           </Section>
+
+          {/* 5 — general [global] */}
+          <Section title="General" testid="section-general">
+            <Row label="Warn before quitting">
+              <input
+                aria-label="Warn before quitting"
+                type="checkbox"
+                checked={global.confirmBeforeQuit ?? true}
+                onChange={(e) => patchGlobal({ confirmBeforeQuit: e.target.checked })}
+              />
+            </Row>
+          </Section>
         </div>
       </div>
     </div>

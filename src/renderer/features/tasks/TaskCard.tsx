@@ -23,7 +23,13 @@ interface Props {
   onActivate: () => void
   onUpdate: (instruction: string) => void
   onSubmit: () => void
+  /** Close everything: discard the task (compose draft / drop / reject-on-review).
+   *  Wired to the header X for compose, and to the review Reject / noop Dismiss
+   *  buttons. */
   onDismiss: () => void
+  /** Non-destructive: fold the bubble back to its badge, leaving the task alive.
+   *  The header X uses this for busy/review/noop. */
+  onCollapse: () => void
   onResolve: (accept: boolean) => void
   onOpenReview: () => void
   refCb: (el: HTMLDivElement | null) => void
@@ -62,6 +68,7 @@ export function TaskCard({
   onUpdate,
   onSubmit,
   onDismiss,
+  onCollapse,
   onResolve,
   onOpenReview,
   refCb
@@ -187,11 +194,17 @@ export function TaskCard({
                   : 'Edit with Claude'}
           </span>
           <div style={{ flex: 1 }} />
-          {task.phase !== 'busy' && (
-            <IconButton size="sm" label="Dismiss" onClick={onDismiss}>
-              <X size={13} />
-            </IconButton>
-          )}
+          {/* Edit (compose) X discards the draft — closes everything. Every other
+              phase's X only collapses the bubble to its badge; the task lives on
+              (busy keeps editing, review keeps its proposal, noop keeps its note).
+              Removal for those stays on the explicit Reject/Dismiss buttons. */}
+          <IconButton
+            size="sm"
+            label={task.phase === 'compose' ? 'Dismiss' : 'Collapse'}
+            onClick={task.phase === 'compose' ? onDismiss : onCollapse}
+          >
+            <X size={13} />
+          </IconButton>
         </div>
 
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 5, marginBottom: 8 }}>
