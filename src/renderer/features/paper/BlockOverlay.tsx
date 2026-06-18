@@ -72,6 +72,7 @@ export function BlockOverlay({
 
   return (
     <div
+      data-block-id={block.id}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
       onClick={(e) => {

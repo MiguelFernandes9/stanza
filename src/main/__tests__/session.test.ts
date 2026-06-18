@@ -36,6 +36,43 @@ describe('DocumentSession', () => {
     expect(session.files).toBeDefined()
   })
 
+  test('opActive counts begin/end so overlapping op churn stays muted', () => {
+    const session = new DocumentSession(doc, new MockRunner(), store)
+    expect(session.opActive).toBe(false)
+    session.beginOp()
+    expect(session.opActive).toBe(true)
+    session.beginOp() // overlapping op
+    session.endOp()
+    expect(session.opActive).toBe(true) // still one op active
+    session.endOp()
+    expect(session.opActive).toBe(false)
+    session.endOp() // underflow is a no-op
+    expect(session.opActive).toBe(false)
+  })
+
+  test('runMainTreeExclusive serializes — each op waits for the previous to settle', async () => {
+    const session = new DocumentSession(doc, new MockRunner(), store)
+    const log: string[] = []
+    const task = (tag: string, ms: number) => () =>
+      new Promise<void>((resolve) => {
+        log.push(`start ${tag}`)
+        setTimeout(() => {
+          log.push(`end ${tag}`)
+          resolve()
+        }, ms)
+      })
+    const a = session.runMainTreeExclusive(task('A', 25)) // slower, started first
+    const b = session.runMainTreeExclusive(task('B', 1))
+    await Promise.all([a, b])
+    expect(log).toEqual(['start A', 'end A', 'start B', 'end B']) // B never overlaps A
+  })
+
+  test('a rejecting main-tree write does not wedge the chain', async () => {
+    const session = new DocumentSession(doc, new MockRunner(), store)
+    await expect(session.runMainTreeExclusive(() => Promise.reject(new Error('boom')))).rejects.toThrow('boom')
+    await expect(session.runMainTreeExclusive(() => Promise.resolve('ok'))).resolves.toBe('ok')
+  })
+
   test('starts no external-edit watcher and no compile on construction', () => {
     // Compile fires only on explicit user actions (⌘S / accept / ⌘R) — opening a
     // document wires the services but kicks off no background watcher or compile.

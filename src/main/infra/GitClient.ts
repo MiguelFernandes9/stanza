@@ -5,6 +5,14 @@ import type { ProcessRunner, ProcResult } from './ProcessRunner'
 /** Git's canonical empty tree — the diff base for a root commit (no parent). */
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 
+/** Stanza's own scratch files (preview snippet + chapter-scope compiles) are
+ *  written into the doc root for path resolution but must never be staged,
+ *  reported dirty, or cleaned by the proposal flow — otherwise a preview that's
+ *  compiling when `git add -A` runs leaks its snippet into the op branch's diff.
+ *  Excluding them at the git boundary makes them invisible regardless of whether
+ *  the doc's .gitignore lists them (existing docs may not). */
+const SCRATCH_EXCLUDE = ['--', '.', ':(exclude).stanza-snippet*', ':(exclude).stanza-scope*']
+
 /** Git plumbing for the DOCUMENT repo (the user's paper folder),
  *  built on ProcessRunner. Used by ReviewService for the
  *  proposal-branch flow: capture op → temp branch, accept → merge
@@ -32,13 +40,13 @@ export class GitClient {
   }
 
   async isClean(): Promise<boolean> {
-    const res = await this.must(['status', '--porcelain'])
+    const res = await this.must(['status', '--porcelain', ...SCRATCH_EXCLUDE])
     return res.stdout.trim() === ''
   }
 
   /** Modified + staged + untracked, relative paths. */
   async changedFiles(): Promise<string[]> {
-    const res = await this.must(['status', '--porcelain'])
+    const res = await this.must(['status', '--porcelain', ...SCRATCH_EXCLUDE])
     return res.stdout
       .split('\n')
       .filter((line) => line.trim() !== '')
@@ -64,7 +72,7 @@ export class GitClient {
   }
 
   async commitAll(subject: string): Promise<void> {
-    await this.must(['add', '-A'])
+    await this.must(['add', '-A', ...SCRATCH_EXCLUDE])
     await this.must(['commit', '-m', subject])
   }
 
@@ -101,6 +109,65 @@ export class GitClient {
 
   async switchBack(): Promise<void> {
     await this.must(['switch', '-'])
+  }
+
+  /** The current HEAD sha — the base each op's worktree syncs to. */
+  async head(): Promise<string> {
+    return (await this.must(['rev-parse', 'HEAD'])).stdout.trim()
+  }
+
+  /** Add a detached worktree at HEAD (shares this repo's .git). The doc's ops
+   *  run/edit THERE so the main tree is never touched mid-op (Accept never
+   *  waits). Persistent + reused across ops; named at capture, not here. */
+  async addWorktree(dir: string): Promise<void> {
+    await this.must(['worktree', 'add', '--detach', dir, 'HEAD'])
+  }
+
+  /** Remove a worktree dir + its admin entry. Force: a live op leaves edits. */
+  async removeWorktree(dir: string): Promise<void> {
+    await this.run(['worktree', 'remove', '--force', dir])
+  }
+
+  /** Clear admin entries for worktrees whose dir is gone (stale after a crash or
+   *  a tmp-dir wipe) so re-adding the same path doesn't hit "already registered". */
+  async pruneWorktrees(): Promise<void> {
+    await this.run(['worktree', 'prune'])
+  }
+
+  /** Linked-worktree paths (excludes the main worktree) — for reuse/prune. */
+  async listWorktrees(): Promise<string[]> {
+    const res = await this.run(['worktree', 'list', '--porcelain'])
+    if (res.code !== 0) return []
+    const main = (await this.run(['rev-parse', '--show-toplevel'])).stdout.trim()
+    return res.stdout
+      .split('\n')
+      .filter((l) => l.startsWith('worktree '))
+      .map((l) => l.slice('worktree '.length))
+      .filter((p) => {
+        try {
+          return realpathSync(p) !== realpathSync(main)
+        } catch {
+          return true // a vanished worktree path still needs pruning
+        }
+      })
+  }
+
+  /** A GitClient bound to a linked worktree dir, reusing every method here
+   *  (isClean, switchCreate, commitAll) against that tree. */
+  worktreeClient(dir: string): GitClient {
+    return new GitClient(this.runner, dir)
+  }
+
+  /** Hard-reset this (worktree) tree to `ref` — syncs the op worktree to the
+   *  doc's latest HEAD and discards any leftover edits before the next op. */
+  async resetHard(ref: string): Promise<void> {
+    await this.must(['reset', '--hard', ref])
+  }
+
+  /** Detach this worktree at `ref`, discarding local changes — frees the op
+   *  branch (so Accept can merge it) and readies the worktree for reuse. */
+  async checkoutDetach(ref: string): Promise<void> {
+    await this.must(['checkout', '--force', '--detach', ref])
   }
 
   /** Merge a proposal branch. On conflict: collect the conflicted
@@ -183,7 +250,7 @@ export class GitClient {
   }
 
   private async untrackedFiles(): Promise<string[]> {
-    const res = await this.must(['status', '--porcelain'])
+    const res = await this.must(['status', '--porcelain', ...SCRATCH_EXCLUDE])
     return res.stdout
       .split('\n')
       .filter((line) => line.startsWith('?? '))

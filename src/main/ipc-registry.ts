@@ -17,6 +17,7 @@ import type {
   InversePoint,
   IpcChannel,
   OpRecord,
+  PreviewRequest,
   RecentProject,
   ReviewDecision,
   ReviewProposal,
@@ -34,7 +35,6 @@ import { DefaultProcessRunner } from './infra/ProcessRunner'
 import { GitClient } from './infra/GitClient'
 import { Store, GlobalSettingsStore } from './infra/Store'
 import { appendTurns, patchTurnByOpId, upsertThread } from './threadStore'
-import { ClaudeService } from './services/ClaudeService'
 import { changedFilesInDiff } from './services/diffSpans'
 import { DocumentService } from './services/DocumentService'
 import { DocumentSession } from './session'
@@ -90,6 +90,7 @@ export function setGlobalSettings(patch: Partial<GlobalSettings>): void {
 export function dropSession(webContentsId: number): void {
   fileWatchers.get(webContentsId)?.()
   fileWatchers.delete(webContentsId)
+  sessions.get(webContentsId)?.dispose() // tear down the op worktree
   sessions.delete(webContentsId)
 }
 
@@ -112,7 +113,10 @@ export function registerIpcHandlers(): void {
   documents = new DocumentService({
     store,
     makeGit: (root) => new GitClient(runner, root),
-    primeSession: (doc, signal) => new ClaudeService(runner, store, doc).prime(signal),
+    // No eager prime at open: the op worktree doesn't exist yet, and Claude must
+    // be primed INSIDE it (its sandbox pins to the primed dir). The first op
+    // primes lazily in the worktree (it already emits a 'priming' status).
+    primeSession: () => Promise.resolve(),
   })
 
   ipcMain.handle(IpcChannels.documentOpen, async (event, root?: string) => {
@@ -208,9 +212,14 @@ export function registerIpcHandlers(): void {
     return doc ? doc.compiler.forward(span) : []
   })
 
-  ipcMain.handle(IpcChannels.claudeRun, (event, req: ClaudeRequest) =>
-    runClaudeOp(sessionFor(event), event.sender, req),
-  )
+  ipcMain.handle(IpcChannels.claudeRun, (event, req: ClaudeRequest) => {
+    const doc = sessionFor(event)
+    // No wide mutex: the op edits the doc's op worktree, not the user's tree, and
+    // ops serialize through ClaudeService's FIFO queue. Only the brief user-tree
+    // touch (prepare's wip-commit) is serialised, inside runClaudeOp. This is what
+    // lets Accept run without waiting behind an in-flight op (spec §11).
+    return runClaudeOp(doc, event.sender, req)
+  })
 
   ipcMain.handle(IpcChannels.claudeRunTurn, (event, req: ClaudeTurnRequest) =>
     runClaudeTurn(sessionFor(event), event.sender, req),
@@ -228,20 +237,22 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IpcChannels.reviewResolve, async (event, decision: ReviewDecision) => {
     const doc = sessionFor(event)
-    const resolution = await doc.review.resolve(decision)
+    // Narrow mutex: the merge mutates the USER's tree, serialised only with
+    // prepare's wip-commit (index.lock). It NEVER waits on a running op — ops
+    // edit the worktree, not this tree — which is what unblocks Accept (§11).
+    const resolution = await doc.runMainTreeExclusive(() => doc.review.resolve(decision))
+    doc.diffPreview.invalidate(decision.opId) // free the op's cached block previews
     if (resolution.committed || !decision.accept) {
       // An op belongs to EITHER the doc history (ops) or a persistent thread —
       // patch both; the non-owner is a no-op.
       patchOpRecord(doc.info.root, decision.opId, { accepted: decision.accept })
       patchThreadTurnAccepted(doc.info.root, decision.opId, decision.accept)
     }
-    // A committed accept merges Claude's branch into the working tree — Claude
-    // may have added sections/*.tex, dirs, or renamed files (runClaudeOp itself
-    // restored the tree clean; the files land HERE). Re-derive THIS window's
-    // session.info so document:projectBlocks parses the current texFiles, and
-    // hand a fresh DocumentInfo back when the file set changed (the renderer
-    // re-keys + reloads the sidebar/blocks — same contract as app file ops,
-    // BUG-53).
+    // A committed accept merges Claude's branch into the user's tree — Claude may
+    // have added sections/*.tex, dirs, or renamed files. Re-derive THIS window's
+    // session.info so document:projectBlocks parses the current texFiles, and hand
+    // a fresh DocumentInfo back when the file set changed (renderer re-keys +
+    // reloads the sidebar/blocks — same contract as app file ops, BUG-53).
     if (decision.accept && resolution.committed) {
       const before = doc.info
       const fresh = await documents.open(before.root)
@@ -255,11 +266,12 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IpcChannels.reviewList, (event) => sessionFor(event).review.list())
 
-  ipcMain.handle(IpcChannels.reviewFileAt, async (event, args: { opId: string; file: string }) => {
+  ipcMain.handle(IpcChannels.reviewPreview, async (event, req: PreviewRequest) => {
     const doc = sessionFor(event)
+    // Eager build (primed at capture) usually means this resolves from cache.
+    const results = await doc.diffPreview.get(req.opId)
     return {
-      before: await doc.git.show('HEAD', args.file),
-      after: await doc.git.show(`stanza/op-${args.opId}`, args.file),
+      items: results.map((r) => ('pdf' in r ? { pdf: r.pdf.toString('base64') } : { error: r.error })),
     }
   })
 
@@ -410,7 +422,9 @@ async function loadDoc(
 }
 
 function bindSession(wc: WebContents, info: DocumentInfo): void {
-  sessions.set(wc.id, new DocumentSession(info, runner, store))
+  const session = new DocumentSession(info, runner, store)
+  sessions.set(wc.id, session)
+  void session.ensureWorktree() // create/reuse the doc's op worktree (crash-safe)
   // Replace any prior watcher (re-opening a doc in the same window), then watch
   // the new root for external changes → tell this window to re-list its files.
   fileWatchers.get(wc.id)?.()
@@ -420,7 +434,10 @@ function bindSession(wc: WebContents, info: DocumentInfo): void {
       info.root,
       FILE_WATCH_SETTLE_MS,
       () => {
-        if (!wc.isDestroyed()) wc.send(IpcChannels.documentFilesChanged)
+        // Skip the app's OWN op-driven churn (the capture branch-dance rewrites
+        // then reverts the edited .tex) — firing here would loadBlocks and blink
+        // the proposal bubble. Genuine external edits (no op in flight) refresh.
+        if (!wc.isDestroyed() && !sessions.get(wc.id)?.opActive) wc.send(IpcChannels.documentFilesChanged)
       },
       sidebarWatchIgnore(outputPdfRel(info)),
     ),
@@ -450,80 +467,107 @@ function windowForRoot(root: string): BrowserWindow | undefined {
   return undefined
 }
 
-/** Diff-gated op pipeline (FR7): lock check → clean tree → arm watcher →
- *  run op → await file settle → capture to proposal branch → emit.
- *  The watcher is armed BEFORE the op so an edit that flushes after
- *  claude exits is still seen — a fixed grace lost that race and
- *  stranded edits uncommitted (B11.2 original design). */
+/** Diff-gated op pipeline (FR7, §11): lock check → wip-commit the user tree →
+ *  sync the op worktree to HEAD → arm watcher on it → run op THERE → await file
+ *  settle → capture the worktree onto a proposal branch → emit. The user's tree
+ *  is never touched, so Accept never waits on this. The watcher is armed BEFORE
+ *  the op so an edit that flushes after claude exits is still seen (B11.2). */
 async function runClaudeOp(
   doc: DocumentSession,
   wc: WebContents,
   req: ClaudeRequest,
 ): Promise<ClaudeResult> {
-  const { result, proposal } = await runWithCapture(doc, req, () =>
-    doc.claude.runOp(req, (status) => sendTo(wc, IpcChannels.claudeStatus, status)),
-  )
-  appendOpRecord(doc.info.root, {
-    opId: result.opId,
-    ts: new Date().toISOString(),
-    instruction: req.instruction,
-    note: result.note,
-    accepted: null,
-  })
-  // The proposal travels back on this return — the initiating renderer wires it
-  // into the busy task. Do NOT also broadcast review:proposal here: that
-  // duplicate raced op-started's opId and spawned a twin review card whose
-  // second accept hit an already-merged branch (BUG-18). The broadcast path is
-  // reserved for reEmitPendingProposals (open-time crash recovery).
-  return { opId: result.opId, note: result.note, proposal }
+  doc.review.assertSpansFree(req.spans)
+
+  // Mark the op active so the file watcher ignores the brief user-tree churn
+  // (accept merge / wip-commit) — the op's OWN edits land in the worktree and
+  // never churn this tree. Release a beat after the body so the settle fires muted.
+  doc.beginOp()
+  try {
+    // The whole worktree section is serialised (runOpExclusive): ops share ONE
+    // worktree, so a second op must not sync/clobber it mid-run. This never holds
+    // the user tree, so Accept (runMainTreeExclusive) still never waits on it.
+    return await doc.runOpExclusive(async () => {
+      // wip-commit manual edits (narrow user-tree mutex), then sync the worktree
+      // to that HEAD so the op forks from the latest accepted + manual state.
+      await doc.runMainTreeExclusive(() => doc.review.prepare())
+      await doc.ensureWorktree()
+      await doc.review.syncWorktree(doc.worktreeDir)
+
+      // Arm the settle watcher on the WORKTREE (where claude writes), so a flush
+      // after claude exits is still awaited. It only waits for writes to land — it
+      // never recompiles; compile fires on accept (docs/compile-triggers.md).
+      const watcher = armSettleWatcher(doc.worktreeDir, { quietMs: 400, capMs: 3000 })
+      let op: { opId: string; note: string }
+      try {
+        // claude:status is per-document → only the owning window. The op runs with
+        // cwd = the worktree (ClaudeService.workDir).
+        op = await doc.claude.runOp(req, (status) => sendTo(wc, IpcChannels.claudeStatus, status))
+        await watcher.settled() // wait for claude's writes to land (and stop)
+      } finally {
+        watcher.dispose()
+      }
+
+      const proposal = await doc.review.captureWorktree(doc.worktreeDir, op.opId, req.instruction, req.spans)
+      // Eager: start compiling every changed block's marked preview now, so opening
+      // Review is instant (the renders are cached by the time the user clicks).
+      if (proposal) doc.diffPreview.prime(proposal.opId, proposal.branch, proposal.blocks)
+      appendOpRecord(doc.info.root, {
+        opId: op.opId,
+        ts: new Date().toISOString(),
+        instruction: req.instruction,
+        note: op.note,
+        accepted: null,
+      })
+      // The proposal travels back on this return — the initiating renderer wires it
+      // into the busy task. Do NOT also broadcast review:proposal here: that
+      // duplicate raced op-started's opId and spawned a twin review card whose
+      // second accept hit an already-merged branch (BUG-18). The broadcast path is
+      // reserved for reEmitPendingProposals (open-time crash recovery).
+      return { opId: op.opId, note: op.note, proposal }
+    })
+  } finally {
+    setTimeout(() => doc.endOp(), FILE_WATCH_SETTLE_MS + 300)
+  }
 }
 
-/** A turn of a persistent conversation bubble. Same clean-tree → run → capture
- *  pipeline as a one-shot op, but on the THREAD's isolated session, and the
- *  transcript is persisted to `threads` (NOT `ops`) — so threads stay out of the
- *  ⌘J doc history and their empty-span turns never lock the doc session. */
+/** A turn of a persistent conversation bubble — the SAME worktree pipeline as
+ *  runClaudeOp, but on the THREAD's isolated session and persisted to `threads`
+ *  (not `ops`), so threads stay out of the ⌘J doc history and their empty-span
+ *  turns never lock the doc session. */
 async function runClaudeTurn(
   doc: DocumentSession,
   wc: WebContents,
   req: ClaudeTurnRequest,
 ): Promise<ClaudeTurnResult> {
   const claudeReq: ClaudeRequest = { instruction: req.instruction, spans: req.spans }
-  const { result, proposal } = await runWithCapture(doc, claudeReq, () =>
-    doc.claude.runThreadTurn(req.sessionId, claudeReq, (status) =>
-      sendTo(wc, IpcChannels.claudeStatus, status),
-    ),
-  )
-  persistThreadTurn(doc.info.root, req, result, proposal)
-  return { opId: result.opId, note: result.note, sessionId: result.sessionId, proposal }
-}
-
-/** The shared clean-tree → run → settle → capture scaffolding. `action` invokes
- *  the right ClaudeService method (op or thread turn) and returns its opId/note;
- *  the settle watcher and restore-on-failure are armed around it (B11.2). */
-async function runWithCapture<T extends { opId: string; note: string }>(
-  doc: DocumentSession,
-  req: ClaudeRequest,
-  action: () => Promise<T>,
-): Promise<{ result: T; proposal: ReviewProposal | null }> {
   doc.review.assertSpansFree(req.spans)
-  await doc.review.prepare()
-
-  // Arm the settle watcher BEFORE the op so an edit that flushes after claude
-  // exits is still awaited. It only waits for writes to land — never recompiles.
-  const watcher = armSettleWatcher(doc.info.root, { quietMs: 400, capMs: 3000 })
-  let result: T
+  doc.beginOp()
   try {
-    result = await action()
-    await watcher.settled()
-  } catch (err) {
-    await doc.git.restoreAll() // failed/timed-out op never leaves edits behind
-    throw err
-  } finally {
-    watcher.dispose()
-  }
+    return await doc.runOpExclusive(async () => {
+      await doc.runMainTreeExclusive(() => doc.review.prepare())
+      await doc.ensureWorktree()
+      await doc.review.syncWorktree(doc.worktreeDir)
 
-  const proposal = await doc.review.capture(result.opId, req.instruction, req.spans)
-  return { result, proposal }
+      const watcher = armSettleWatcher(doc.worktreeDir, { quietMs: 400, capMs: 3000 })
+      let turn: { opId: string; note: string; sessionId: string }
+      try {
+        turn = await doc.claude.runThreadTurn(req.sessionId, claudeReq, (status) =>
+          sendTo(wc, IpcChannels.claudeStatus, status),
+        )
+        await watcher.settled()
+      } finally {
+        watcher.dispose()
+      }
+
+      const proposal = await doc.review.captureWorktree(doc.worktreeDir, turn.opId, req.instruction, req.spans)
+      if (proposal) doc.diffPreview.prime(proposal.opId, proposal.branch, proposal.blocks)
+      persistThreadTurn(doc.info.root, req, turn, proposal)
+      return { opId: turn.opId, note: turn.note, sessionId: turn.sessionId, proposal }
+    })
+  } finally {
+    setTimeout(() => doc.endOp(), FILE_WATCH_SETTLE_MS + 300)
+  }
 }
 
 /** Append a user+agent turn to a thread record, refreshing its session id and

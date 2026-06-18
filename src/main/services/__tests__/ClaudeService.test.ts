@@ -68,8 +68,11 @@ describe('ClaudeService.runOp', () => {
     expect(prime.args[7]).toContain('Main file: main.tex')
 
     const op = runner.calls[1]!
+    expect(op.cwd).toBe('/proj') // op runs in the work dir (the doc's op worktree)
     expect(op.args.slice(0, 3)).toEqual(['-p', '--resume', prime.args[2]])
     expect(op.args.slice(3)).toEqual([
+      '--add-dir',
+      '/proj',
       '--output-format',
       'json',
       '--permission-mode',
@@ -77,6 +80,34 @@ describe('ClaudeService.runOp', () => {
       'Instruction: tighten the intro\nScope: whole document.\nApply the edits directly to the files. Reply with a one-paragraph summary.',
     ])
     expect(note).toBe('done')
+  })
+
+  test('ops run in a custom workDir (the op worktree), primed + resumed THERE', async () => {
+    const runner = new MockRunner(() => claudeJson('ok'))
+    const service = new ClaudeService(runner, store, doc, '/tmp/stanza-wt/abc')
+
+    await service.runOp({ instruction: 'x', spans: [] }, () => {})
+
+    expect(runner.calls).toHaveLength(2) // prime + op, both in the worktree
+    for (const call of runner.calls) {
+      expect(call.cwd).toBe('/tmp/stanza-wt/abc')
+      const addDir = call.args.indexOf('--add-dir')
+      expect(call.args[addDir + 1]).toBe('/tmp/stanza-wt/abc')
+    }
+    // session recorded as primed in the worktree (so resume only happens there)
+    expect(store.getProject('/proj').primedWorkdir).toBe('/tmp/stanza-wt/abc')
+  })
+
+  test('a session primed in a different dir is re-primed (sandbox is dir-pinned)', async () => {
+    store.setProject('/proj', { sessionId: 'old-doc-root-session', primedWorkdir: '/proj' })
+    const runner = new MockRunner(() => claudeJson('ok'))
+    const service = new ClaudeService(runner, store, doc, '/tmp/stanza-wt/abc') // different workDir
+
+    await service.runOp({ instruction: 'x', spans: [] }, () => {})
+
+    expect(runner.calls).toHaveLength(2) // re-primed in the worktree, then op
+    expect(runner.calls[0]!.args.slice(0, 2)).toEqual(['-p', '--session-id'])
+    expect(store.getProject('/proj').primedWorkdir).toBe('/tmp/stanza-wt/abc')
   })
 
   test('strips ANTHROPIC_API_KEY / AUTH_TOKEN so claude uses the subscription (BUG-29)', async () => {
@@ -107,7 +138,7 @@ describe('ClaudeService.runOp', () => {
   })
 
   test('a stored session id skips priming entirely (restart resume, FR8)', async () => {
-    store.setProject('/proj', { sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' })
+    store.setProject('/proj', { sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', primedWorkdir: '/proj' })
     const runner = new MockRunner(() => claudeJson('resumed'))
     const service = new ClaudeService(runner, store, doc)
 
@@ -122,7 +153,7 @@ describe('ClaudeService.runOp', () => {
   })
 
   test('span-scoped prompt lists each span', async () => {
-    store.setProject('/proj', { sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' })
+    store.setProject('/proj', { sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', primedWorkdir: '/proj' })
     const runner = new MockRunner(() => claudeJson('ok'))
     const service = new ClaudeService(runner, store, doc)
 
@@ -158,7 +189,7 @@ describe('ClaudeService.runOp', () => {
   })
 
   test('timeout emits failed and rejects; session stays in store', async () => {
-    store.setProject('/proj', { sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' })
+    store.setProject('/proj', { sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', primedWorkdir: '/proj' })
     const runner = new MockRunner(() => ({
       code: null,
       stdout: '',
@@ -178,7 +209,7 @@ describe('ClaudeService.runOp', () => {
   })
 
   test('ops serialize through a FIFO queue (v1, spec FR6)', async () => {
-    store.setProject('/proj', { sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' })
+    store.setProject('/proj', { sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', primedWorkdir: '/proj' })
     let release!: () => void
     const gate = new Promise<void>((resolve) => (release = resolve))
     const runner = new MockRunner(async (_spec, call) => {
@@ -235,7 +266,7 @@ describe('ClaudeService.runOp', () => {
 
   test('STANZA_CLAUDE_BIN overrides the claude binary (T6 mock harness)', async () => {
     vi.stubEnv('STANZA_CLAUDE_BIN', '/mocks/claude-mock.sh')
-    store.setProject('/proj', { sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' })
+    store.setProject('/proj', { sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', primedWorkdir: '/proj' })
     const runner = new MockRunner(() => claudeJson('ok'))
     const service = new ClaudeService(runner, store, doc)
 
@@ -298,7 +329,7 @@ describe('ClaudeService.runThreadTurn (persistent bubble)', () => {
   })
 
   test('thread turns share the queue with doc ops (serialize on one tree)', async () => {
-    store.setProject('/proj', { sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' })
+    store.setProject('/proj', { sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', primedWorkdir: '/proj' })
     let release!: () => void
     const gate = new Promise<void>((resolve) => (release = resolve))
     const runner = new MockRunner(async (_spec, call) => {

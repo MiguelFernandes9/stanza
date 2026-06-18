@@ -7,6 +7,11 @@ import type { CompileOptions, GlobalSettings } from '../../shared/ipc/settings'
 /** Everything Stanza persists about one project, keyed by its root. */
 export interface ProjectRecord {
   sessionId?: string
+  /** The dir the session was primed in (the doc's op worktree). A session can
+   *  only be resumed in the dir it was primed in — Claude's file sandbox is
+   *  pinned there — so a stored session whose `primedWorkdir` ≠ the current
+   *  worktree must be re-primed. */
+  primedWorkdir?: string
   ops?: OpRecord[]
   /** Persistent conversation bubbles ("Keep chat") — each its own session +
    *  transcript + block anchor, restored when the project reopens. */

@@ -4,6 +4,7 @@ import { ArrowUp, Check, FileText, GitCommitHorizontal, Sparkles, Undo2, X } fro
 import { Avatar, BlockTag, Button, DiffHunk, Kbd, StatusDot } from '@renderer/components'
 import type { BlockTagKind } from '@renderer/components'
 import type { ReviewProposal } from '@shared/ipc'
+import { summarizeBlocks } from '@shared/blocks/changes'
 
 export interface ChatMessage {
   role: 'user' | 'claude'
@@ -60,8 +61,14 @@ function ProposalBlock({ proposal, resolved, onResolve }: { proposal?: ReviewPro
     )
   }
   if (!proposal) return null
+  const summary = summarizeBlocks(proposal.blocks)
   return (
     <div style={{ marginTop: 11 }}>
+      {summary && (
+        <div style={{ font: 'var(--text-2xs)/1.4 var(--font-sans)', color: 'var(--ink-400)', marginBottom: 6 }}>
+          {summary}
+        </div>
+      )}
       <DiffHunk file={proposal.files[0]} diff={proposal.diff} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
         <Button size="sm" variant="primary" iconLeft={<Check size={14} />} onClick={() => onResolve(true)}>

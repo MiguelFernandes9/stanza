@@ -13,14 +13,19 @@ describe('mapRecents', () => {
     expect(out.map((r) => r.name)).toEqual(['newer-paper', 'older-paper'])
   })
 
-  it('maps hasSession from sessionId and carries blockCount only when present', () => {
-    const [primed, plain] = mapRecents([
-      ['/p/primed', rec({ lastOpened: '2026-02-01T00:00:00Z', sessionId: 'abc', blockCount: 7 })],
-      ['/p/plain', rec({ lastOpened: '2026-01-01T00:00:00Z' })],
+  it('maps hasSession from sessionId and surfaces lastOpened only when present', () => {
+    const [primed, undated] = mapRecents([
+      ['/p/primed', rec({ lastOpened: '2026-02-01T00:00:00Z', sessionId: 'abc' })],
+      ['/p/undated', rec({ sessionId: 'x' })],
     ])
-    expect(primed).toEqual({ root: '/p/primed', name: 'primed', hasSession: true, blockCount: 7 })
-    expect(plain).toEqual({ root: '/p/plain', name: 'plain', hasSession: false })
-    expect('blockCount' in plain).toBe(false)
+    expect(primed).toEqual({
+      root: '/p/primed',
+      name: 'primed',
+      hasSession: true,
+      lastOpened: '2026-02-01T00:00:00Z',
+    })
+    expect(undated).toEqual({ root: '/p/undated', name: 'undated', hasSession: true })
+    expect('lastOpened' in undated).toBe(false)
   })
 
   it('does not mutate the input entries', () => {

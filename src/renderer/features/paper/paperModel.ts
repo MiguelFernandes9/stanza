@@ -273,6 +273,11 @@ const BAND_EPS = 2
  *  all are kept. */
 const INK_KEEP_FRAC = 0.2
 
+/** A phantom-flagged cell is rescued as a genuine cross-page CONTINUATION only if it
+ *  won at least this much ink (~under one line) — a secondary guard so a zero-ink
+ *  coincidence at a page edge isn't mistaken for a block flowing across the break. */
+const MIN_CONTINUATION_INK = 6
+
 /** The document's body text-area vertical band `{top, bottom}` (PDF pt),
  *  inferred from the pdf.js text rows of EVERY page overlaid: the body is the
  *  single contiguous baseline cluster, while running heads and page-number
@@ -305,6 +310,27 @@ export function contentBand(rowsByPage: Map<number, TextRow[]>): { top: number; 
   return { top: clusters[lo]![0]!, bottom: clusters[hi]![clusters[hi]!.length - 1]! }
 }
 
+/** A rendered unit (text row / graphic) that falls inside the synctex regions of
+ *  TWO OR MORE different blocks — a galley collision (e.g. a list's `\begin`
+ *  forward-maps onto a figure's caption). Tightest-span geometry can't tell which
+ *  block truly drew it; the caller backward-maps `(page,x,y)` (`synctex edit`) to
+ *  the real source line and feeds the answer back as `forcedOwners`. `key` is the
+ *  unit's stable id (must match the binner's internal `unitKey`). */
+export interface ContestedUnit {
+  key: string
+  page: number
+  /** PDF pt, top-left (the row's left / baseline) — a valid `synctex edit` point. */
+  x: number
+  y: number
+  /** The block id tightest-span assigns this unit to (T). */
+  tightestOwner: string
+  /** Does T have ≥2 synctex regions? Only then may T be a galley that renders
+   *  elsewhere — so the caller backward-maps and overrides ONLY these. A
+   *  single-region T genuinely renders here; a disagreeing backward map there is a
+   *  synctex error (a float bbox overlapping a neighbour) and must be ignored. */
+  tightestOwnerMultiRegion: boolean
+}
+
 export interface BinnedContent {
   /** Per-page boxes per block, built from the rendered text rows. Each box
    *  carries its `col` (full/l/r); a block flowing across the column break has a
@@ -317,6 +343,9 @@ export interface BinnedContent {
   /** Per-page column geometry (gutter + bands) the boxes were binned against —
    *  Phase 2's two-rail layout reads this to place bubbles per column. */
   columnsByPage: Map<number, ColumnLayout>
+  /** Units inside ≥2 blocks' regions — the galley collisions the caller resolves
+   *  authoritatively via the synctex backward map (empty in the common case). */
+  contested: ContestedUnit[]
 }
 
 /** Build every block's box from what it RENDERED (glyph rows + graphic bboxes).
@@ -340,6 +369,12 @@ export interface BinnedContent {
  *     box covers graphic ∪ caption with no snap and no float exemption. A unit no
  *     region contains joins the nearest region above whose ink is CONTIGUOUS
  *     (within MAX_LINE_GAP of its growing box) — the wrapped lines synctex drops.
+ *     Tightest-span is ambiguous at a GALLEY COLLISION (a `\begin` forward-maps
+ *     onto another block's content, e.g. a list onto a figure's caption); those
+ *     units are reported in `contested`, and `forcedOwners` (unit key → block id,
+ *     from the caller's synctex BACKWARD map) overrides geometry to route each to
+ *     the block that truly drew it. Without `forcedOwners` the result is identical
+ *     to pure tightest-span — the override is purely additive.
  *
  *  3. KEEP / BOX: a block with cells on several (page, col) keeps only those that
  *     WON ≥ INK_KEEP_FRAC of its richest — a galley/phantom cell wins ~nothing (its
@@ -352,7 +387,8 @@ export interface BinnedContent {
 export function binContentToBlocks(
   rectsById: Map<string, PdfRect[]>,
   rowsByPage: Map<number, TextRow[]>,
-  graphicsByPage: Map<number, GraphicBox[]> = new Map()
+  graphicsByPage: Map<number, GraphicBox[]> = new Map(),
+  forcedOwners?: Map<string, string>
 ): BinnedContent {
   const band = contentBand(rowsByPage)
   const inBand = (yTop: number, yBottom: number): boolean =>
@@ -398,6 +434,73 @@ export function binContentToBlocks(
     }
   }
 
+  // Stable id for a rendered unit (page + rounded baseline/left) — shared by the
+  // contested scan and the forced-owner lookup so a backward-mapped answer keyed in
+  // the caller lands on the same unit here.
+  const unitKey = (page: number, key: number, xLeft: number): string => `${page}|${Math.round(key)}|${Math.round(xLeft)}`
+  const colOf = (layout: ColumnLayout | undefined, u: { yTop: number; yBottom: number; xLeft: number; xRight: number }): PdfCol =>
+    layout ? columnOf(layout, u) : 'full'
+  // A region can claim a unit when they share a column (or either is 'full') and
+  // overlap in x — a region never claims ink in another column.
+  const candidate = (rg: Region, col: PdfCol, xLeft: number, xRight: number): boolean =>
+    (rg.col === col || rg.col === 'full' || col === 'full') && xRight > rg.xLeft && xLeft < rg.xRight
+  // Every rendered unit on a page in sweep order (baseline / graphic-top), so the
+  // contiguity frontier grows as ink is added. Header/footer-margin rows dropped.
+  const unitsForPage = (page: number): { key: number; xLeft: number; yTop: number; xRight: number; yBottom: number }[] => {
+    const rows = (rowsByPage.get(page) ?? []).filter((r) => inBand(r.baseline, r.baseline))
+    const graphics = graphicsByPage.get(page) ?? []
+    return [
+      ...rows.map((r) => ({ key: r.baseline, xLeft: r.xLeft, yTop: r.yTop, xRight: r.xRight, yBottom: r.yBottom })),
+      ...graphics.map((g) => ({ key: g.yTop, xLeft: g.xLeft, yTop: g.yTop, xRight: g.xRight, yBottom: g.yBottom }))
+    ].sort((a, b) => a.key - b.key)
+  }
+
+  // A block's cells across pages/columns — lets the contested scan tell a galley
+  // (a block with ≥2 regions, one a spurious galley over another block) from a block
+  // that genuinely renders only here (a single region).
+  const regionsByBlock = new Map<string, Region[]>()
+  for (const arr of regionsByPage.values()) for (const rg of arr) {
+    const b = regionsByBlock.get(rg.id)
+    if (b) b.push(rg)
+    else regionsByBlock.set(rg.id, [rg])
+  }
+
+  // A unit inside ≥2 different blocks' regions is a GALLEY COLLISION: tightest-span
+  // can't tell which block drew it (a list's `\begin` maps onto a figure's caption).
+  // Report it WITH its tightest-span owner T (same smallest-span pick `ownerOf` makes)
+  // and whether T has ≥2 regions, so the caller backward-maps and overrides ONLY when
+  // T may be a galley. A single-region T is trusted (its disagreeing backward map is a
+  // synctex error). Common single-owner units aren't contested → binner unchanged.
+  const contested: ContestedUnit[] = []
+  const seenContested = new Set<string>()
+  const spanOf = (rg: Region): number => rg.bottom - rg.top
+  for (const [page, regions] of regionsByPage) {
+    const layout = columnsByPage.get(page)
+    for (const u of unitsForPage(page)) {
+      const col = colOf(layout, u)
+      const ids = new Set<string>()
+      let tightest: Region | null = null
+      for (const rg of regions) {
+        if (!candidate(rg, col, u.xLeft, u.xRight)) continue
+        if (u.key < rg.top - BAND_EPS || u.key > rg.bottom + BAND_EPS) continue
+        ids.add(rg.id)
+        // Same tightest pick as ownerOf: smallest span, tie → lower bottom, then id.
+        if (!tightest || spanOf(rg) < spanOf(tightest) ||
+            (spanOf(rg) === spanOf(tightest) && (rg.bottom < tightest.bottom ||
+              (rg.bottom === tightest.bottom && rg.id < tightest.id)))) tightest = rg
+      }
+      if (ids.size < 2 || !tightest) continue
+      const key = unitKey(page, u.key, u.xLeft)
+      if (seenContested.has(key)) continue
+      seenContested.add(key)
+      contested.push({
+        key, page, x: u.xLeft, y: u.key,
+        tightestOwner: tightest.id,
+        tightestOwnerMultiRegion: (regionsByBlock.get(tightest.id)?.length ?? 1) > 1
+      })
+    }
+  }
+
   // Assign every rendered unit to the region that most TIGHTLY contains it (the
   // block whose synctex extent ends soonest after the unit) — else, for a unit no
   // region contains, the nearest region above whose ink is CONTIGUOUS (within
@@ -425,26 +528,33 @@ export function binContentToBlocks(
     }
     for (const [page, regions] of active) {
       const layout = columnsByPage.get(page)
-      const rows = (rowsByPage.get(page) ?? []).filter((r) => inBand(r.baseline, r.baseline))
-      const graphics = graphicsByPage.get(page) ?? []
+      const units = unitsForPage(page)
 
       // A page with regions but no rendered ink → the coarse synctex region IS the
       // box, so a box is never lost (e.g. a page whose text layer failed to extract).
-      if (!rows.length && !graphics.length) {
+      if (!units.length) {
         for (const rg of regions) addUnit(rg, page, rg.xLeft, rg.top, rg.xRight, rg.bottom)
         continue
       }
 
-      const colOf = (u: { yTop: number; yBottom: number; xLeft: number; xRight: number }): PdfCol =>
-        layout ? columnOf(layout, u) : 'full'
-      // A region is a candidate for a unit when they share a column (or either is
-      // 'full') and overlap in x — so a region never claims ink in another column.
-      const candidate = (rg: Region, col: PdfCol, xLeft: number, xRight: number): boolean =>
-        (rg.col === col || rg.col === 'full' || col === 'full') && xRight > rg.xLeft && xLeft < rg.xRight
       const runningBottom = (rg: Region): number =>
         boxAcc.get(rg.id)?.get(`${page}|${rg.col}`)?.bottom ?? -Infinity
       const span = (rg: Region): number => rg.bottom - rg.top
       const ownerOf = (key: number, col: PdfCol, xLeft: number, xRight: number): Region | null => {
+        // A backward-mapped (authoritative) owner overrides geometry at a galley
+        // collision: route the unit to that block's region here — one that contains
+        // it, else the nearest — since the synctex edit map says this block drew it.
+        const forcedId = forcedOwners?.get(unitKey(page, key, xLeft))
+        if (forcedId) {
+          let pick: Region | null = null
+          for (const rg of regions) {
+            if (rg.id !== forcedId || !candidate(rg, col, xLeft, xRight)) continue
+            if (key >= rg.top - BAND_EPS && key <= rg.bottom + BAND_EPS) return rg
+            if (!pick || Math.abs(rg.top - key) < Math.abs(pick.top - key)) pick = rg
+          }
+          if (pick) return pick
+          // forced block has no region on this page/col (forward missed) → geometry.
+        }
         let inside: Region | null = null
         for (const rg of regions) {
           if (!candidate(rg, col, xLeft, xRight)) continue
@@ -474,14 +584,10 @@ export function binContentToBlocks(
         }
         return above
       }
-      // Sweep units in key (baseline / graphic-top) order so the contiguity frontier
-      // grows as ink is added.
-      const units = [
-        ...rows.map((r) => ({ key: r.baseline, xLeft: r.xLeft, yTop: r.yTop, xRight: r.xRight, yBottom: r.yBottom })),
-        ...graphics.map((g) => ({ key: g.yTop, xLeft: g.xLeft, yTop: g.yTop, xRight: g.xRight, yBottom: g.yBottom }))
-      ].sort((a, b) => a.key - b.key)
+      // Sweep `units` (already in baseline / graphic-top order) so the contiguity
+      // frontier grows as ink is added.
       for (const u of units) {
-        const o = ownerOf(u.key, colOf(u), u.xLeft, u.xRight)
+        const o = ownerOf(u.key, colOf(layout, u), u.xLeft, u.xRight)
         if (o) addUnit(o, page, u.xLeft, u.yTop, u.xRight, u.yBottom)
       }
     }
@@ -495,18 +601,54 @@ export function binContentToBlocks(
   // ~nothing → it drops; a block that genuinely spans pages wins distinctive ink on
   // each page → all kept. This dissolves the float-only cleanRects + floatRenderPage.
   const { won, boxAcc: provisional } = assign(regionsByPage)
-  const regionsByBlock = new Map<string, Region[]>()
-  for (const arr of regionsByPage.values()) for (const rg of arr) {
-    const b = regionsByBlock.get(rg.id)
-    if (b) b.push(rg)
-    else regionsByBlock.set(rg.id, [rg])
+
+  // Per-page rendered content edges (first-line top / last-line bottom of each page,
+  // from the in-band rows) — the reference for "this cell sits at a page edge". The
+  // global content band and the post-filter contentTopByPage can't give it.
+  const pageTop = new Map<number, number>()
+  const pageBottom = new Map<number, number>()
+  for (const [page, rows] of rowsByPage) for (const r of rows) {
+    if (!inBand(r.baseline, r.baseline)) continue
+    const t = pageTop.get(page); if (t === undefined || r.yTop < t) pageTop.set(page, r.yTop)
+    const b = pageBottom.get(page); if (b === undefined || r.yBottom > b) pageBottom.set(page, r.yBottom)
   }
+  // A small cell is a genuine CROSS-PAGE CONTINUATION (not a galley) when it forms an
+  // edge-to-edge pair with a sibling cell of the same block/column on the ADJACENT
+  // page — the upper cell reaches its page's content bottom and the lower cell starts
+  // at the next page's content top — and it won ≥ a line of real ink. Positions come
+  // from the assigned (rendered-row) box, not the coarse synctex region. A galley sits
+  // mid-page and/or wins ~0, so it fails this and is still dropped.
+  const accOf = (rg: Region): Acc | undefined => provisional.get(rg.id)?.get(`${rg.page}|${rg.col}`)
+  const atTop = (rg: Region): boolean => { const a = accOf(rg), t = pageTop.get(rg.page); return !!a && t !== undefined && a.y <= t + BAND_EPS }
+  const atBottom = (rg: Region): boolean => { const a = accOf(rg), b = pageBottom.get(rg.page); return !!a && b !== undefined && a.bottom >= b - BAND_EPS }
+  const sameCol = (a: Region, b: Region): boolean => a.col === b.col || a.col === 'full' || b.col === 'full'
+  // A continuation tail sits ALONE at the page edge; a float's source-galley overlaps
+  // the sibling block it landed on (it won that block's rows). So a cell whose region
+  // overlaps ANOTHER block's region (same page/col) is a galley, not a continuation.
+  const overlapsOther = (r: Region): boolean => {
+    for (const s of regionsByPage.get(r.page) ?? []) {
+      if (s.id === r.id || !sameCol(s, r)) continue
+      if (r.top < s.bottom + BAND_EPS && s.top < r.bottom + BAND_EPS) return true
+    }
+    return false
+  }
+  const isContinuation = (r: Region, rgs: Region[]): boolean => {
+    if ((won.get(r) ?? 0) < MIN_CONTINUATION_INK || overlapsOther(r)) return false
+    for (const s of rgs) {
+      if (s === r || !sameCol(s, r)) continue
+      if (s.page === r.page - 1 && atBottom(s) && atTop(r)) return true // r continues from s (above)
+      if (s.page === r.page + 1 && atTop(s) && atBottom(r)) return true // r flows down into s (below)
+    }
+    return false
+  }
+
   const phantom = new Set<Region>()
   for (const rgs of regionsByBlock.values()) {
     if (rgs.length <= 1) continue
     const max = Math.max(...rgs.map((r) => won.get(r) ?? 0))
     if (max <= 0) continue // won nothing anywhere → keep all (a box beats none)
-    for (const r of rgs) if ((won.get(r) ?? 0) < INK_KEEP_FRAC * max) phantom.add(r)
+    // Drop a low-ink cell UNLESS it's a genuine cross-page continuation of a sibling.
+    for (const r of rgs) if ((won.get(r) ?? 0) < INK_KEEP_FRAC * max && !isContinuation(r, rgs)) phantom.add(r)
   }
   // Pass 2 — only when a phantom was dropped (the common single-region case never
   // is): re-assign over the survivors so units off a dropped cell re-home to the
@@ -536,8 +678,13 @@ export function binContentToBlocks(
       const cur = contentTopByPage.get(b.page)
       if (cur === undefined || b.y < cur) contentTopByPage.set(b.page, b.y)
     }
-  return { boxesById, contentTopByPage, columnsByPage }
+  return { boxesById, contentTopByPage, columnsByPage, contested }
 }
+
+/** Environments whose `\begin` line RENDERS a sectioning heading ("Abstract",
+ *  "References") rather than a galley — so geometry must INCLUDE that line, else
+ *  the auto-heading sits in no block and the section's box misses its own title. */
+const HEADING_ENVS = new Set(['abstract', 'thebibliography', 'theindex'])
 
 /** Geometry query span for a block, excluding an environment's \begin/\end
  *  delimiter lines: they carry no visible content and forward-map to stray
@@ -545,13 +692,19 @@ export function binContentToBlocks(
  *  line, dragging the figure box bottom onto the paragraph below (BUG-21).
  *  Returns the interior span startLine+1..endLine-1 for an environment, or
  *  null (caller uses the full span) for a non-environment or a too-small
- *  interior. Only the geometry query narrows — the block's own span is
- *  unchanged, so taskSpans/Claude still see \begin..\end. */
+ *  interior. EXCEPTION: a HEADING_ENV's \begin line renders its title (Abstract /
+ *  References), so the span starts AT startLine to keep the heading in the box;
+ *  \end is still dropped (it has no visible content and galleys downward). Only
+ *  the geometry query narrows — the block's own span is unchanged, so
+ *  taskSpans/Claude still see \begin..\end. */
 export function environmentInteriorSpan(block: PageBlock): BlockSpan | null {
   if (block.kind !== 'environment') return null
-  // Skip leading invisible-macro lines (a \label maps onto the prose line above,
-  // M2-7); fall back to the line after \begin when the parser recorded none.
-  const startLine = block.contentStartLine ?? block.span.startLine + 1
+  // Heading envs: include the \begin line (it draws the title). Otherwise skip
+  // leading invisible-macro lines (a \label maps onto the prose line above, M2-7),
+  // falling back to the line after \begin when the parser recorded none.
+  const startLine = block.envName && HEADING_ENVS.has(block.envName)
+    ? block.span.startLine
+    : block.contentStartLine ?? block.span.startLine + 1
   const endLine = block.span.endLine - 1
   return endLine >= startLine ? { ...block.span, startLine, endLine } : null
 }
@@ -570,6 +723,26 @@ export async function blockGeometryRects(
     if (rects.length > 0) return rects
   }
   return forward(block.span)
+}
+
+/** The block whose source span TIGHTEST contains (file, line) — the authoritative
+ *  owner of a rendered unit, from the synctex BACKWARD map (`synctex edit`). Used to
+ *  resolve a galley collision: a contested unit (in ≥2 blocks' regions) backward-maps
+ *  to one source line, and the smallest-span block covering it truly drew it. A
+ *  section's span dwarfs the leaf inside it, so the leaf (figure, list, paragraph)
+ *  wins naturally — no kind gate. Returns the block id, or null if none covers it. */
+export function blockForSourceLine(
+  blocks: { id: string; span: BlockSpan }[],
+  file: string,
+  line: number
+): string | null {
+  let best: { id: string; size: number } | null = null
+  for (const b of blocks) {
+    if (b.span.file !== file || line < b.span.startLine || line > b.span.endLine) continue
+    const size = b.span.endLine - b.span.startLine
+    if (!best || size < best.size) best = { id: b.id, size }
+  }
+  return best?.id ?? null
 }
 
 /** Geometry-anchored ideal top (px, within the page-stack wrap) for each
