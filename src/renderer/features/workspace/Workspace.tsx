@@ -585,6 +585,12 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
     const task = state.tasks.find((t) => t.id === taskId)
     const instruction = (instructionOverride ?? task?.instruction ?? '').trim()
     if (!task || !instruction) return
+    // A "Keep chat" draft starts a conversation, not a one-shot op — its first
+    // Run goes through the thread path (its own session + transcript).
+    if (task.persistent) {
+      submitThreadTurn(taskId, instruction)
+      return
+    }
     if (instructionOverride) dispatch({ type: 'update-instruction', taskId, instruction })
     dispatch({ type: 'submit', taskId })
     runOp(taskId, instruction, taskSpans(task.blockIds, blocks))
