@@ -90,10 +90,11 @@ function PreviewBody({ items, zoom }: { items: PreviewItem[]; zoom: number }): J
 
   useEffect(() => {
     let alive = true
-    // Oversample to at least 2× the display density so the marked render is
-    // crisp on retina even if devicePixelRatio reads low, and supersampled (not
-    // soft) on 1× displays. Capped so a 3× display doesn't blow up the canvas.
-    const dpr = Math.max(Math.min(typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1, 3), 2)
+    // Integer oversample density (≥2, ≤3): render at this multiple of the page so
+    // the marked render is crisp on retina even if devicePixelRatio reads low, and
+    // supersampled (not soft) on 1× displays. Integer so the padded crop below has
+    // integer CSS dimensions (device-pixel-aligned → no sub-pixel paint resample).
+    const dpr = Math.min(Math.max(Math.ceil(typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1), 2), 3)
     void (async () => {
       const out: (Shot | { error: string })[] = []
       for (const item of items) {
@@ -191,14 +192,21 @@ function trimCanvas(src: HTMLCanvasElement, ctx: CanvasRenderingContext2D, dpr: 
   maxY = Math.min(height - 1, maxY + TRIM_PAD)
   const w = maxX - minX + 1
   const h = maxY - minY + 1
+  // Pad the crop up to a whole multiple of dpr so the CSS size (padW/dpr) is an
+  // INTEGER. A fractional CSS box (e.g. 411.5px, centered to a .25px offset) makes
+  // the browser bilinear-resample the raster onto the device grid → soft text;
+  // integer dimensions keep it grid-aligned and crisp.
+  const padW = Math.ceil(w / dpr) * dpr
+  const padH = Math.ceil(h / dpr) * dpr
   const out = document.createElement('canvas')
-  out.width = w
-  out.height = h
+  out.width = padW
+  out.height = padH
   const octx = out.getContext('2d')
   if (!octx) return null
+  octx.fillStyle = '#ffffff'
+  octx.fillRect(0, 0, padW, padH)
   octx.putImageData(ctx.getImageData(minX, minY, w, h), 0, 0)
-  // Exact (unrounded) CSS size: the w-px PNG shows in w/dpr CSS px → 1:1 device.
-  return { url: out.toDataURL('image/png'), w: w / dpr, h: h / dpr }
+  return { url: out.toDataURL('image/png'), w: padW / dpr, h: padH / dpr }
 }
 
 const clamp = (z: number): number => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z))

@@ -71,6 +71,10 @@ test('review opens on the Preview tab (marked latexdiff render) with a Changes d
   const overlay = page.getByTestId('review-overlay')
   await expect(overlay).toBeVisible()
   await expect(overlay.locator('img').first()).toBeVisible({ timeout: 30000 })
+  // Crispness guard: the render's CSS box is integer-sized (device-pixel-aligned)
+  // — a fractional box made the browser bilinear-resample the raster (soft text).
+  const box = await overlay.locator('img').first().boundingBox()
+  expect(Number.isInteger(box!.width) && Number.isInteger(box!.height)).toBe(true)
 
   // Zooming past the pane width must leave the preview horizontally scrollable
   // to BOTH edges (regression: flex-centering used to clip the overflow).
