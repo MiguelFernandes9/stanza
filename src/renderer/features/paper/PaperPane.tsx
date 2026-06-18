@@ -326,6 +326,27 @@ export function PaperPane(props: Props): JSX.Element {
     setTops((prev) => (JSON.stringify(prev) === JSON.stringify(stacked) ? prev : stacked))
   })
 
+  // F5: when a bubble opens, scroll it fully into horizontal view. The rail hangs
+  // off the page's right edge and is otherwise reachable only by manual scroll
+  // (BUG-46). Horizontal ONLY — the flash/outline effects own scrollTop; nudging
+  // it here reintroduced the slide jitter (M3-2). Each id is revealed once per
+  // open session (pruned on close, so reopening re-reveals); wait for tops[id] so
+  // the bubble is positioned before we measure it.
+  const revealedRef = useRef<Set<number>>(new Set())
+  useEffect(() => {
+    for (const id of [...revealedRef.current]) if (!openIds.includes(id)) revealedRef.current.delete(id)
+    const el = scrollRef.current
+    if (!el) return
+    for (const id of openIds) {
+      if (revealedRef.current.has(id) || tops[id] == null) continue
+      const bubble = cardEls.current[id]?.closest('[data-testid="rail-bubble"]') as HTMLElement | null
+      if (!bubble) continue
+      revealedRef.current.add(id)
+      const overflow = bubble.getBoundingClientRect().right - el.getBoundingClientRect().right
+      if (overflow > 0) el.scrollBy({ left: overflow + RAIL_GUTTER, behavior: 'smooth' })
+    }
+  }, [openIds, tops])
+
   const pageWidth = geo?.width ?? FALLBACK_PAGE_WIDTH
   const { pageRightX, railLeft, cW } = paneLayout(pageWidth)
   const slot = geo ? geo.height + geo.gap : 0
