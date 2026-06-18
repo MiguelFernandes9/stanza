@@ -9,6 +9,8 @@ describe('FillerPage', () => {
     const html = renderToStaticMarkup(<FillerPage state="running" errors={0} />)
     expect(html).toContain('Compiling')
     expect(html).not.toContain('Block-addressable')
+    // Minimal indicator: spinner + label only, no verbose subtitle.
+    expect(html).not.toContain('Rendering the document')
   })
 
   it('treats idle (first compile pending) as compiling', () => {
