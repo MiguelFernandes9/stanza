@@ -13,6 +13,6 @@ export function mapRecents(entries: [string, ProjectRecord][]): RecentProject[] 
       root,
       name: basename(root),
       hasSession: Boolean(record.sessionId),
-      ...(record.blockCount !== undefined ? { blockCount: record.blockCount } : {})
+      ...(record.lastOpened !== undefined ? { lastOpened: record.lastOpened } : {})
     }))
 }

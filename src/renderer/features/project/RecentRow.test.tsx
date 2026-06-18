@@ -33,7 +33,7 @@ const recent = (over: Partial<RecentProject> = {}): RecentProject => ({
   root: longPath,
   name: longName,
   hasSession: true,
-  blockCount: 12,
+  lastOpened: '2026-02-01T00:00:00Z',
   ...over
 })
 

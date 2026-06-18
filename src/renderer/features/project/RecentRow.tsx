@@ -3,6 +3,14 @@ import type { JSX } from 'react'
 import { ChevronRight, FileText, Folder } from 'lucide-react'
 import { Badge, StatusDot } from '@renderer/components'
 import type { RecentProject } from '@shared/ipc'
+import { relativeTime } from '../workspace/sidebarData'
+
+/** "opened 3h ago" / "opened just now" — the recents row's set-up detail. */
+function openedLabel(lastOpened?: string): string {
+  if (!lastOpened) return 'set up'
+  const t = relativeTime(lastOpened)
+  return t === 'now' ? 'opened just now' : `opened ${t} ago`
+}
 
 interface Props {
   recent: RecentProject
@@ -86,7 +94,7 @@ export function RecentRow({ recent, onOpen }: Props): JSX.Element {
         style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flex: '0 0 auto' }}
       >
         {primed ? (
-          <StatusDot tone="ok" label={`session · ${recent.blockCount ?? '–'} blocks`} />
+          <StatusDot tone="ok" label={openedLabel(recent.lastOpened)} />
         ) : (
           <span
             style={{
