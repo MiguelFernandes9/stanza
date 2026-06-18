@@ -54,6 +54,23 @@ const sessions = new Map<number, DocumentSession>()
  *  only refreshed on open or in-app file ops. Tree-only: it never recompiles
  *  (compile stays on explicit ⌘S/⌘R/accept, the M2-2 decision). */
 const fileWatchers = new Map<number, () => void>()
+/** Roots with a Claude op/turn in flight → suppress the tree watcher. A claude
+ *  op writes .tex files then `capture` reverts them; those INTERNAL events would
+ *  otherwise fire document:files-changed and make the renderer reparse blocks
+ *  mid-op (overlays flash + jump). Counted so serialized ops nest cleanly. */
+const opMutedRoots = new Map<string, number>()
+function muteTreeWatcher(root: string): void {
+  opMutedRoots.set(root, (opMutedRoots.get(root) ?? 0) + 1)
+}
+/** Unmute after a drain ≥ the watcher debounce so the post-capture revert burst
+ *  (debounced FILE_WATCH_SETTLE_MS later) is swallowed too, not just the op. */
+function unmuteTreeWatcher(root: string): void {
+  setTimeout(() => {
+    const n = (opMutedRoots.get(root) ?? 1) - 1
+    if (n <= 0) opMutedRoots.delete(root)
+    else opMutedRoots.set(root, n)
+  }, FILE_WATCH_SETTLE_MS + 150)
+}
 /** Debounce for the file-tree watcher — coalesce a burst (e.g. a folder move). */
 const FILE_WATCH_SETTLE_MS = 250
 let priming: AbortController | null = null
@@ -420,6 +437,9 @@ function bindSession(wc: WebContents, info: DocumentInfo): void {
       info.root,
       FILE_WATCH_SETTLE_MS,
       () => {
+        // Skip while a Claude op/turn churns this root — its writes+revert are
+        // internal, not an external edit the sidebar/blocks must follow.
+        if (opMutedRoots.has(info.root)) return
         if (!wc.isDestroyed()) wc.send(IpcChannels.documentFilesChanged)
       },
       sidebarWatchIgnore(outputPdfRel(info)),
@@ -506,24 +526,31 @@ async function runWithCapture<T extends { opId: string; note: string }>(
   action: () => Promise<T>,
 ): Promise<{ result: T; proposal: ReviewProposal | null }> {
   doc.review.assertSpansFree(req.spans)
-  await doc.review.prepare()
-
-  // Arm the settle watcher BEFORE the op so an edit that flushes after claude
-  // exits is still awaited. It only waits for writes to land — never recompiles.
-  const watcher = armSettleWatcher(doc.info.root, { quietMs: 400, capMs: 3000 })
-  let result: T
+  // Mute the tree watcher for the whole op (prepare + writes + capture revert)
+  // so its internal churn never reparses the renderer's blocks mid-op.
+  muteTreeWatcher(doc.info.root)
   try {
-    result = await action()
-    await watcher.settled()
-  } catch (err) {
-    await doc.git.restoreAll() // failed/timed-out op never leaves edits behind
-    throw err
-  } finally {
-    watcher.dispose()
-  }
+    await doc.review.prepare()
 
-  const proposal = await doc.review.capture(result.opId, req.instruction, req.spans)
-  return { result, proposal }
+    // Arm the settle watcher BEFORE the op so an edit that flushes after claude
+    // exits is still awaited. It only waits for writes to land — never recompiles.
+    const watcher = armSettleWatcher(doc.info.root, { quietMs: 400, capMs: 3000 })
+    let result: T
+    try {
+      result = await action()
+      await watcher.settled()
+    } catch (err) {
+      await doc.git.restoreAll() // failed/timed-out op never leaves edits behind
+      throw err
+    } finally {
+      watcher.dispose()
+    }
+
+    const proposal = await doc.review.capture(result.opId, req.instruction, req.spans)
+    return { result, proposal }
+  } finally {
+    unmuteTreeWatcher(doc.info.root)
+  }
 }
 
 /** Append a user+agent turn to a thread record, refreshing its session id and
