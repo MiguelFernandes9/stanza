@@ -59,7 +59,10 @@ export function ReviewOverlay({ proposal, note, blockTag, fetchPreview, onClose,
         data-testid="review-overlay"
         style={{
           width: 'min(1040px, 92vw)',
-          height: '88vh',
+          // Size to content (a small change → small window) with a floor so it
+          // never looks cramped and a ceiling so a big diff/render scrolls.
+          minHeight: 360,
+          maxHeight: '88vh',
           display: 'flex',
           flexDirection: 'column',
           background: 'var(--paper-1)',
@@ -89,9 +92,9 @@ export function ReviewOverlay({ proposal, note, blockTag, fetchPreview, onClose,
           </IconButton>
         </div>
 
-        <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+        <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex' }}>
           {tab === 'changes' ? (
-            <div style={{ flex: 1, overflow: 'auto', padding: 18 }}>
+            <div style={{ flex: 1, minWidth: 0, overflow: 'auto', padding: 18 }}>
               {note && <div style={{ font: 'var(--text-sm)/1.5 var(--font-sans)', color: 'var(--ink-600)', marginBottom: 14 }}>{note}</div>}
               <DiffView diff={proposal.diff} files={proposal.files} />
             </div>

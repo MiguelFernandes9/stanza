@@ -41,7 +41,7 @@ export function DiffPreviewPane({ opId, fetchPreview }: Props): JSX.Element {
 
   const ready = state.kind === 'ready' && state.items.length > 0
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, height: '100%' }}>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderBottom: '1px solid var(--border-faint)' }}>
         <span style={{ font: 'var(--weight-bold) var(--text-2xs)/1 var(--font-sans)', letterSpacing: 'var(--tracking-caps)', textTransform: 'uppercase', color: 'var(--ink-400)' }}>
           Preview
@@ -76,7 +76,7 @@ export function DiffPreviewPane({ opId, fetchPreview }: Props): JSX.Element {
 
 function Centered({ children }: { children: React.ReactNode }): JSX.Element {
   return (
-    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center', font: 'var(--text-sm)/1.5 var(--font-sans)', color: 'var(--ink-400)' }}>
+    <div style={{ flex: '1 1 auto', minHeight: 220, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center', font: 'var(--text-sm)/1.5 var(--font-sans)', color: 'var(--ink-400)' }}>
       {children}
     </div>
   )
@@ -118,7 +118,7 @@ function PreviewBody({ items, zoom }: { items: PreviewItem[]; zoom: number }): J
   }, [items, zoom])
 
   return (
-    <div data-testid="preview-scroll" style={{ flex: 1, overflow: 'auto', background: 'var(--surface-app)', padding: 16 }}>
+    <div data-testid="preview-scroll" style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto', background: 'var(--surface-app)', padding: 16 }}>
       {/* max-content + margin auto: centers when it fits, but collapses margins
           when wider/taller than the pane so scrolling reaches every edge. */}
       <div style={{ width: 'max-content', margin: '0 auto', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
