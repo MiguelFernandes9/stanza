@@ -397,4 +397,72 @@ describe('taskReducer — reanchor (BUG-33)', () => {
     expect(taskReducer(s, { type: 'reanchor', remap: {} })).toBe(s)
     expect(taskReducer(s, { type: 'reanchor', remap: { 'zzz#000000': 'yyy#000000' } })).toBe(s)
   })
+
+  it('reanchors a persistent thread-idle bubble (anchor must track the doc)', () => {
+    const s = withTasks([
+      { id: 1, blockIds: ['par2#bbbbbb'], instruction: '', phase: 'thread-idle', proposal: null, persistent: true }
+    ])
+    const out = taskReducer(s, { type: 'reanchor', remap: { 'par2#bbbbbb': 'par3#bbbbbb' } })
+    expect(out.tasks[0].blockIds).toEqual(['par3#bbbbbb'])
+  })
+})
+
+describe('taskReducer — persistent conversation bubbles', () => {
+  const composeTask = (): TaskState =>
+    run(
+      initialTaskState,
+      { type: 'toggle-block', ids: ['p1'], additive: false },
+      { type: 'update-instruction', taskId: 1, instruction: 'make it formal' }
+    )
+
+  it('toggle-persistent flips a compose draft, ignored once it is busy', () => {
+    let s = run(composeTask(), { type: 'toggle-persistent', taskId: 1 })
+    expect(s.tasks[0].persistent).toBe(true)
+    s = run(s, { type: 'toggle-persistent', taskId: 1 })
+    expect(s.tasks[0].persistent).toBe(false)
+    s = run(composeTask(), { type: 'submit', taskId: 1 }, { type: 'toggle-persistent', taskId: 1 })
+    expect(s.tasks[0].persistent).toBeFalsy()
+  })
+
+  it('full turn lifecycle keeps the bubble after accept (thread stays)', () => {
+    const userTurn = { role: 'user' as const, text: 'make it formal', ts: 't0' }
+    const agentTurn = { role: 'agent' as const, text: 'Done.', ts: 't1', opId: 'op-1', accepted: null }
+    let s = run(
+      composeTask(),
+      { type: 'toggle-persistent', taskId: 1 },
+      { type: 'add-user-turn', taskId: 1, turn: userTurn, threadId: 'th-1' }
+    )
+    expect(s.tasks[0]).toMatchObject({ phase: 'busy', persistent: true, threadId: 'th-1' })
+
+    s = run(s, { type: 'turn-result', taskId: 1, turn: agentTurn, proposal, sessionId: 'sess-1' })
+    expect(s.tasks[0]).toMatchObject({ phase: 'review', threadSessionId: 'sess-1' })
+    expect(s.tasks[0].proposal).toEqual(proposal)
+
+    s = run(s, { type: 'resolve-thread-turn', taskId: 1, accept: true })
+    expect(s.tasks).toHaveLength(1) // NOT removed (unlike a one-shot resolve)
+    expect(s.tasks[0].phase).toBe('thread-idle')
+    expect(s.tasks[0].proposal).toBeNull()
+    expect(s.tasks[0].turns!.find((t) => t.opId === 'op-1')!.accepted).toBe(true)
+  })
+
+  it('a question turn (no proposal) rests in thread-idle', () => {
+    const s = run(
+      composeTask(),
+      { type: 'toggle-persistent', taskId: 1 },
+      { type: 'add-user-turn', taskId: 1, turn: { role: 'user', text: 'q', ts: 't0' }, threadId: 'th-1' },
+      { type: 'turn-result', taskId: 1, turn: { role: 'agent', text: 'a', ts: 't1' }, proposal: null, sessionId: 'sess-1' }
+    )
+    expect(s.tasks[0].phase).toBe('thread-idle')
+    expect(s.tasks[0].turns).toHaveLength(2)
+  })
+
+  it('regression: a non-persistent task is still removed by resolve', () => {
+    const s = run(
+      composeTask(),
+      { type: 'submit', taskId: 1 },
+      { type: 'proposal', taskId: 1, proposal, note: 'n' },
+      { type: 'resolve', taskId: 1 }
+    )
+    expect(s.tasks).toHaveLength(0)
+  })
 })

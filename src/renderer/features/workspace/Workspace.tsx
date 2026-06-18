@@ -10,7 +10,8 @@ import type {
   DocumentInfo,
   FileEntry,
   FileMutationResult,
-  OpRecord
+  OpRecord,
+  ThreadTurn
 } from '@shared/ipc'
 import { ChatPane } from '../chat/ChatPane'
 import type { ChatMessage, ComposeChip } from '../chat/ChatPane'
@@ -451,7 +452,9 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
   const lockedFiles = useMemo(() => {
     const set = new Set<string>()
     for (const t of state.tasks) {
-      if (t.phase === 'busy' || t.phase === 'review') {
+      // Persistent threads own their block in any phase — its file stays locked
+      // so a rename can't move the doc out from under the next turn.
+      if (t.phase === 'busy' || t.phase === 'review' || t.persistent) {
         for (const span of taskSpans(t.blockIds, blocks)) set.add(span.file)
       }
     }
@@ -623,7 +626,10 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           })
           return
         }
-        dispatch({ type: 'resolve', taskId })
+        // A persistent thread stays open after resolve (keep chatting); a
+        // one-shot task is removed.
+        if (task.persistent) dispatch({ type: 'resolve-thread-turn', taskId, accept })
+        else dispatch({ type: 'resolve', taskId })
         loadOps()
         // Refresh stale editor buffers for the files this accept wrote to disk —
         // blocks/PDF/history already refresh off compile-ok; the open editor
@@ -665,6 +671,59 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
       case 'ignore':
         break // busy: mid-op, not dismissible
     }
+  }
+
+  // ── Persistent conversation bubbles ("Keep chat") ──────────────────────────
+  const toggleTaskPersistent = (taskId: number): void => dispatch({ type: 'toggle-persistent', taskId })
+
+  /** Send one turn of a persistent thread on its OWN session. The thread is born
+   *  (threadId) on its first turn; later turns + restored threads resume by
+   *  threadSessionId. An edit turn comes back with a proposal (review); a
+   *  question turn with just text (thread-idle). */
+  const submitThreadTurn = (taskId: number, text: string): void => {
+    const task = state.tasks.find((t) => t.id === taskId)
+    const instruction = text.trim()
+    if (!task || !instruction) return
+    const threadId = task.threadId ?? crypto.randomUUID()
+    dispatch({
+      type: 'add-user-turn',
+      taskId,
+      turn: { role: 'user', text: instruction, ts: new Date().toISOString() },
+      threadId
+    })
+    void client
+      .claudeRunTurn({
+        threadId,
+        sessionId: task.threadSessionId ?? null,
+        instruction,
+        spans: taskSpans(task.blockIds, blocks),
+        blockIds: task.blockIds
+      })
+      .then(
+        (res) => {
+          const agentTurn: ThreadTurn = {
+            role: 'agent',
+            text: res.note,
+            ts: new Date().toISOString(),
+            ...(res.proposal ? { opId: res.opId, accepted: null } : {})
+          }
+          dispatch({ type: 'turn-result', taskId, turn: agentTurn, proposal: res.proposal, sessionId: res.sessionId })
+          if (!chatOpen) setUnreadNotes((n) => n + 1)
+        },
+        (err: unknown) =>
+          dispatch({ type: 'turn-failed', taskId, error: err instanceof Error ? err.message : String(err) })
+      )
+  }
+
+  const deleteThread = (taskId: number): void => {
+    const task = state.tasks.find((t) => t.id === taskId)
+    if (!task) return
+    // A pending proposal owns a backend op branch + lock — reject it so both are
+    // freed (BUG-42) before the bubble goes. (Persisted-record cleanup on disk
+    // lands with restore in Phase 3.)
+    const opId = task.proposal?.opId ?? task.opId
+    if (task.phase === 'review' && opId) void client.reviewResolve({ opId, accept: false }).catch(() => undefined)
+    dispatch({ type: 'dismiss', taskId })
   }
 
   const projectName = doc.root.split('/').pop() ?? doc.root
@@ -831,6 +890,9 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           onSubmitTask={submitTask}
           onDismissTask={dismissTask}
           onResolveTask={resolveTask}
+          onTogglePersistent={toggleTaskPersistent}
+          onSubmitThreadTurn={submitThreadTurn}
+          onDeleteThread={deleteThread}
           onView={(view) => dispatch({ type: 'set-view', view })}
         />
         {chatOpen && (

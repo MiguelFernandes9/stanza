@@ -43,6 +43,7 @@ const handlers = () => ({
   onSubmit: vi.fn(),
   onDismiss: vi.fn(),
   onCollapse: vi.fn(),
+  onTogglePersistent: vi.fn(),
   onResolve: vi.fn(),
   onOpenReview: vi.fn(),
   refCb: vi.fn()

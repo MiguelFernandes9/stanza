@@ -1,4 +1,5 @@
-import type { ReviewProposal } from '../../../shared/ipc'
+import type { ReviewProposal, ThreadTurn } from '../../../shared/ipc'
+import { withResolvedTurn, withTurnError, withTurnResult, withUserTurn } from './taskStore.threads'
 
 /** Margin-rail task model — design "Task model": every edit is a task
  *  rendered as a card; phases compose → busy → review; accept/reject
@@ -6,9 +7,13 @@ import type { ReviewProposal } from '../../../shared/ipc'
  *  out-of-span, or made no changes) lands in the terminal `noop` phase so
  *  its note is visible on the card instead of vanishing. Blocks owned by a
  *  busy/review task are locked (UI mirror of the backend SPANS_LOCKED
- *  check); noop holds its blocks but does not lock them. */
+ *  check); noop holds its blocks but does not lock them.
+ *
+ *  A `persistent` task ("Keep chat") is a multi-turn conversation bubble: it
+ *  carries a `turns` transcript + its own thread session, rests in `thread-idle`
+ *  between turns, and is never removed on resolve. See taskStore.threads.ts. */
 
-export type TaskPhase = 'compose' | 'busy' | 'review' | 'noop'
+export type TaskPhase = 'compose' | 'busy' | 'review' | 'noop' | 'thread-idle'
 export type PaneView = 'read' | 'select'
 
 export interface EditTask {
@@ -23,6 +28,14 @@ export interface EditTask {
   note?: string
   /** Last op error (task returned to compose). */
   error?: string
+  /** "Keep chat": this task is a persistent multi-turn conversation bubble. */
+  persistent?: boolean
+  /** Stable id for the persisted thread record (set on the first turn). */
+  threadId?: string
+  /** The thread's own Claude session — set once the first turn primes it. */
+  threadSessionId?: string
+  /** The conversation transcript (persistent tasks only). */
+  turns?: ThreadTurn[]
 }
 
 export interface TaskState {
@@ -66,6 +79,12 @@ export type TaskAction =
   | { type: 'set-adding'; adding: boolean }
   | { type: 'set-view'; view: PaneView }
   | { type: 'toggle-view' }
+  // Persistent conversation bubbles ("Keep chat") — see taskStore.threads.ts.
+  | { type: 'toggle-persistent'; taskId: number }
+  | { type: 'add-user-turn'; taskId: number; turn: ThreadTurn; threadId: string }
+  | { type: 'turn-result'; taskId: number; turn: ThreadTurn; proposal: ReviewProposal | null; sessionId: string }
+  | { type: 'turn-failed'; taskId: number; error: string }
+  | { type: 'resolve-thread-turn'; taskId: number; accept: boolean }
 
 const patchTask = (s: TaskState, id: number, patch: Partial<EditTask>): TaskState => ({
   ...s,
@@ -206,7 +225,10 @@ export function taskReducer(s: TaskState, a: TaskAction): TaskState {
       // Crash recovery / re-emitted pending proposals (FR7): attach to the
       // owning task when present, else surface an unanchored review card.
       const existing = s.tasks.find(
-        (t) => t.opId === a.proposal.opId || t.proposal?.opId === a.proposal.opId
+        (t) =>
+          t.opId === a.proposal.opId ||
+          t.proposal?.opId === a.proposal.opId ||
+          (t.turns?.some((turn) => turn.opId === a.proposal.opId) ?? false)
       )
       if (existing) return patchTask(s, existing.id, { phase: 'review', proposal: a.proposal })
       const id = s.nextId
@@ -235,7 +257,9 @@ export function taskReducer(s: TaskState, a: TaskAction): TaskState {
       const { remap } = a
       let changed = false
       const tasks = s.tasks.map((t) => {
-        if (t.phase !== 'busy' && t.phase !== 'review') return t
+        // Persistent threads anchor in any phase (thread-idle included) so the
+        // bubble keeps tracking its block across recompiles, like busy/review.
+        if (t.phase !== 'busy' && t.phase !== 'review' && !t.persistent) return t
         if (!t.blockIds.some((id) => remap[id])) return t
         changed = true
         return { ...t, blockIds: t.blockIds.map((id) => remap[id] ?? id) }
@@ -257,5 +281,34 @@ export function taskReducer(s: TaskState, a: TaskAction): TaskState {
       return applyView(s, a.view)
     case 'toggle-view':
       return applyView(s, s.view === 'read' ? 'select' : 'read')
+    case 'toggle-persistent': {
+      // Only a compose draft can opt in/out — once it has turns it's committed.
+      const t = s.tasks.find((x) => x.id === a.taskId)
+      if (!t || t.phase !== 'compose') return s
+      return patchTask(s, a.taskId, { persistent: !t.persistent })
+    }
+    case 'add-user-turn': {
+      const t = s.tasks.find((x) => x.id === a.taskId)
+      if (!t) return s
+      return { ...patchTask(s, a.taskId, withUserTurn(t, a.turn, a.threadId)), activeTask: a.taskId }
+    }
+    case 'turn-result': {
+      const t = s.tasks.find((x) => x.id === a.taskId)
+      if (!t) return s
+      return {
+        ...patchTask(s, a.taskId, withTurnResult(t, a.turn, a.proposal, a.sessionId)),
+        activeTask: a.taskId,
+      }
+    }
+    case 'turn-failed': {
+      const t = s.tasks.find((x) => x.id === a.taskId)
+      if (!t) return s
+      return patchTask(s, a.taskId, withTurnError(t, a.error))
+    }
+    case 'resolve-thread-turn': {
+      const t = s.tasks.find((x) => x.id === a.taskId)
+      if (!t) return s
+      return patchTask(s, a.taskId, withResolvedTurn(t, a.accept))
+    }
   }
 }

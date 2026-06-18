@@ -58,16 +58,16 @@ export function computeReanchor(
 }
 
 /** Re-anchor map for the pending tasks against a freshly reparsed tree. Only
- *  busy/review tasks hold a locked anchor that must survive a reparse; compose
- *  drafts follow the live selection and noop is terminal. Empty when nothing is
- *  pending. */
+ *  busy/review tasks (and persistent thread bubbles, in any phase) hold a locked
+ *  anchor that must survive a reparse; compose drafts follow the live selection
+ *  and noop is terminal. Empty when nothing is pending. */
 export function pendingRemap(
   oldRoots: BlockNode[],
   newRoots: BlockNode[],
   tasks: EditTask[]
 ): Record<string, string> {
   const staleIds = tasks
-    .filter((t) => t.phase === 'busy' || t.phase === 'review')
+    .filter((t) => t.phase === 'busy' || t.phase === 'review' || t.persistent)
     .flatMap((t) => t.blockIds)
   return staleIds.length ? computeReanchor(oldRoots, newRoots, staleIds) : {}
 }

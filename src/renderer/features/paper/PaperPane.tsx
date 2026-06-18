@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { JSX } from 'react'
-import { Check, CircleSlash, PenLine, Sparkles } from 'lucide-react'
+import { Check, CircleSlash, MessagesSquare, PenLine, Sparkles } from 'lucide-react'
 import { client } from '@renderer/lib/client'
 import type { CompileState } from '@renderer/components'
 import type { BlockSpan, PdfRect } from '@shared/ipc'
@@ -10,6 +10,7 @@ import { PdfPageStack } from '../pdf/PdfPageStack'
 import type { PageGeometry } from '../pdf/PdfPageStack'
 import { ReviewOverlay } from '../review/ReviewOverlay'
 import { blockLabel, TaskCard, tagKind } from '../tasks/TaskCard'
+import { ThreadCard } from '../tasks/ThreadCard'
 import { isWholeDocTask } from '../tasks/taskStore'
 import type { PaneView, TaskPhase, TaskState } from '../tasks/taskStore'
 import { BlockOverlay } from './BlockOverlay'
@@ -63,6 +64,11 @@ interface Props {
   onSubmitTask: (taskId: number) => void
   onDismissTask: (taskId: number) => void
   onResolveTask: (taskId: number, accept: boolean) => void
+  /** Persistent bubbles ("Keep chat"): toggle on a draft, send a follow-up
+   *  turn, or delete the whole thread. */
+  onTogglePersistent: (taskId: number) => void
+  onSubmitThreadTurn: (taskId: number, text: string) => void
+  onDeleteThread: (taskId: number) => void
   onView: (view: PaneView) => void
 }
 
@@ -399,7 +405,15 @@ export function PaperPane(props: Props): JSX.Element {
   }
 
   const badgeLabel = (phase: TaskPhase): string =>
-    phase === 'review' ? 'Proposal ready' : phase === 'busy' ? 'Editing…' : phase === 'noop' ? 'No changes' : 'Draft edit'
+    phase === 'review'
+      ? 'Proposal ready'
+      : phase === 'busy'
+        ? 'Editing…'
+        : phase === 'noop'
+          ? 'No changes'
+          : phase === 'thread-idle'
+            ? 'Conversation'
+            : 'Draft edit'
 
   return (
     <div style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: 'var(--surface-canvas)' }}>
@@ -510,7 +524,16 @@ export function PaperPane(props: Props): JSX.Element {
                   const anchor = anchorTops[t.id]
                   if (anchor == null) return null // hide until geometry resolves (BUG-32)
                   const tone = phaseTone(t.phase)
-                  const Icon = t.phase === 'review' ? Check : t.phase === 'busy' ? Sparkles : t.phase === 'noop' ? CircleSlash : PenLine
+                  const Icon =
+                    t.phase === 'review'
+                      ? Check
+                      : t.phase === 'busy'
+                        ? Sparkles
+                        : t.phase === 'noop'
+                          ? CircleSlash
+                          : t.phase === 'thread-idle'
+                            ? MessagesSquare
+                            : PenLine
                   const isOpen = openIds.includes(t.id)
                   const label = badgeLabel(t.phase)
                   return (
@@ -573,28 +596,48 @@ export function PaperPane(props: Props): JSX.Element {
                         transition: 'top var(--dur-base, 200ms) var(--ease-out)'
                       }}
                     >
-                      <TaskCard
-                        task={t}
-                        blocks={blocksOf(t.blockIds)}
-                        expanded
-                        side="right"
-                        adding={state.adding}
-                        onToggleAdding={props.onToggleAdding}
-                        onRemoveBlock={(bid) => props.onRemoveBlock(t.id, bid)}
-                        onActivate={() => props.onActivateTask(t.id)}
-                        refCb={(el) => {
-                          cardEls.current[t.id] = el
-                        }}
-                        onUpdate={(instruction) => props.onUpdateInstruction(t.id, instruction)}
-                        onSubmit={() => props.onSubmitTask(t.id)}
-                        onDismiss={() => {
-                          props.onDismissTask(t.id)
-                          setOpenIds((s) => s.filter((x) => x !== t.id))
-                        }}
-                        onCollapse={() => setOpenIds((s) => s.filter((x) => x !== t.id))}
-                        onResolve={(accept) => props.onResolveTask(t.id, accept)}
-                        onOpenReview={() => setReviewId(t.id)}
-                      />
+                      {t.persistent && t.phase !== 'compose' ? (
+                        <ThreadCard
+                          task={t}
+                          blocks={blocksOf(t.blockIds)}
+                          side="right"
+                          refCb={(el) => {
+                            cardEls.current[t.id] = el
+                          }}
+                          onSubmitTurn={(text) => props.onSubmitThreadTurn(t.id, text)}
+                          onResolve={(accept) => props.onResolveTask(t.id, accept)}
+                          onCollapse={() => setOpenIds((s) => s.filter((x) => x !== t.id))}
+                          onDelete={() => {
+                            props.onDeleteThread(t.id)
+                            setOpenIds((s) => s.filter((x) => x !== t.id))
+                          }}
+                          onOpenReview={() => setReviewId(t.id)}
+                        />
+                      ) : (
+                        <TaskCard
+                          task={t}
+                          blocks={blocksOf(t.blockIds)}
+                          expanded
+                          side="right"
+                          adding={state.adding}
+                          onToggleAdding={props.onToggleAdding}
+                          onRemoveBlock={(bid) => props.onRemoveBlock(t.id, bid)}
+                          onActivate={() => props.onActivateTask(t.id)}
+                          refCb={(el) => {
+                            cardEls.current[t.id] = el
+                          }}
+                          onUpdate={(instruction) => props.onUpdateInstruction(t.id, instruction)}
+                          onSubmit={() => props.onSubmitTask(t.id)}
+                          onDismiss={() => {
+                            props.onDismissTask(t.id)
+                            setOpenIds((s) => s.filter((x) => x !== t.id))
+                          }}
+                          onCollapse={() => setOpenIds((s) => s.filter((x) => x !== t.id))}
+                          onTogglePersistent={() => props.onTogglePersistent(t.id)}
+                          onResolve={(accept) => props.onResolveTask(t.id, accept)}
+                          onOpenReview={() => setReviewId(t.id)}
+                        />
+                      )}
                     </div>
                   )
                 })}
