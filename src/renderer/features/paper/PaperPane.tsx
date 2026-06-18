@@ -16,6 +16,7 @@ import { BlockOverlay } from './BlockOverlay'
 import { WholeDocRail } from './WholeDocRail'
 import { FillerPage } from './FillerPage'
 import { PaperToolbar } from './PaperToolbar'
+import { useMarqueeSelect } from './useMarqueeSelect'
 import { binContentToBlocks, blockGeometryRects, cardAnchorTops, combinedSpanLabel, expandIds, isMathEnvName, isTightAbove, spanLabel, washBoxes } from './paperModel'
 import type { BlockMark, PageBlock } from './paperModel'
 import type { ColumnLayout } from './columnLayout'
@@ -56,6 +57,8 @@ interface Props {
   /** Synctex-forward fallback when a block's geometry box isn't computed yet. */
   onForwardSearch: (line: number) => void
   onToggleBlock: (id: string, additive: boolean) => void
+  /** Marquee (rubber-band) drag → select every covered block at once. */
+  onSelectBlocks: (ids: string[], additive: boolean) => void
   onActivateTask: (taskId: number) => void
   onToggleAdding: () => void
   onRemoveBlock: (taskId: number, blockId: string) => void
@@ -79,6 +82,13 @@ export function PaperPane(props: Props): JSX.Element {
   const [zoom, setZoom] = useState(1.5)
   const [geo, setGeo] = useState<PageGeometry | null>(null)
   const [numPages, setNumPages] = useState(0)
+  // Marquee multi-select: drag a rectangle in Select mode to grab every block
+  // it touches (hit-tests the rendered overlays, so zoom/page-spanning is free).
+  const { onPointerDown: onMarqueeDown, marquee } = useMarqueeSelect({
+    enabled: state.view === 'select',
+    adding: state.adding,
+    onSelect: props.onSelectBlocks
+  })
   // Per-page boxes per block: a block straddling a page break has a box on
   // each page it touches, so neither page's wash drops out (BUG-16).
   const [blockRects, setBlockRects] = useState<Map<string, PdfRect[]>>(new Map())
@@ -418,6 +428,7 @@ export function PaperPane(props: Props): JSX.Element {
       <div
         ref={scrollRef}
         data-testid="paper-scroll"
+        onPointerDown={onMarqueeDown}
         style={{ flex: 1, overflow: 'auto', scrollbarGutter: 'stable', background: 'var(--surface-canvas)' }}
       >
         {pdf ? (
@@ -629,6 +640,27 @@ export function PaperPane(props: Props): JSX.Element {
           </div>
         )}
       </div>
+
+      {/* Rubber-band selection rectangle (client coords; fixed so it ignores
+          scroll). pointer-events:none so it never blocks the drag underneath. */}
+      {marquee && (
+        <div
+          aria-hidden
+          data-testid="marquee"
+          style={{
+            position: 'fixed',
+            left: marquee.left,
+            top: marquee.top,
+            width: marquee.width,
+            height: marquee.height,
+            border: '1px solid var(--clay-500)',
+            background: 'rgba(194, 92, 57, 0.12)', // clay-500 @ 12%
+            borderRadius: 2,
+            pointerEvents: 'none',
+            zIndex: 50
+          }}
+        />
+      )}
 
       {/* Whole-doc ops: a pane-pinned rail (top-right), always visible — distinct
           from the page-anchored block rail above (M3-3). */}
