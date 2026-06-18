@@ -15,6 +15,7 @@ interface Props {
   onUpdate: (taskId: number, instruction: string) => void
   onSubmit: (taskId: number) => void
   onDismiss: (taskId: number) => void
+  onCollapse: (taskId: number) => void
   onResolve: (taskId: number, accept: boolean) => void
   onOpenReview: (taskId: number) => void
 }
@@ -37,6 +38,7 @@ export function WholeDocRail({
   onUpdate,
   onSubmit,
   onDismiss,
+  onCollapse,
   onResolve,
   onOpenReview
 }: Props): JSX.Element | null {
@@ -104,6 +106,7 @@ export function WholeDocRail({
                   onUpdate={(instruction) => onUpdate(t.id, instruction)}
                   onSubmit={() => onSubmit(t.id)}
                   onDismiss={() => onDismiss(t.id)}
+                  onCollapse={() => onCollapse(t.id)}
                   onResolve={(accept) => onResolve(t.id, accept)}
                   onOpenReview={() => onOpenReview(t.id)}
                 />

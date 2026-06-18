@@ -22,6 +22,9 @@ export interface GlobalSettings {
   editorFontFamily?: string
   editorFontSize?: number
   theme?: 'light' | 'dark' | 'system'
+  /** Show a confirm dialog on ⌘Q before quitting. Default-on: `undefined`/`true`
+   *  prompts, `false` quits straight away ("Don't ask again"). */
+  confirmBeforeQuit?: boolean
 }
 
 /** Per-document settings, persisted on the project's Store record (keyed by

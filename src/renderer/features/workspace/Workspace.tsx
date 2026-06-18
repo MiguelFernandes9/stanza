@@ -824,6 +824,9 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
             }
             dispatch({ type: 'toggle-block', ids: subtree, additive })
           }}
+          // Marquee covers exactly what the user dragged over — select those
+          // ids directly, no subtree expansion.
+          onSelectBlocks={(ids, additive) => dispatch({ type: 'toggle-block', ids, additive })}
           onActivateTask={(taskId) => dispatch({ type: 'activate', taskId })}
           onToggleAdding={() => dispatch({ type: 'set-adding', adding: !state.adding })}
           onRemoveBlock={(taskId, blockId) => dispatch({ type: 'remove-block', taskId, blockId })}

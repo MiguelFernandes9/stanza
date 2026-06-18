@@ -1,14 +1,17 @@
-import { app, BrowserWindow, nativeImage, shell } from 'electron'
+import { app, BrowserWindow, dialog, nativeImage, shell } from 'electron'
 import { join } from 'node:path'
 import {
   dropSession,
+  getGlobalSettings,
   getOpenRoots,
   registerIpcHandlers,
+  setGlobalSettings,
   setRecentsListener,
   setWindowSpawner,
 } from './ipc-registry'
 import { buildAppMenu } from './menu'
 import { handleDocProtocol, registerDocScheme } from './protocol'
+import { quitDialogOptions, shouldPromptQuit } from './quitGuard'
 
 registerDocScheme() // must precede app ready
 
@@ -105,4 +108,25 @@ void app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+// Firefox-style quit guard: ⌘Q (and any app.quit) confirms first, unless the
+// user opted out via "Don't ask again" (persisted in GlobalSettings). The glue
+// lives here; the policy + dialog shape are the pure quitGuard module. The
+// dialog flips `quitConfirmed` so the re-fired before-quit after app.quit()
+// passes straight through.
+let quitConfirmed = false
+app.on('before-quit', (e) => {
+  if (!shouldPromptQuit(getGlobalSettings(), quitConfirmed)) return
+  e.preventDefault()
+  const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+  const ask = win
+    ? dialog.showMessageBox(win, quitDialogOptions())
+    : dialog.showMessageBox(quitDialogOptions())
+  void ask.then(({ response, checkboxChecked }) => {
+    if (response !== 0) return // Cancel → stay open
+    if (checkboxChecked) setGlobalSettings({ confirmBeforeQuit: false })
+    quitConfirmed = true
+    app.quit()
+  })
 })
