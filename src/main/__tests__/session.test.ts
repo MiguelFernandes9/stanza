@@ -36,6 +36,20 @@ describe('DocumentSession', () => {
     expect(session.files).toBeDefined()
   })
 
+  test('opActive counts begin/end so overlapping op churn stays muted', () => {
+    const session = new DocumentSession(doc, new MockRunner(), store)
+    expect(session.opActive).toBe(false)
+    session.beginOp()
+    expect(session.opActive).toBe(true)
+    session.beginOp() // overlapping op
+    session.endOp()
+    expect(session.opActive).toBe(true) // still one op active
+    session.endOp()
+    expect(session.opActive).toBe(false)
+    session.endOp() // underflow is a no-op
+    expect(session.opActive).toBe(false)
+  })
+
   test('starts no external-edit watcher and no compile on construction', () => {
     // Compile fires only on explicit user actions (⌘S / accept / ⌘R) — opening a
     // document wires the services but kicks off no background watcher or compile.

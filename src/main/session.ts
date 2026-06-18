@@ -25,6 +25,22 @@ export class DocumentSession {
    *  new layout. The root never changes, so git/claude/files stay valid. */
   info: DocumentInfo
 
+  /** >0 while the app itself is mutating the working tree for a Claude op (the
+   *  capture branch-dance edits then reverts the .tex on disk). The file watcher
+   *  reads this to ignore the app's OWN churn — otherwise it fires
+   *  documentFilesChanged → loadBlocks and the proposal bubble re-anchors away
+   *  for a beat. A counter, so overlapping ops don't clear it early. */
+  private ops = 0
+  get opActive(): boolean {
+    return this.ops > 0
+  }
+  beginOp(): void {
+    this.ops++
+  }
+  endOp(): void {
+    if (this.ops > 0) this.ops--
+  }
+
   constructor(info: DocumentInfo, runner: ProcessRunner, store: Store) {
     this.info = info
     this.compiler = new CompileService(runner, info)
