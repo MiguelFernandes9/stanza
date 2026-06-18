@@ -1,8 +1,16 @@
 import { useState } from 'react'
 import type { JSX } from 'react'
 import { ChevronRight, FileText, Folder } from 'lucide-react'
-import { Badge, StatusDot } from '@renderer/components'
+import { Badge } from '@renderer/components'
 import type { RecentProject } from '@shared/ipc'
+import { relativeTime } from '../workspace/sidebarData'
+
+/** "opened 3h ago" / "opened just now" — the recents row's set-up detail. */
+function openedLabel(lastOpened?: string): string {
+  if (!lastOpened) return 'set up'
+  const t = relativeTime(lastOpened)
+  return t === 'now' ? 'opened just now' : `opened ${t} ago`
+}
 
 interface Props {
   recent: RecentProject
@@ -85,19 +93,15 @@ export function RecentRow({ recent, onOpen }: Props): JSX.Element {
       <div
         style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flex: '0 0 auto' }}
       >
-        {primed ? (
-          <StatusDot tone="ok" label={`session · ${recent.blockCount ?? '–'} blocks`} />
-        ) : (
-          <span
-            style={{
-              font: 'var(--text-2xs)/1 var(--font-sans)',
-              color: hover ? 'var(--clay-600)' : 'var(--ink-400)',
-              fontWeight: 500
-            }}
-          >
-            {hover ? 'set up & open' : 'plain folder'}
-          </span>
-        )}
+        <span
+          style={{
+            font: 'var(--text-2xs)/1 var(--font-sans)',
+            color: hover && !primed ? 'var(--clay-600)' : 'var(--ink-400)',
+            fontWeight: 500
+          }}
+        >
+          {primed ? openedLabel(recent.lastOpened) : hover ? 'set up & open' : 'plain folder'}
+        </span>
       </div>
       <ChevronRight
         size={16}

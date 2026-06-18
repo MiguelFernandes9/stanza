@@ -3,10 +3,9 @@ import type { JSX } from 'react'
 import { Check, Sparkles, X } from 'lucide-react'
 import { BlockTag, Button, IconButton, Kbd, SegmentedControl } from '@renderer/components'
 import type { BlockTagKind } from '@renderer/components'
-import type { ReviewProposal } from '@shared/ipc'
+import type { PreviewRequest, PreviewResult, ReviewProposal } from '@shared/ipc'
+import { DiffPreviewPane } from './DiffPreviewPane'
 import { DiffView } from './DiffView'
-import { extractAffectedText, splitDiffByFile, wordSegments } from './wordDiff'
-import type { Seg } from './wordDiff'
 
 export interface ReviewBlockTag {
   kind: BlockTagKind
@@ -18,83 +17,19 @@ interface Props {
   proposal: ReviewProposal
   note?: string
   blockTag: ReviewBlockTag | null
-  /** review:fileAt — full file content on HEAD vs the proposal branch. */
-  loadFileAt: (file: string) => Promise<{ before: string; after: string }>
+  /** review:preview — the marked render of the complete edit. */
+  fetchPreview: (req: PreviewRequest) => Promise<PreviewResult>
   onClose: () => void
   onResolve: (accept: boolean) => void
 }
 
-type CompiledState =
-  | { kind: 'loading' }
-  | { kind: 'ready'; segs: Seg[] }
-  | { kind: 'fallback'; reason: string }
-
-const MARK: Record<Seg[0], React.CSSProperties> = {
-  k: {},
-  d: {
-    background: 'var(--del-bg)',
-    color: 'var(--del-700)',
-    textDecoration: 'line-through',
-    textDecorationColor: 'var(--del-600)',
-    textDecorationThickness: '1px',
-    borderRadius: 2,
-    padding: '0 1px'
-  },
-  a: { background: 'var(--add-bg)', color: 'var(--add-700)', borderRadius: 2, padding: '0 1px' }
-}
-
-function Rendered({ segs, omit }: { segs: Seg[]; omit: Seg[0] }): JSX.Element {
-  return (
-    <div style={{ font: 'var(--weight-regular) 15px/1.66 var(--font-serif)', color: 'var(--ink-900)', textAlign: 'justify', textIndent: '1.4em' }}>
-      {segs
-        .filter(([t]) => t !== omit)
-        .map(([t, s], i) => (
-          <span key={i} style={MARK[t]}>
-            {s}
-          </span>
-        ))}
-    </div>
-  )
-}
-
-function Pane({ eyebrow, hint, segs, omit, accent }: { eyebrow: string; hint: string; segs: Seg[]; omit: Seg[0]; accent?: string }): JSX.Element {
-  return (
-    <div style={{ flex: 1, minWidth: 0 }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 7, marginBottom: 8 }}>
-        <span
-          style={{
-            font: 'var(--weight-bold) var(--text-2xs)/1 var(--font-sans)',
-            letterSpacing: 'var(--tracking-caps)',
-            textTransform: 'uppercase',
-            color: accent ?? 'var(--ink-400)'
-          }}
-        >
-          {eyebrow}
-        </span>
-        <span style={{ font: 'var(--text-2xs)/1 var(--font-mono)', color: 'var(--ink-300)' }}>{hint}</span>
-      </div>
-      <div
-        style={{
-          background: 'var(--paper-2)',
-          border: '1px solid var(--border-default)',
-          borderRadius: 'var(--radius-md)',
-          boxShadow: 'var(--shadow-page)',
-          padding: '22px 24px'
-        }}
-      >
-        <Rendered segs={segs} omit={omit} />
-      </div>
-    </div>
-  )
-}
-
-/** Full-screen review — design "Review overlay": Compiled (word-level marks
- *  on HTML-typeset prose, NOT a second PDF — see changelog) | Source toggle,
- *  ⌘↵ accept, esc/click-out close. Non-prose changes fall back to Source. */
-export function ReviewOverlay({ proposal, note, blockTag, loadFileAt, onClose, onResolve }: Props): JSX.Element {
-  const [mode, setMode] = useState<'compiled' | 'source'>('compiled')
-  const [compiled, setCompiled] = useState<CompiledState>({ kind: 'loading' })
-  const fileChunks = splitDiffByFile(proposal.diff, proposal.files[0])
+/** Full-screen review with two tabs: **Changes** = the unified LaTeX diff,
+ *  expanded; **Preview** = the complete edit rendered as one marked document
+ *  (latexdiff), zoom + scroll. ⌘↵ accept, esc/click-out close. */
+export function ReviewOverlay({ proposal, note, blockTag, fetchPreview, onClose, onResolve }: Props): JSX.Element {
+  // A renderable preview exists unless the op only touched the preamble.
+  const renderable = proposal.blocks.some((b) => b.kind !== 'preamble')
+  const [tab, setTab] = useState<'changes' | 'preview'>(renderable ? 'preview' : 'changes')
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -104,33 +39,6 @@ export function ReviewOverlay({ proposal, note, blockTag, loadFileAt, onClose, o
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose, onResolve])
-
-  useEffect(() => {
-    let alive = true
-    const file = proposal.files[0]
-    const chunk = fileChunks.find((c) => c.file === file)?.diff ?? proposal.diff
-    loadFileAt(file).then(
-      ({ before, after }) => {
-        if (!alive) return
-        const affected = extractAffectedText(before, after, chunk)
-        if (!affected) {
-          setCompiled({ kind: 'fallback', reason: 'This change touches a non-prose block — showing the source diff.' })
-          setMode('source')
-        } else {
-          setCompiled({ kind: 'ready', segs: wordSegments(affected.before, affected.after) })
-        }
-      },
-      () => {
-        if (!alive) return
-        setCompiled({ kind: 'fallback', reason: 'Could not load file contents — showing the source diff.' })
-        setMode('source')
-      }
-    )
-    return () => {
-      alive = false
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [proposal.opId])
 
   return (
     <div
@@ -148,9 +56,13 @@ export function ReviewOverlay({ proposal, note, blockTag, loadFileAt, onClose, o
     >
       <div
         onClick={(e) => e.stopPropagation()}
+        data-testid="review-overlay"
         style={{
-          width: 'min(880px, 92vw)',
-          maxHeight: '86vh',
+          width: 'min(1040px, 92vw)',
+          // Size to content (a small change → small window) with a floor so it
+          // never looks cramped and a ceiling so a big diff/render scrolls.
+          minHeight: 360,
+          maxHeight: '88vh',
           display: 'flex',
           flexDirection: 'column',
           background: 'var(--paper-1)',
@@ -168,11 +80,11 @@ export function ReviewOverlay({ proposal, note, blockTag, loadFileAt, onClose, o
           <div style={{ flex: 1 }} />
           <SegmentedControl
             size="sm"
-            value={mode}
-            onChange={(v) => setMode(v as 'compiled' | 'source')}
+            value={tab}
+            onChange={(v) => setTab(v as 'changes' | 'preview')}
             options={[
-              { value: 'compiled', label: 'Compiled' },
-              { value: 'source', label: 'Source' }
+              { value: 'changes', label: 'Changes' },
+              { value: 'preview', label: 'Preview' }
             ]}
           />
           <IconButton size="sm" label="Close" onClick={onClose}>
@@ -180,26 +92,16 @@ export function ReviewOverlay({ proposal, note, blockTag, loadFileAt, onClose, o
           </IconButton>
         </div>
 
-        <div style={{ flex: 1, overflow: 'auto', padding: 18 }}>
-          {note && <div style={{ font: 'var(--text-sm)/1.5 var(--font-sans)', color: 'var(--ink-600)', marginBottom: 14 }}>{note}</div>}
-          {compiled.kind === 'fallback' && (
-            <div style={{ font: 'var(--text-xs)/1.5 var(--font-sans)', color: 'var(--ink-400)', marginBottom: 10 }}>
-              {compiled.reason}
+        <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex' }}>
+          {tab === 'changes' ? (
+            <div style={{ flex: 1, minWidth: 0, overflow: 'auto', padding: 18 }}>
+              {note && <div style={{ font: 'var(--text-sm)/1.5 var(--font-sans)', color: 'var(--ink-600)', marginBottom: 14 }}>{note}</div>}
+              <DiffView diff={proposal.diff} files={proposal.files} />
             </div>
-          )}
-          {mode === 'compiled' ? (
-            compiled.kind === 'ready' ? (
-              <div style={{ display: 'flex', gap: 16 }}>
-                <Pane eyebrow="Current" hint={proposal.files[0].split('/').pop() ?? ''} segs={compiled.segs} omit="a" />
-                <Pane eyebrow="Proposed" hint="after recompile" segs={compiled.segs} omit="d" accent="var(--clay-600)" />
-              </div>
-            ) : (
-              <div style={{ font: 'var(--text-sm)/1.5 var(--font-sans)', color: 'var(--ink-400)' }}>
-                {compiled.kind === 'loading' ? 'Preparing compiled view…' : ''}
-              </div>
-            )
           ) : (
-            <DiffView diff={proposal.diff} files={proposal.files} />
+            <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>
+              <DiffPreviewPane opId={proposal.opId} fetchPreview={fetchPreview} />
+            </div>
           )}
         </div>
 

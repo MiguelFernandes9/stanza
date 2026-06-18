@@ -39,7 +39,7 @@ import { expandIds, flattenBlocks, parentOf, spanLabel, taskSpans } from '../pap
 import { resolveToKnownFile } from '@renderer/lib/paths'
 import { blockLabel, tagKind } from '../tasks/TaskCard'
 import { dismissRoute, initialTaskState, taskReducer } from '../tasks/taskStore'
-import { pendingRemap } from '../tasks/reanchor'
+import { pendingRemap, vanishedThreads } from '../tasks/reanchor'
 import { planMove } from './fileDrag'
 import { revealBlock } from './revealBlock'
 import { ResizeHandle } from './ResizeHandle'
@@ -230,6 +230,13 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
       // tree, so their PDF overlays follow instead of vanishing (BUG-33).
       const remap = pendingRemap(blocksRef.current, fresh, tasksRef.current)
       if (Object.keys(remap).length) dispatch({ type: 'reanchor', remap })
+      // A persistent thread whose anchor block was DELETED (no hash/path
+      // successor) loses its home — drop the bubble and its persisted record.
+      for (const taskId of vanishedThreads(blocksRef.current, fresh, tasksRef.current)) {
+        const threadId = tasksRef.current.find((t) => t.id === taskId)?.threadId
+        if (threadId) void client.threadsDelete(threadId).catch(() => undefined)
+        dispatch({ type: 'dismiss', taskId })
+      }
       setBlocks(fresh)
     }, () => setBlocks([]))
   }, [])
@@ -725,10 +732,10 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
     const task = state.tasks.find((t) => t.id === taskId)
     if (!task) return
     // A pending proposal owns a backend op branch + lock — reject it so both are
-    // freed (BUG-42) before the bubble goes. (Persisted-record cleanup on disk
-    // lands with restore in Phase 3.)
+    // freed (BUG-42) before the bubble goes.
     const opId = task.proposal?.opId ?? task.opId
     if (task.phase === 'review' && opId) void client.reviewResolve({ opId, accept: false }).catch(() => undefined)
+    if (task.threadId) void client.threadsDelete(task.threadId).catch(() => undefined)
     dispatch({ type: 'dismiss', taskId })
   }
 
@@ -889,6 +896,9 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
             }
             dispatch({ type: 'toggle-block', ids: subtree, additive })
           }}
+          // Marquee covers exactly what the user dragged over — select those
+          // ids directly, no subtree expansion.
+          onSelectBlocks={(ids, additive) => dispatch({ type: 'toggle-block', ids, additive })}
           onActivateTask={(taskId) => dispatch({ type: 'activate', taskId })}
           onToggleAdding={() => dispatch({ type: 'set-adding', adding: !state.adding })}
           onRemoveBlock={(taskId, blockId) => dispatch({ type: 'remove-block', taskId, blockId })}

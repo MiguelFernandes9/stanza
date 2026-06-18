@@ -21,6 +21,8 @@ import type {
   InversePoint,
   OpRecord,
   PdfRect,
+  PreviewRequest,
+  PreviewResult,
   PrimeStep,
   RecentProject,
   ReviewDecision,
@@ -96,10 +98,13 @@ export const api = {
   claudeHistory: () => invoke<OpRecord[]>(IpcChannels.claudeHistory),
   /** Persistent bubbles for the open project, restored on workspace open. */
   threadsList: () => invoke<ThreadRecord[]>(IpcChannels.threadsList),
+  /** Drop a persistent bubble's record (deleted, or its anchor block vanished). */
+  threadsDelete: (threadId: string) => invoke<void>(IpcChannels.threadsDelete, threadId),
   reviewResolve: (d: ReviewDecision) => invoke<ReviewResolution>(IpcChannels.reviewResolve, d),
   reviewList: () => invoke<ReviewProposal[]>(IpcChannels.reviewList),
-  reviewFileAt: (req: { opId: string; file: string }) =>
-    invoke<{ before: string; after: string }>(IpcChannels.reviewFileAt, req),
+  /** The marked (latexdiff) render of the complete edit — one item per changed
+   *  file (base64 PDF) or an error; compiled eagerly so usually instant. */
+  reviewPreview: (req: PreviewRequest) => invoke<PreviewResult>(IpcChannels.reviewPreview, req),
   /** Abort the priming pipeline (manager-approved addition; handler is a
    *  backend follow-up — callers must tolerate rejection until it lands). */
   primeCancel: () => invoke<void>(IpcChannels.primeCancel),

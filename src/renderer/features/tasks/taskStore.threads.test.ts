@@ -12,6 +12,7 @@ const proposal: ReviewProposal = {
   files: ['main.tex'],
   outsideSpan: [],
   diff: '@@ -1 +1 @@\n-a\n+b',
+  blocks: [],
 }
 
 describe('withUserTurn', () => {

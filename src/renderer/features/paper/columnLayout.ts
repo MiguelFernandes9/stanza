@@ -52,33 +52,49 @@ const BAND_SLACK = 7
  *  not row count: a dense equation can have many rows yet occupy little height.)
  *  Without this, those clusters split single-column block boxes. */
 const TWO_COL_PAGE_FRAC = 0.5
+/** A page is a CONFIDENT two-column body — enough to mark the whole DOCUMENT
+ *  two-column — when its two-column bands cover this fraction of its text height
+ *  AND at least this many points. A single local cluster (a numbered equation) is
+ *  short and never both. */
+const DOC_TWO_COL_FRAC = 0.6
+const DOC_TWO_COL_MIN = 200
+/** In a single band on a two-column page, an item is `full` only if it reaches at
+ *  least this far past the gutter centre into BOTH columns — so a tikz figure's
+ *  garbage synctex rect that just pokes across the gutter stays in its own column. */
+const COL_SPAN_MIN = 50
 
-/** Cluster rows into vertical bands by baseline gap (reuses the MAX_LINE_GAP
- *  clustering paperModel.contentBand uses), then classify each band's column
- *  structure from its rows' x-projection. Pure. */
-export function pageColumnLayout(rows: TextRow[]): ColumnLayout {
-  if (!rows.length) return { bands: [] }
+/** Cluster a page's rows into vertical bands by baseline gap and classify each
+ *  band's column structure (pre-gate; no single/two demotion). Pure. */
+function rawBands(rows: TextRow[]): ColumnBand[] {
+  if (!rows.length) return []
   const sorted = [...rows].sort((a, b) => a.baseline - b.baseline)
   const groups: TextRow[][] = [[sorted[0]!]]
   for (let i = 1; i < sorted.length; i++) {
     if (sorted[i]!.baseline - sorted[i - 1]!.baseline > BAND_GAP) groups.push([])
     groups[groups.length - 1]!.push(sorted[i]!)
   }
-  const bands = groups.map(detectBand)
-  // Page-level gate: keep two-column bands only when they cover most of the page's
-  // text HEIGHT; otherwise an isolated cluster (equation+number, a multi-line
-  // aligned equation, table cells, plot ticks) would falsely split an otherwise
-  // single-column page's boxes. textHeight is the top-to-bottom span so the sparse
-  // prose around a local cluster counts toward the denominator and demotes it — a
-  // page that is MOSTLY one cluster (a near-full-page equation/table) relies on
-  // this. (Known limit: a real two-column body sitting under a very tall full-width
-  // title band can fall under the threshold and wrongly demote; unobserved on the
-  // demo, needs a two-column fixture to address without regressing the clusters.)
+  return groups.map(detectBand)
+}
+
+/** Two-column band height summed, and the page's full text height. */
+function twoColExtent(bands: ColumnBand[]): { twoHeight: number; textHeight: number } {
   const twoHeight = bands.reduce((h, b) => h + (b.kind === 'two' ? b.bottom - b.top : 0), 0)
-  const textHeight = bands[bands.length - 1]!.bottom - bands[0]!.top
-  if (textHeight > 0 && twoHeight < TWO_COL_PAGE_FRAC * textHeight)
-    return { bands: bands.map((b) => (b.kind === 'two' ? { top: b.top, bottom: b.bottom, kind: 'single' as const } : b)) }
-  return { bands }
+  const textHeight = bands.length ? bands[bands.length - 1]!.bottom - bands[0]!.top : 0
+  return { twoHeight, textHeight }
+}
+
+const demoted = (bands: ColumnBand[]): ColumnBand[] =>
+  bands.map((b) => (b.kind === 'two' ? { top: b.top, bottom: b.bottom, kind: 'single' as const } : b))
+
+/** Page-level layout: cluster + classify, then demote two-column bands unless they
+ *  cover most of the page's text height (a lone local x-cluster — equation+number,
+ *  aligned equation, table cells, plot ticks — would otherwise split single-column
+ *  boxes). Standalone per-page heuristic; `columnLayoutByPage` relaxes the demotion
+ *  document-wide when the doc is genuinely two-column. Pure. */
+export function pageColumnLayout(rows: TextRow[]): ColumnLayout {
+  const bands = rawBands(rows)
+  const { twoHeight, textHeight } = twoColExtent(bands)
+  return { bands: textHeight > 0 && twoHeight < TWO_COL_PAGE_FRAC * textHeight ? demoted(bands) : bands }
 }
 
 /** Classify one baseline-band: find the central x where the FEWEST rows overlap
@@ -159,25 +175,64 @@ function bandAt(layout: ColumnLayout, cy: number): ColumnBand | null {
   return near
 }
 
-/** Which column an item (text row or synctex rect) occupies: `full` in a
- *  single-column band or when it spans the gutter; otherwise `l`/`r` by side.
- *  Pages with no detected layout (single-column documents) → always `full`, so
- *  the binner's per-(page × column) split degenerates to one box per page. */
-export function columnOf(layout: ColumnLayout, item: ItemBox): PdfCol {
-  const band = bandAt(layout, (item.yTop + item.yBottom) / 2)
-  if (!band || band.kind === 'single') return 'full'
-  const gutterLeft = band.left![1]
-  const gutterRight = band.right![0]
-  const gx = band.gutterX!
-  if (item.xLeft < gutterLeft && item.xRight > gutterRight) return 'full' // spans the stripe
-  if (item.xRight <= gx) return 'l'
-  if (item.xLeft >= gx) return 'r'
-  return (item.xLeft + item.xRight) / 2 <= gx ? 'l' : 'r'
+/** The page's two-column gutter stripe (median of its two-column bands' edges), or
+ *  null if the page has no two-column band. Lets `columnOf` classify an item that
+ *  falls in a SINGLE band — a figure-internal thin band, or a graphic between
+ *  two-column bands — by the page column instead of blanket `full`. */
+function dominantGutter(layout: ColumnLayout): { left: number; right: number; gx: number } | null {
+  const two = layout.bands.filter((b) => b.kind === 'two')
+  if (!two.length) return null
+  const mid = (xs: number[]): number => xs.slice().sort((a, b) => a - b)[Math.floor(xs.length / 2)]!
+  const left = mid(two.map((b) => b.left![1]))
+  const right = mid(two.map((b) => b.right![0]))
+  return { left, right, gx: (left + right) / 2 }
 }
 
-/** Per-page column layout for the whole document. */
+/** Which column an item (text row, graphic, or synctex rect) occupies. In a
+ *  two-column band: `full` if it spans the gutter stripe, else `l`/`r`. In a SINGLE
+ *  band on a two-column PAGE (a full-width title/figure*, OR a figure-internal thin
+ *  band between two side-by-side figures): classify by the page gutter — a graphic
+ *  wholly in one column is `l`/`r`, a genuinely full-width element spans → `full`.
+ *  Pages with no two-column band (single-column docs) → always `full`. */
+export function columnOf(layout: ColumnLayout, item: ItemBox): PdfCol {
+  const band = bandAt(layout, (item.yTop + item.yBottom) / 2)
+  if (band && band.kind === 'two') {
+    const gutterLeft = band.left![1]
+    const gutterRight = band.right![0]
+    const gx = band.gutterX!
+    if (item.xLeft < gutterLeft && item.xRight > gutterRight) return 'full' // spans the stripe
+    if (item.xRight <= gx) return 'l'
+    if (item.xLeft >= gx) return 'r'
+    return (item.xLeft + item.xRight) / 2 <= gx ? 'l' : 'r'
+  }
+  const g = dominantGutter(layout)
+  if (!g) return 'full' // single-column page → one box per page
+  // `full` only when the item reaches SUBSTANTIALLY into BOTH columns — a garbage
+  // synctex rect that merely pokes past the gutter (a tikz figure's galley rect) is
+  // still ONE column, classified by its centre.
+  if (g.gx - item.xLeft >= COL_SPAN_MIN && item.xRight - g.gx >= COL_SPAN_MIN) return 'full'
+  return (item.xLeft + item.xRight) / 2 <= g.gx ? 'l' : 'r'
+}
+
+/** Per-page column layout for the whole document. Two-column is a DOCUMENT
+ *  property: once ANY page shows a confident two-column body, a figure-heavy page
+ *  whose genuine two-column text is a MINORITY of its height must not be demoted to
+ *  single (the per-page fraction gate would wrongly do so — e.g. a page topped by a
+ *  full-width figure*). When no page is confidently two-column (a single-column
+ *  doc), each page keeps the per-page gate so local clusters still demote. */
 export function columnLayoutByPage(rowsByPage: Map<number, TextRow[]>): Map<number, ColumnLayout> {
+  const raw = new Map<number, ColumnBand[]>()
+  for (const [page, rows] of rowsByPage) raw.set(page, rawBands(rows))
+  let docTwoCol = false
+  for (const bands of raw.values()) {
+    const { twoHeight, textHeight } = twoColExtent(bands)
+    if (textHeight > 0 && twoHeight >= DOC_TWO_COL_MIN && twoHeight >= DOC_TWO_COL_FRAC * textHeight) { docTwoCol = true; break }
+  }
   const out = new Map<number, ColumnLayout>()
-  for (const [page, rows] of rowsByPage) out.set(page, pageColumnLayout(rows))
+  for (const [page, bands] of raw) {
+    if (docTwoCol) { out.set(page, { bands }); continue } // keep two-column bands doc-wide
+    const { twoHeight, textHeight } = twoColExtent(bands)
+    out.set(page, { bands: textHeight > 0 && twoHeight < TWO_COL_PAGE_FRAC * textHeight ? demoted(bands) : bands })
+  }
   return out
 }

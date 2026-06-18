@@ -32,7 +32,8 @@ const proposal: ReviewProposal = {
   branch: 'stanza/op-op1',
   files: ['main.tex'],
   outsideSpan: [],
-  diff: ''
+  diff: '',
+  blocks: []
 }
 
 const handlers = () => ({

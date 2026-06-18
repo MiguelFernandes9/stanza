@@ -31,6 +31,12 @@ export function appendTurns(
   return next
 }
 
+/** Drop a thread record by id (the bubble was deleted, or its anchor block
+ *  vanished). No-op if absent. */
+export function removeThread(threads: ThreadRecord[], threadId: string): ThreadRecord[] {
+  return threads.filter((t) => t.threadId !== threadId)
+}
+
 /** Patch the turn whose `opId` matches (across all threads) — used to record a
  *  proposal's accept/reject. No-op if no turn owns that op. */
 export function patchTurnByOpId(

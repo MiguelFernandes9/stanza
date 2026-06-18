@@ -101,7 +101,10 @@ describe.skipIf(!process.env.GEOM_CAPTURE)('capture real-doc geometry fixture', 
       pageBlocks.find((b: PageBlock) => b.span.file.endsWith(suffix) && b.span.startLine === startLine)?.id ?? ''
     const constructs = Object.fromEntries(Object.entries(CONSTRUCTS).map(([k, [f, l]]) => [k, find(f, l)]))
 
-    const path = join(fileURLToPath(new URL('./__fixtures__/', import.meta.url)), 'geometry-realdoc.json')
+    // GEOM_OUT overrides the fixture filename (e.g. a two-column doc → a SECOND
+    // fixture without clobbering the single-column one).
+    const outName = process.env.GEOM_OUT ?? 'geometry-realdoc.json'
+    const path = join(fileURLToPath(new URL('./__fixtures__/', import.meta.url)), outName)
     writeFileSync(path, JSON.stringify({ doc: ROOT, constructs, blocks, rowsByPage, graphicsByPage }))
     console.log('wrote', path, Object.entries(constructs).map(([k, v]) => `${k}=${v ? 'ok' : 'MISSING'}`).join(' '))
   }, 120_000)

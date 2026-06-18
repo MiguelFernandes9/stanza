@@ -6,6 +6,7 @@ import type { BlockTagKind } from '@renderer/components'
 import { combinedSpanLabel, spanLabel } from '../paper/paperModel'
 import type { PageBlock } from '../paper/paperModel'
 import type { EditTask } from './taskStore'
+import { summarizeBlocks } from '@shared/blocks/changes'
 
 export const RAIL = 316
 export const RAIL_GAP = 22
@@ -391,6 +392,11 @@ export function TaskCard({
             <div style={{ font: 'var(--text-sm)/1.5 var(--font-sans)', color: 'var(--ink-600)', margin: '0 1px 8px' }}>
               {task.note}
             </div>
+            {summarizeBlocks(task.proposal.blocks) && (
+              <div style={{ font: 'var(--text-2xs)/1.4 var(--font-sans)', color: 'var(--ink-400)', margin: '0 1px 6px' }}>
+                {summarizeBlocks(task.proposal.blocks)}
+              </div>
+            )}
             <div style={{ maxHeight: 192, overflow: 'auto', borderRadius: 'var(--radius-md)' }}>
               <DiffHunk file={task.proposal.files[0]} diff={task.proposal.diff} />
             </div>

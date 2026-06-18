@@ -22,7 +22,8 @@ const proposal: ReviewProposal = {
   branch: 'stanza/op-op-1',
   files: ['main.tex'],
   outsideSpan: [],
-  diff: '@@ -1,1 +1,1 @@\n-a\n+b'
+  diff: '@@ -1,1 +1,1 @@\n-a\n+b',
+  blocks: []
 }
 
 describe('taskReducer — selection', () => {

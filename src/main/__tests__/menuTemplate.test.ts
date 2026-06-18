@@ -5,7 +5,7 @@ import { IpcChannels } from '../../shared/ipc'
 import type { RecentProject } from '../../shared/ipc'
 
 const recents: RecentProject[] = [
-  { root: '/x/proj-a', name: 'proj-a', hasSession: true, blockCount: 2 },
+  { root: '/x/proj-a', name: 'proj-a', hasSession: true, lastOpened: '2026-02-01T00:00:00Z' },
   { root: '/y/proj-b', name: 'proj-b', hasSession: false },
 ]
 

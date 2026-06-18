@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { TextRow } from './pdfTextRows'
-import { columnOf, pageColumnLayout } from './columnLayout'
+import { columnLayoutByPage, columnOf, pageColumnLayout } from './columnLayout'
 
 /** A text row at a baseline with an x-extent (the only fields detection reads;
  *  yTop/yBottom mirror a ~12pt line so band clustering matches the real layer). */
@@ -72,6 +72,30 @@ describe('pageColumnLayout — gutter detection from rendered rows', () => {
   })
 })
 
+describe('columnLayoutByPage — two-column is a document property', () => {
+  const fullBand = (top: number, lines: number): TextRow[] =>
+    Array.from({ length: lines }, (_, i) => row(top + i * 12, 54, 558)) // full-width rows
+
+  it('keeps a figure-heavy page two-column once the doc is confidently two-column', () => {
+    // page 1: a tall genuine two-column body (confident). page 2: a tall full-width
+    // band (figure*) + a SHORT two-column body — its frac is below the per-page gate,
+    // but the doc is two-column so it must NOT be demoted.
+    const p1 = twoColBand(100, 30) // ~360pt two-column → confident
+    const p2 = [...fullBand(100, 20), ...twoColBand(360, 6)] // mostly full-width + short 2-col
+    const byPage = columnLayoutByPage(new Map([[1, p1], [2, p2]]))
+    expect(byPage.get(1)!.bands.some((b) => b.kind === 'two')).toBe(true)
+    expect(byPage.get(2)!.bands.some((b) => b.kind === 'two')).toBe(true) // not demoted
+  })
+
+  it('still demotes a local cluster on a single-column document', () => {
+    // no page is confidently two-column → the per-page gate applies → a short
+    // two-column-looking cluster (a numbered equation) is demoted to single.
+    const page = [...fullBand(100, 30), ...twoColBand(470, 4)] // full-width body + tiny cluster
+    const byPage = columnLayoutByPage(new Map([[1, page]]))
+    expect(byPage.get(1)!.bands.every((b) => b.kind === 'single')).toBe(true)
+  })
+})
+
 describe('columnOf — classify an item against a page layout', () => {
   const layout = pageColumnLayout([
     row(96, 74, 538), // full-width title band
@@ -88,8 +112,23 @@ describe('columnOf — classify an item against a page layout', () => {
   it('classifies a gutter-spanning item in a two-col band as full', () => {
     expect(columnOf(layout, { yTop: 250, yBottom: 262, xLeft: 54, xRight: 558 })).toBe('full')
   })
-  it('classifies any item in a single (full-width) band as full', () => {
-    expect(columnOf(layout, { yTop: 96, yBottom: 108, xLeft: 74, xRight: 200 })).toBe('full')
+  it('classifies a full-width item in a single band as full (spans the page gutter)', () => {
+    expect(columnOf(layout, { yTop: 96, yBottom: 108, xLeft: 74, xRight: 538 })).toBe('full')
+  })
+  it('classifies a one-column item in a single band by the page gutter (figure-internal band)', () => {
+    // a side-by-side figure's graphic landing in a thin single band still belongs to
+    // its column on a two-column page — not blanket full.
+    expect(columnOf(layout, { yTop: 96, yBottom: 108, xLeft: 319, xRight: 538 })).toBe('r')
+    expect(columnOf(layout, { yTop: 96, yBottom: 108, xLeft: 54, xRight: 293 })).toBe('l')
+  })
+  it('treats a rect that merely pokes past the gutter as one column, not full', () => {
+    // a tikz figure's garbage synctex rect (left column + a small overshoot across
+    // the gutter) must NOT read as full — it stays in its own column (COL_SPAN_MIN).
+    expect(columnOf(layout, { yTop: 96, yBottom: 108, xLeft: 54, xRight: 340 })).toBe('l')
+  })
+  it('classifies a single-band item as full on a single-column page (no page gutter)', () => {
+    const single = pageColumnLayout([row(96, 74, 538), row(108, 74, 538), row(120, 74, 538)])
+    expect(columnOf(single, { yTop: 96, yBottom: 108, xLeft: 74, xRight: 200 })).toBe('full')
   })
   it('defaults to full when there is no layout', () => {
     expect(columnOf({ bands: [] }, { yTop: 0, yBottom: 10, xLeft: 0, xRight: 10 })).toBe('full')
