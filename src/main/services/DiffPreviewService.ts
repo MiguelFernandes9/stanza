@@ -78,7 +78,12 @@ function groupRenderableByFile(blocks: BlockChange[]): Map<string, BlockChange[]
 }
 
 /** The min-start..max-end span of the given side over the blocks, or null when
- *  no block has that side (e.g. all-added blocks have no `before`). */
+ *  no block has that side (e.g. all-added blocks have no `before`). A block
+ *  contributes its OWN extent, never a subtree envelope: a `section` span is
+ *  widened (closeSectionSpans) to cover the whole section for selection geometry,
+ *  so for the render region it contributes only its heading line — otherwise a
+ *  kept section (e.g. a heading rename) would balloon the preview to the whole
+ *  section. Leaf kinds already span just their own content. */
 function bounds(blocks: BlockChange[], side: 'before' | 'after'): { start: number; end: number } | null {
   let start = Infinity
   let end = -Infinity
@@ -86,7 +91,7 @@ function bounds(blocks: BlockChange[], side: 'before' | 'after'): { start: numbe
     const span = side === 'before' ? b.beforeSpan : b.afterSpan
     if (!span) continue
     start = Math.min(start, span.startLine)
-    end = Math.max(end, span.endLine)
+    end = Math.max(end, b.kind === 'section' ? span.startLine : span.endLine)
   }
   return end < 0 ? null : { start, end }
 }

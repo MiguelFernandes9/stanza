@@ -84,52 +84,43 @@ describe('computeBlockChanges', () => {
     expect(added!.beforeText).toBe('')
   })
 
-  test('a nested change splits into non-overlapping cards (parent excludes the child)', async () => {
-    const lines = (eq: string, defArg: string): string =>
-      [
-        '\\documentclass{article}',
-        '\\begin{document}',
-        `\\begin{definition}[${defArg}]`,
-        'A function $f$ obeys',
-        '\\begin{equation}',
-        eq,
-        '\\end{equation}',
-        '\\end{definition}',
-        '\\end{document}',
-        '',
-      ].join('\n')
-    const before = lines('\\| f(x) - f(y) \\| \\leq L \\| x-y \\|', 'Lipschitz')
-    const after = lines('\\| f(x) - f(y) \\| \\leq L \\| x-y \\| + \\varepsilon', 'Lipschitz continuity')
-    // both the definition's own line (3) and the equation's line (6) changed
+  test('a nested change splits into non-overlapping cards (section excludes its paragraph)', async () => {
+    // Flat env model (#103): an environment is a leaf, only SECTIONS nest — so the
+    // clip/sentinel machinery is exercised on the section axis. A section whose
+    // heading AND an inner paragraph both change yields two non-overlapping cards.
+    const lines = (title: string, body: string): string =>
+      ['\\documentclass{article}', '\\begin{document}', `\\section{${title}}`, body, '\\end{document}', ''].join('\n')
+    const before = lines('Old Title', 'Body paragraph here.')
+    const after = lines('New Title', 'Revised body paragraph here.')
     const diff =
       fileHeader('main.tex') +
-      '@@ -3 +3 @@\n-\\begin{definition}[Lipschitz]\n+\\begin{definition}[Lipschitz continuity]\n' +
-      '@@ -6 +6 @@\n-\\| f(x) - f(y) \\| \\leq L \\| x-y \\|\n+\\| f(x) - f(y) \\| \\leq L \\| x-y \\| + \\varepsilon\n'
+      '@@ -3 +3 @@\n-\\section{Old Title}\n+\\section{New Title}\n' +
+      '@@ -4 +4 @@\n-Body paragraph here.\n+Revised body paragraph here.\n'
 
     const changes = await computeBlockChanges(diff, 'HEAD', 'branch', show({ HEAD: { 'main.tex': before }, branch: { 'main.tex': after } }))
 
-    const eq = changes.find((c) => c.name === 'equation')
-    expect(eq?.status).toBe('modified')
-    expect(eq!.afterText).toContain('varepsilon')
+    const sec = changes.find((c) => c.kind === 'section')
+    expect(sec?.status).toBe('modified')
+    expect(sec!.afterText).toContain('New Title') // its own heading change is shown
+    expect(sec!.afterText).not.toContain('Revised body') // the nested paragraph is NOT re-shown
+    expect(sec!.afterText).toContain('shown in its own card') // sentinel marks the elided child
 
-    const def = changes.find((c) => c.name === 'definition')
-    expect(def?.status).toBe('modified')
-    expect(def!.afterText).toContain('Lipschitz continuity') // its own change is shown
-    expect(def!.afterText).not.toContain('\\leq') // the nested equation body is NOT re-shown
-    expect(def!.afterText).toContain('shown in its own card') // sentinel marks the elided child
+    const par = changes.find((c) => c.kind === 'paragraph')
+    expect(par?.status).toBe('modified')
+    expect(par!.afterText).toContain('Revised body paragraph')
   })
 
-  test('a change touching only the nested block yields no parent card', async () => {
-    const lines = (eq: string): string =>
-      ['\\documentclass{article}', '\\begin{document}', '\\begin{definition}[Bound]', '\\begin{equation}', eq, '\\end{equation}', '\\end{definition}', '\\end{document}', ''].join('\n')
-    const before = lines('\\| f(x) \\| \\leq M')
-    const after = lines('\\| f(x) \\| \\leq 2M')
-    const diff = fileHeader('main.tex') + '@@ -5 +5 @@\n-\\| f(x) \\| \\leq M\n+\\| f(x) \\| \\leq 2M\n'
+  test('a change touching only a nested paragraph yields no parent section card', async () => {
+    const lines = (body: string): string =>
+      ['\\documentclass{article}', '\\begin{document}', '\\section{Title}', body, '\\end{document}', ''].join('\n')
+    const before = lines('Body paragraph.')
+    const after = lines('Revised paragraph.')
+    const diff = fileHeader('main.tex') + '@@ -4 +4 @@\n-Body paragraph.\n+Revised paragraph.\n'
 
     const changes = await computeBlockChanges(diff, 'HEAD', 'branch', show({ HEAD: { 'main.tex': before }, branch: { 'main.tex': after } }))
 
-    expect(changes.find((c) => c.name === 'equation')).toBeDefined()
-    expect(changes.find((c) => c.name === 'definition')).toBeUndefined()
+    expect(changes.find((c) => c.kind === 'paragraph')).toBeDefined()
+    expect(changes.find((c) => c.kind === 'section')).toBeUndefined()
   })
 
   test('drops a block whose source is unchanged on both sides', async () => {
@@ -140,5 +131,23 @@ describe('computeBlockChanges', () => {
     const changes = await computeBlockChanges(diff, 'HEAD', 'branch', show({ HEAD: { 'main.tex': same }, branch: { 'main.tex': same } }))
 
     expect(changes.find((c) => c.kind === 'paragraph')).toBeUndefined()
+  })
+
+  test('splitting a paragraph inside a section yields no phantom section card', async () => {
+    // The new content's insertion lands on the gap line after the paragraph, so
+    // blockAtLine resolves it to the enclosing section — which used to survive as
+    // a 'modified' card (1 vs 2 nested sentinels) and balloon the preview. The
+    // section's OWN content (its heading) is unchanged, so it must be dropped.
+    const before = ['\\documentclass{article}', '\\begin{document}', '\\section{Intro}', 'First part of the intro.', '', '\\subsection{Sub}', 'Sub body.', '\\end{document}', ''].join('\n')
+    const after = ['\\documentclass{article}', '\\begin{document}', '\\section{Intro}', 'First part of the intro.', '', 'Second part of the intro, newly split out.', '', '\\subsection{Sub}', 'Sub body.', '\\end{document}', ''].join('\n')
+    const diff =
+      fileHeader('main.tex') +
+      '@@ -4,3 +4,5 @@\n First part of the intro.\n+\n+Second part of the intro, newly split out.\n \n \\subsection{Sub}\n'
+
+    const changes = await computeBlockChanges(diff, 'HEAD', 'branch', show({ HEAD: { 'main.tex': before }, branch: { 'main.tex': after } }))
+
+    expect(changes.find((c) => c.kind === 'section')).toBeUndefined() // no phantom parent card
+    const para = changes.find((c) => c.afterText.includes('Second part'))
+    expect(para?.kind).toBe('paragraph')
   })
 })

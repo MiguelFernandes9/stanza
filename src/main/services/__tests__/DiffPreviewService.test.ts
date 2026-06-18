@@ -72,4 +72,29 @@ describe('DiffPreviewService', () => {
     expect(res).toHaveLength(1)
     expect('error' in res[0] && res[0].error).toContain('Preview unavailable')
   })
+
+  // A section span is widened (closeSectionSpans) to cover the whole section for
+  // selection geometry; the render region must use only the section's own heading
+  // line, or a kept section balloons the preview to the entire section.
+  test('a section block contributes only its heading line to the region', async () => {
+    const { svc, renderDiff } = setup([block({ kind: 'section', name: 'Intro', beforeSpan: span(3, 7), afterSpan: span(3, 7) })])
+    await svc.get('op1')
+    const [, oldRegion, newRegion] = renderDiff.mock.calls[0]
+    expect(oldRegion).toContain('\\section{Intro}')
+    expect(oldRegion).not.toContain('old para.') // body NOT pulled in by the envelope
+    expect(oldRegion).not.toContain('x=1')
+    expect(newRegion).toContain('\\section{Intro}')
+    expect(newRegion).not.toContain('new para.')
+  })
+
+  test('a section unioned with a leaf does not balloon past the leaf', async () => {
+    const { svc, renderDiff } = setup([
+      block({ kind: 'section', name: 'Intro', beforeSpan: span(3, 7), afterSpan: span(3, 7) }),
+      block({ kind: 'paragraph', beforeSpan: span(4, 4), afterSpan: span(4, 4) }),
+    ])
+    await svc.get('op1')
+    const [, oldRegion] = renderDiff.mock.calls[0]
+    expect(oldRegion).toContain('old para.') // region ends at the leaf paragraph…
+    expect(oldRegion).not.toContain('x=1') // …not the section's enveloped end
+  })
 })

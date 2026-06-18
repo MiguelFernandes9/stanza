@@ -122,7 +122,19 @@ function emit(classified: Classified[], beforeText: string, afterText: string): 
     const nested = topLevelDescendants(c, classified)
     const before = c.beforeBlock ? clip(beforeText, c.beforeBlock, nested.map((d) => d.beforeBlock)) : ''
     const after = c.afterBlock ? clip(afterText, c.afterBlock, nested.map((d) => d.afterBlock)) : ''
-    if (c.status === 'modified' && before === after) continue // sole change was a nested card
+    // Drop a modified block whose OWN content is unchanged — i.e. only a nested
+    // block changed. Compared on ownContent (lines minus every child, minus
+    // blanks), NOT the clipped text, so adding or removing a child — e.g.
+    // splitting one paragraph into two inside a section — doesn't read as a
+    // change via differing sentinel / blank-line counts (which left a phantom
+    // "section modified" card and ballooned the preview to the whole section).
+    if (
+      c.status === 'modified' &&
+      c.beforeBlock &&
+      c.afterBlock &&
+      ownContent(beforeText, c.beforeBlock) === ownContent(afterText, c.afterBlock)
+    )
+      continue
     changes.push({
       status: c.status,
       kind: c.kind,
@@ -171,6 +183,28 @@ function slice(text: string, block: BlockNode): string {
     .split('\n')
     .slice(block.span.startLine - 1, block.span.endLine)
     .join('\n')
+}
+
+/** A block's OWN source: its lines with every child range removed and all blank
+ *  lines dropped — what the block itself contributes, independent of its
+ *  children. A section reduces to its `\section{...}` heading line; a leaf with
+ *  no children reduces to its non-blank lines. Removing whole children (not a
+ *  per-child sentinel) and blanks makes this invariant to the NUMBER of children
+ *  — so a child split/merge isn't mistaken for the parent changing. */
+function ownContent(text: string, block: BlockNode): string {
+  const base = block.span.startLine
+  const lines = text.split('\n').slice(block.span.startLine - 1, block.span.endLine)
+  const ranges = block.children
+    .map((c) => ({ s: c.span.startLine - base, e: c.span.endLine - base }))
+    .sort((x, y) => x.s - y.s)
+  const out: string[] = []
+  let i = 0
+  for (const r of ranges) {
+    for (; i < r.s && i < lines.length; i++) out.push(lines[i])
+    i = Math.max(i, r.e + 1)
+  }
+  for (; i < lines.length; i++) out.push(lines[i])
+  return out.filter((l) => l.trim() !== '').join('\n')
 }
 
 function start(c: BlockChange): number {
