@@ -50,7 +50,7 @@ describe('DocumentSession', () => {
     expect(session.opActive).toBe(false)
   })
 
-  test('runExclusive serializes — each op waits for the previous to settle', async () => {
+  test('runMainTreeExclusive serializes — each op waits for the previous to settle', async () => {
     const session = new DocumentSession(doc, new MockRunner(), store)
     const log: string[] = []
     const task = (tag: string, ms: number) => () =>
@@ -61,16 +61,16 @@ describe('DocumentSession', () => {
           resolve()
         }, ms)
       })
-    const a = session.runExclusive(task('A', 25)) // slower, started first
-    const b = session.runExclusive(task('B', 1))
+    const a = session.runMainTreeExclusive(task('A', 25)) // slower, started first
+    const b = session.runMainTreeExclusive(task('B', 1))
     await Promise.all([a, b])
     expect(log).toEqual(['start A', 'end A', 'start B', 'end B']) // B never overlaps A
   })
 
-  test('a rejecting op does not wedge the chain', async () => {
+  test('a rejecting main-tree write does not wedge the chain', async () => {
     const session = new DocumentSession(doc, new MockRunner(), store)
-    await expect(session.runExclusive(() => Promise.reject(new Error('boom')))).rejects.toThrow('boom')
-    await expect(session.runExclusive(() => Promise.resolve('ok'))).resolves.toBe('ok')
+    await expect(session.runMainTreeExclusive(() => Promise.reject(new Error('boom')))).rejects.toThrow('boom')
+    await expect(session.runMainTreeExclusive(() => Promise.resolve('ok'))).resolves.toBe('ok')
   })
 
   test('starts no external-edit watcher and no compile on construction', () => {

@@ -111,6 +111,65 @@ export class GitClient {
     await this.must(['switch', '-'])
   }
 
+  /** The current HEAD sha — the base each op's worktree syncs to. */
+  async head(): Promise<string> {
+    return (await this.must(['rev-parse', 'HEAD'])).stdout.trim()
+  }
+
+  /** Add a detached worktree at HEAD (shares this repo's .git). The doc's ops
+   *  run/edit THERE so the main tree is never touched mid-op (Accept never
+   *  waits). Persistent + reused across ops; named at capture, not here. */
+  async addWorktree(dir: string): Promise<void> {
+    await this.must(['worktree', 'add', '--detach', dir, 'HEAD'])
+  }
+
+  /** Remove a worktree dir + its admin entry. Force: a live op leaves edits. */
+  async removeWorktree(dir: string): Promise<void> {
+    await this.run(['worktree', 'remove', '--force', dir])
+  }
+
+  /** Clear admin entries for worktrees whose dir is gone (stale after a crash or
+   *  a tmp-dir wipe) so re-adding the same path doesn't hit "already registered". */
+  async pruneWorktrees(): Promise<void> {
+    await this.run(['worktree', 'prune'])
+  }
+
+  /** Linked-worktree paths (excludes the main worktree) — for reuse/prune. */
+  async listWorktrees(): Promise<string[]> {
+    const res = await this.run(['worktree', 'list', '--porcelain'])
+    if (res.code !== 0) return []
+    const main = (await this.run(['rev-parse', '--show-toplevel'])).stdout.trim()
+    return res.stdout
+      .split('\n')
+      .filter((l) => l.startsWith('worktree '))
+      .map((l) => l.slice('worktree '.length))
+      .filter((p) => {
+        try {
+          return realpathSync(p) !== realpathSync(main)
+        } catch {
+          return true // a vanished worktree path still needs pruning
+        }
+      })
+  }
+
+  /** A GitClient bound to a linked worktree dir, reusing every method here
+   *  (isClean, switchCreate, commitAll) against that tree. */
+  worktreeClient(dir: string): GitClient {
+    return new GitClient(this.runner, dir)
+  }
+
+  /** Hard-reset this (worktree) tree to `ref` — syncs the op worktree to the
+   *  doc's latest HEAD and discards any leftover edits before the next op. */
+  async resetHard(ref: string): Promise<void> {
+    await this.must(['reset', '--hard', ref])
+  }
+
+  /** Detach this worktree at `ref`, discarding local changes — frees the op
+   *  branch (so Accept can merge it) and readies the worktree for reuse. */
+  async checkoutDetach(ref: string): Promise<void> {
+    await this.must(['checkout', '--force', '--detach', ref])
+  }
+
   /** Merge a proposal branch. On conflict: collect the conflicted
    *  files, abort the merge, leave the tree as it was. */
   async mergeNoFF(branch: string): Promise<{ ok: boolean; conflicts: string[] }> {
