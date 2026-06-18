@@ -24,4 +24,9 @@ export interface OpRecord {
   instruction: string
   note: string
   accepted: boolean | null
+  /** Scope at run time: a whole-document op (`spans: []`) vs a block-scoped edit.
+   *  The assistant panel shows only `doc` history — block edits live in the rail
+   *  bubbles. Optional for back-compat: records written before this field default
+   *  to `doc` on read. */
+  scope?: 'doc' | 'blocks'
 }

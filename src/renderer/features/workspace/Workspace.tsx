@@ -13,7 +13,8 @@ import type {
   OpRecord
 } from '@shared/ipc'
 import { ChatPane } from '../chat/ChatPane'
-import type { ChatMessage, ComposeChip } from '../chat/ChatPane'
+import type { ComposeChip } from '../chat/ChatPane'
+import { chatMessages } from '../chat/chatModel'
 import { saveActiveAndCompile, saveAllAndCompile } from './compileTriggers'
 import { filesToReloadAfterResolve } from './reviewReload'
 import { EditorPane } from '../editor/EditorPane'
@@ -684,20 +685,9 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
   const activeTask = state.tasks.find((t) => t.id === state.activeTask)
   const pageById = new Map(pageBlocks.map((b) => [b.id, b]))
 
-  // Chat stream: one user+claude pair per op record; unresolved ops carry
-  // their proposal (from the live task) for inline accept/reject.
-  const messages: ChatMessage[] = opRecords.flatMap((r): ChatMessage[] => {
-    const owner = state.tasks.find((t) => t.opId === r.opId || t.proposal?.opId === r.opId)
-    return [
-      { role: 'user', text: r.instruction },
-      {
-        role: 'claude',
-        text: r.note,
-        proposal: r.accepted === null ? owner?.proposal ?? undefined : undefined,
-        resolved: r.accepted === null ? null : r.accepted ? 'accept' : 'reject'
-      }
-    ]
-  })
+  // Assistant panel = whole-document conversation only (chatModel filters out
+  // block-scoped edits, which live in their rail bubbles).
+  const messages = chatMessages(opRecords, state.tasks)
   const chatBusy = state.tasks.some((t) => t.phase === 'busy')
   const chips: ComposeChip[] = state.tasks
     .filter((t) => t.phase === 'compose')
