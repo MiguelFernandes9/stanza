@@ -87,7 +87,7 @@ export function ThreadCard({
             Conversation
           </span>
           <div style={{ flex: 1 }} />
-          <IconButton size="sm" label="Delete conversation" onClick={onDelete}>
+          <IconButton size="sm" label="Delete conversation" onClick={onDelete} disabled={busy}>
             <Trash2 size={13} />
           </IconButton>
           <IconButton size="sm" label="Collapse" onClick={onCollapse}>

@@ -231,10 +231,17 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
       const remap = pendingRemap(blocksRef.current, fresh, tasksRef.current)
       if (Object.keys(remap).length) dispatch({ type: 'reanchor', remap })
       // A persistent thread whose anchor block was DELETED (no hash/path
-      // successor) loses its home — drop the bubble and its persisted record.
+      // successor) loses its home — drop the bubble and its persisted record. If
+      // it still holds a pending proposal, reject it first so its op branch +
+      // span lock are freed (BUG-42), exactly as deleteThread does.
       for (const taskId of vanishedThreads(blocksRef.current, fresh, tasksRef.current)) {
-        const threadId = tasksRef.current.find((t) => t.id === taskId)?.threadId
-        if (threadId) void client.threadsDelete(threadId).catch(() => undefined)
+        const task = tasksRef.current.find((t) => t.id === taskId)
+        if (!task) continue
+        const opId = task.proposal?.opId ?? task.opId
+        if (task.phase === 'review' && opId) {
+          void client.reviewResolve({ opId, accept: false }).catch(() => undefined)
+        }
+        if (task.threadId) void client.threadsDelete(task.threadId).catch(() => undefined)
         dispatch({ type: 'dismiss', taskId })
       }
       setBlocks(fresh)
@@ -730,7 +737,10 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
 
   const deleteThread = (taskId: number): void => {
     const task = state.tasks.find((t) => t.id === taskId)
-    if (!task) return
+    // Mid-turn (busy) is not deletable: 'dismiss' no-ops on busy AND the in-flight
+    // runClaudeTurn would re-persist the record we just deleted — so the delete
+    // would silently resurrect. Bail; the user deletes once the turn settles.
+    if (!task || task.phase === 'busy') return
     // A pending proposal owns a backend op branch + lock — reject it so both are
     // freed (BUG-42) before the bubble goes.
     const opId = task.proposal?.opId ?? task.opId
