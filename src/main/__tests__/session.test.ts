@@ -50,6 +50,29 @@ describe('DocumentSession', () => {
     expect(session.opActive).toBe(false)
   })
 
+  test('runExclusive serializes — each op waits for the previous to settle', async () => {
+    const session = new DocumentSession(doc, new MockRunner(), store)
+    const log: string[] = []
+    const task = (tag: string, ms: number) => () =>
+      new Promise<void>((resolve) => {
+        log.push(`start ${tag}`)
+        setTimeout(() => {
+          log.push(`end ${tag}`)
+          resolve()
+        }, ms)
+      })
+    const a = session.runExclusive(task('A', 25)) // slower, started first
+    const b = session.runExclusive(task('B', 1))
+    await Promise.all([a, b])
+    expect(log).toEqual(['start A', 'end A', 'start B', 'end B']) // B never overlaps A
+  })
+
+  test('a rejecting op does not wedge the chain', async () => {
+    const session = new DocumentSession(doc, new MockRunner(), store)
+    await expect(session.runExclusive(() => Promise.reject(new Error('boom')))).rejects.toThrow('boom')
+    await expect(session.runExclusive(() => Promise.resolve('ok'))).resolves.toBe('ok')
+  })
+
   test('starts no external-edit watcher and no compile on construction', () => {
     // Compile fires only on explicit user actions (⌘S / accept / ⌘R) — opening a
     // document wires the services but kicks off no background watcher or compile.

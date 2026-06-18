@@ -41,6 +41,22 @@ export class DocumentSession {
     if (this.ops > 0) this.ops--
   }
 
+  /** Serializes tree-mutating work (Claude ops + accept/merge) per document.
+   *  The whole branch-dance — prepare → run → capture, and resolve's merge —
+   *  needs EXCLUSIVE working-tree access: `git add -A` would otherwise bundle a
+   *  concurrent op's edits into the wrong branch, so accepting one proposal
+   *  applied another. Chains each call after the previous settles (ok or fail).
+   *  Same-repo across windows uses separate sessions/chains — not covered. */
+  private opChain: Promise<unknown> = Promise.resolve()
+  runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const result = this.opChain.then(fn, fn)
+    this.opChain = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    return result
+  }
+
   constructor(info: DocumentInfo, runner: ProcessRunner, store: Store) {
     this.info = info
     this.compiler = new CompileService(runner, info)

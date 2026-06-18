@@ -192,38 +192,46 @@ export function registerIpcHandlers(): void {
     return doc ? doc.compiler.forward(span) : []
   })
 
-  ipcMain.handle(IpcChannels.claudeRun, (event, req: ClaudeRequest) =>
-    runClaudeOp(sessionFor(event), event.sender, req),
-  )
+  ipcMain.handle(IpcChannels.claudeRun, (event, req: ClaudeRequest) => {
+    const doc = sessionFor(event)
+    // Serialize the whole op (prepare → run → capture) — concurrent ops would
+    // race the shared working tree and bundle each other's edits into one branch
+    // (accepting one then applied both).
+    return doc.runExclusive(() => runClaudeOp(doc, event.sender, req))
+  })
 
   ipcMain.handle(
     IpcChannels.claudeHistory,
     (event): OpRecord[] => store.getProject(sessionFor(event).info.root).ops ?? [],
   )
 
-  ipcMain.handle(IpcChannels.reviewResolve, async (event, decision: ReviewDecision) => {
+  ipcMain.handle(IpcChannels.reviewResolve, (event, decision: ReviewDecision) => {
     const doc = sessionFor(event)
-    const resolution = await doc.review.resolve(decision)
-    doc.diffPreview.invalidate(decision.opId) // free the op's cached block previews
-    if (resolution.committed || !decision.accept) {
-      patchOpRecord(doc.info.root, decision.opId, { accepted: decision.accept })
-    }
-    // A committed accept merges Claude's branch into the working tree — Claude
-    // may have added sections/*.tex, dirs, or renamed files (runClaudeOp itself
-    // restored the tree clean; the files land HERE). Re-derive THIS window's
-    // session.info so document:projectBlocks parses the current texFiles, and
-    // hand a fresh DocumentInfo back when the file set changed (the renderer
-    // re-keys + reloads the sidebar/blocks — same contract as app file ops,
-    // BUG-53).
-    if (decision.accept && resolution.committed) {
-      const before = doc.info
-      const fresh = await documents.open(before.root)
-      if (fresh) {
-        doc.info = fresh
-        if (fileSetChanged(before, fresh)) return { ...resolution, doc: fresh }
+    // Same mutex as ops: the accept merge mutates the working tree and must not
+    // interleave with an in-flight op's branch-dance.
+    return doc.runExclusive(async () => {
+      const resolution = await doc.review.resolve(decision)
+      doc.diffPreview.invalidate(decision.opId) // free the op's cached block previews
+      if (resolution.committed || !decision.accept) {
+        patchOpRecord(doc.info.root, decision.opId, { accepted: decision.accept })
       }
-    }
-    return resolution
+      // A committed accept merges Claude's branch into the working tree — Claude
+      // may have added sections/*.tex, dirs, or renamed files (runClaudeOp itself
+      // restored the tree clean; the files land HERE). Re-derive THIS window's
+      // session.info so document:projectBlocks parses the current texFiles, and
+      // hand a fresh DocumentInfo back when the file set changed (the renderer
+      // re-keys + reloads the sidebar/blocks — same contract as app file ops,
+      // BUG-53).
+      if (decision.accept && resolution.committed) {
+        const before = doc.info
+        const fresh = await documents.open(before.root)
+        if (fresh) {
+          doc.info = fresh
+          if (fileSetChanged(before, fresh)) return { ...resolution, doc: fresh }
+        }
+      }
+      return resolution
+    })
   })
 
   ipcMain.handle(IpcChannels.reviewList, (event) => sessionFor(event).review.list())

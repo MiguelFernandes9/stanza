@@ -219,6 +219,36 @@ esac`)
     expect(h.sent.filter((e) => e.channel === 'review:proposal')).toHaveLength(0)
   }, 20_000)
 
+  // Two ops fired without awaiting the first must NOT bundle each other's edits
+  // into one branch — the bug where accepting one proposal also applied another.
+  // Each op appends its own marker (printf BEFORE sleep so both edits would
+  // coexist in the shared tree if the branch-dance weren't serialized).
+  const dualStub = () =>
+    makeClaudeStub(`case "$*" in
+  *ALPHA*) printf 'ALPHA-edit\\n' >> main.tex; sleep 0.3; echo '{"result":"A"}' ;;
+  *BETA*) printf 'BETA-edit\\n' >> main.tex; sleep 0.3; echo '{"result":"B"}' ;;
+  *) echo '{"result":"primed"}' ;;
+esac`)
+
+  test('concurrent ops keep their edits isolated (no cross-branch bundling)', async () => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', dualStub())
+    const root = makeProject()
+    await invoke('document:open', root)
+
+    const pA = invoke('claude:run', { instruction: 'ALPHA change', spans: [{ file: 'main.tex', startLine: 3, endLine: 3 }] })
+    const pB = invoke('claude:run', { instruction: 'BETA change', spans: [{ file: 'main.tex', startLine: 1, endLine: 1 }] })
+    const [rA, rB] = (await Promise.all([pA, pB])) as ClaudeResult[]
+
+    expect(rA.proposal).not.toBeNull()
+    expect(rB.proposal).not.toBeNull()
+    expect(rA.proposal!.diff).toContain('ALPHA-edit')
+    expect(rA.proposal!.diff).not.toContain('BETA-edit') // A's branch is A's edit only
+    expect(rB.proposal!.diff).toContain('BETA-edit')
+    expect(rB.proposal!.diff).not.toContain('ALPHA-edit')
+    // neither edit is in the working tree until accepted
+    expect(readFileSync(join(root, 'main.tex'), 'utf8')).toBe(ARTICLE)
+  }, 30_000)
+
   test('a pending whole-doc proposal blocks a later scoped op (SPANS_LOCKED)', async () => {
     vi.stubEnv('STANZA_CLAUDE_BIN', wholeDocStub())
     const root = makeProject()
