@@ -186,6 +186,25 @@ describe('taskReducer — toggle-view flips Read ↔ Select', () => {
   })
 })
 
+describe('taskReducer — attach-image (block snapshot, F2)', () => {
+  it('stores the data URL on the task', () => {
+    let s = run(initialTaskState, { type: 'toggle-block', ids: ['p1'], additive: false })
+    s = run(s, { type: 'attach-image', taskId: s.tasks[0].id, image: 'data:image/png;base64,AAA' })
+    expect(s.tasks[0].image).toBe('data:image/png;base64,AAA')
+  })
+
+  it('retake overwrites the previous image', () => {
+    let s = run(initialTaskState, { type: 'toggle-block', ids: ['p1'], additive: false })
+    const id = s.tasks[0].id
+    s = run(
+      s,
+      { type: 'attach-image', taskId: id, image: 'one' },
+      { type: 'attach-image', taskId: id, image: 'two' }
+    )
+    expect(s.tasks[0].image).toBe('two')
+  })
+})
+
 describe('taskReducer — clear-drafts (Esc deselects)', () => {
   it('drops every compose draft and nulls activeTask', () => {
     let s = run(

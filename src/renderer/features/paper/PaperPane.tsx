@@ -67,6 +67,8 @@ interface Props {
   onSubmitTask: (taskId: number) => void
   onDismissTask: (taskId: number) => void
   onResolveTask: (taskId: number, accept: boolean) => void
+  /** Snapshot the task's first block from the rendered canvas → attach the PNG. */
+  onAttachImage: (taskId: number, image: string) => void
   onView: (view: PaneView) => void
 }
 
@@ -116,6 +118,35 @@ export function PaperPane(props: Props): JSX.Element {
   const byId = new Map(pageBlocks.map((b) => [b.id, b]))
   const blocksOf = (blockIds: string[]): PageBlock[] =>
     blockIds.map((id) => byId.get(id)).filter((b): b is PageBlock => b != null)
+
+  // F2: crop the task's first block out of its rendered page canvas → PNG data
+  // URL, attached to the task for the next Run. Block rects are PDF pt; the
+  // overlay scales them by zoom, and the canvas backing store is `k`× the CSS
+  // size (DPR, capped at 2) — so backing px = pt·zoom·k. No-op if the page isn't
+  // currently rasterized (off-screen) — the user is looking at the block, so it
+  // virtually always is.
+  const captureBlock = (taskId: number): void => {
+    const task = state.tasks.find((t) => t.id === taskId)
+    const rect = task?.blockIds[0] ? blockRects.get(task.blockIds[0])?.[0] : undefined
+    if (!rect) return
+    const canvas = scrollRef.current?.querySelector<HTMLCanvasElement>(`[data-page="${rect.page}"] canvas`)
+    const cssW = canvas ? parseFloat(canvas.style.width) || canvas.clientWidth : 0
+    if (!canvas || !cssW) return
+    const k = canvas.width / cssW
+    const pad = 6
+    const sx = Math.max(0, (rect.x * zoom - pad) * k)
+    const sy = Math.max(0, (rect.y * zoom - pad) * k)
+    const sw = Math.min(canvas.width - sx, (rect.width * zoom + pad * 2) * k)
+    const sh = Math.min(canvas.height - sy, (rect.height * zoom + pad * 2) * k)
+    if (sw <= 0 || sh <= 0) return
+    const crop = document.createElement('canvas')
+    crop.width = Math.round(sw)
+    crop.height = Math.round(sh)
+    const ctx = crop.getContext('2d')
+    if (!ctx) return
+    ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, crop.width, crop.height)
+    props.onAttachImage(taskId, crop.toDataURL('image/png'))
+  }
 
   const marks: Record<string, BlockMark> = {}
   for (const t of state.tasks)
@@ -661,6 +692,7 @@ export function PaperPane(props: Props): JSX.Element {
                         onCollapse={() => setOpenIds((s) => s.filter((x) => x !== t.id))}
                         onResolve={(accept) => props.onResolveTask(t.id, accept)}
                         onOpenReview={() => setReviewId(t.id)}
+                        onSnapshot={() => captureBlock(t.id)}
                       />
                     </div>
                   )

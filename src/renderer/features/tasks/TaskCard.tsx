@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { JSX } from 'react'
-import { ArrowUp, Check, CircleSlash, FileText, Maximize2, Plus, Sparkles, X } from 'lucide-react'
+import { ArrowUp, Camera, Check, CircleSlash, FileText, Maximize2, Plus, Sparkles, X } from 'lucide-react'
 import { BlockTag, Button, DiffHunk, IconButton, Kbd } from '@renderer/components'
 import type { BlockTagKind } from '@renderer/components'
 import { combinedSpanLabel, spanLabel } from '../paper/paperModel'
@@ -33,6 +33,9 @@ interface Props {
   onCollapse: () => void
   onResolve: (accept: boolean) => void
   onOpenReview: () => void
+  /** Capture the block as a PNG and attach it to this task's next Run. Absent for
+   *  whole-document cards (no block to snapshot). */
+  onSnapshot?: () => void
   refCb: (el: HTMLDivElement | null) => void
 }
 
@@ -72,6 +75,7 @@ export function TaskCard({
   onCollapse,
   onResolve,
   onOpenReview,
+  onSnapshot,
   refCb
 }: Props): JSX.Element {
   const taRef = useRef<HTMLTextAreaElement | null>(null)
@@ -264,6 +268,27 @@ export function TaskCard({
               }}
             >
               <Plus size={11} /> blocks
+            </button>
+          )}
+          {task.phase === 'compose' && onSnapshot && blocks.length > 0 && (
+            <button
+              onClick={onSnapshot}
+              title={task.image ? 'Snapshot attached — click to retake' : "Attach a snapshot of the block's rendered output"}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                height: 22,
+                padding: '0 8px',
+                borderRadius: 'var(--radius-pill)',
+                cursor: 'pointer',
+                border: `1px ${task.image ? 'solid var(--clay-400)' : 'dashed var(--line-ink)'}`,
+                background: task.image ? 'var(--clay-50)' : 'transparent',
+                color: task.image ? 'var(--clay-700)' : 'var(--ink-500)',
+                font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-sans)'
+              }}
+            >
+              {task.image ? <Check size={11} /> : <Camera size={11} />} snapshot
             </button>
           )}
         </div>

@@ -23,6 +23,9 @@ export interface EditTask {
   note?: string
   /** Last op error (task returned to compose). */
   error?: string
+  /** PNG snapshot (data URL) of the block, attached in compose and sent with the
+   *  next Run so Claude sees the rendered output. Lives until the task is gone. */
+  image?: string
 }
 
 export interface TaskState {
@@ -52,6 +55,7 @@ export type TaskAction =
   | { type: 'toggle-block'; ids: string[]; additive: boolean }
   | { type: 'remove-block'; taskId: number; blockId: string }
   | { type: 'update-instruction'; taskId: number; instruction: string }
+  | { type: 'attach-image'; taskId: number; image: string }
   | { type: 'submit'; taskId: number }
   | { type: 'start-whole-doc'; instruction: string }
   | { type: 'op-started'; taskId: number; opId: string }
@@ -174,6 +178,8 @@ export function taskReducer(s: TaskState, a: TaskAction): TaskState {
     }
     case 'update-instruction':
       return patchTask(s, a.taskId, { instruction: a.instruction })
+    case 'attach-image':
+      return patchTask(s, a.taskId, { image: a.image })
     case 'submit': {
       const t = s.tasks.find((x) => x.id === a.taskId)
       if (!t || t.phase !== 'compose' || !t.instruction.trim()) return s

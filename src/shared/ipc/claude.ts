@@ -4,6 +4,9 @@ export interface BlockSpan { file: string; startLine: number; endLine: number }
 export interface ClaudeRequest {
   instruction: string
   spans: BlockSpan[]    // empty = whole document
+  /** Optional PNG snapshot of the selected block (data URL). The main process
+   *  writes it to a temp file Claude can Read, so it sees the rendered output. */
+  imageDataUrl?: string
 }
 export interface ClaudeStatus {
   opId: string
