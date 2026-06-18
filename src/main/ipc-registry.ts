@@ -7,6 +7,8 @@ import type {
   BlockSpan,
   ClaudeRequest,
   ClaudeResult,
+  ClaudeTurnRequest,
+  ClaudeTurnResult,
   CompileRequest,
   CompileStatus,
   DocumentInfo,
@@ -17,6 +19,9 @@ import type {
   OpRecord,
   RecentProject,
   ReviewDecision,
+  ReviewProposal,
+  ThreadRecord,
+  ThreadTurn,
   GlobalSettings,
   DocumentSettings,
   DocumentSettingsResult,
@@ -28,6 +33,7 @@ import { armSettleWatcher, watchSettled } from './infra/FileWatcher'
 import { DefaultProcessRunner } from './infra/ProcessRunner'
 import { GitClient } from './infra/GitClient'
 import { Store, GlobalSettingsStore } from './infra/Store'
+import { appendTurns, patchTurnByOpId, upsertThread } from './threadStore'
 import { ClaudeService } from './services/ClaudeService'
 import { changedFilesInDiff } from './services/diffSpans'
 import { DocumentService } from './services/DocumentService'
@@ -206,16 +212,28 @@ export function registerIpcHandlers(): void {
     runClaudeOp(sessionFor(event), event.sender, req),
   )
 
+  ipcMain.handle(IpcChannels.claudeRunTurn, (event, req: ClaudeTurnRequest) =>
+    runClaudeTurn(sessionFor(event), event.sender, req),
+  )
+
   ipcMain.handle(
     IpcChannels.claudeHistory,
     (event): OpRecord[] => store.getProject(sessionFor(event).info.root).ops ?? [],
+  )
+
+  ipcMain.handle(
+    IpcChannels.threadsList,
+    (event): ThreadRecord[] => store.getProject(sessionFor(event).info.root).threads ?? [],
   )
 
   ipcMain.handle(IpcChannels.reviewResolve, async (event, decision: ReviewDecision) => {
     const doc = sessionFor(event)
     const resolution = await doc.review.resolve(decision)
     if (resolution.committed || !decision.accept) {
+      // An op belongs to EITHER the doc history (ops) or a persistent thread —
+      // patch both; the non-owner is a no-op.
       patchOpRecord(doc.info.root, decision.opId, { accepted: decision.accept })
+      patchThreadTurnAccepted(doc.info.root, decision.opId, decision.accept)
     }
     // A committed accept merges Claude's branch into the working tree — Claude
     // may have added sections/*.tex, dirs, or renamed files (runClaudeOp itself
@@ -442,32 +460,14 @@ async function runClaudeOp(
   wc: WebContents,
   req: ClaudeRequest,
 ): Promise<ClaudeResult> {
-  doc.review.assertSpansFree(req.spans)
-  await doc.review.prepare()
-
-  // Arm the settle watcher BEFORE the op so an edit that flushes after claude
-  // exits is still awaited (a fixed grace lost that race, B11.2). It only waits
-  // for the op's writes to land — it never recompiles; compile fires on accept
-  // (docs/compile-triggers.md).
-  const watcher = armSettleWatcher(doc.info.root, { quietMs: 400, capMs: 3000 })
-  let op: { opId: string; note: string }
-  try {
-    // claude:status is per-document → only the owning window.
-    op = await doc.claude.runOp(req, (status) => sendTo(wc, IpcChannels.claudeStatus, status))
-    await watcher.settled() // wait for claude's writes to land (and stop)
-  } catch (err) {
-    await doc.git.restoreAll() // failed/timed-out op never leaves edits behind
-    throw err
-  } finally {
-    watcher.dispose()
-  }
-
-  const proposal = await doc.review.capture(op.opId, req.instruction, req.spans)
+  const { result, proposal } = await runWithCapture(doc, req, () =>
+    doc.claude.runOp(req, (status) => sendTo(wc, IpcChannels.claudeStatus, status)),
+  )
   appendOpRecord(doc.info.root, {
-    opId: op.opId,
+    opId: result.opId,
     ts: new Date().toISOString(),
     instruction: req.instruction,
-    note: op.note,
+    note: result.note,
     accepted: null,
   })
   // The proposal travels back on this return — the initiating renderer wires it
@@ -475,7 +475,79 @@ async function runClaudeOp(
   // duplicate raced op-started's opId and spawned a twin review card whose
   // second accept hit an already-merged branch (BUG-18). The broadcast path is
   // reserved for reEmitPendingProposals (open-time crash recovery).
-  return { opId: op.opId, note: op.note, proposal }
+  return { opId: result.opId, note: result.note, proposal }
+}
+
+/** A turn of a persistent conversation bubble. Same clean-tree → run → capture
+ *  pipeline as a one-shot op, but on the THREAD's isolated session, and the
+ *  transcript is persisted to `threads` (NOT `ops`) — so threads stay out of the
+ *  ⌘J doc history and their empty-span turns never lock the doc session. */
+async function runClaudeTurn(
+  doc: DocumentSession,
+  wc: WebContents,
+  req: ClaudeTurnRequest,
+): Promise<ClaudeTurnResult> {
+  const claudeReq: ClaudeRequest = { instruction: req.instruction, spans: req.spans }
+  const { result, proposal } = await runWithCapture(doc, claudeReq, () =>
+    doc.claude.runThreadTurn(req.sessionId, claudeReq, (status) =>
+      sendTo(wc, IpcChannels.claudeStatus, status),
+    ),
+  )
+  persistThreadTurn(doc.info.root, req, result, proposal)
+  return { opId: result.opId, note: result.note, sessionId: result.sessionId, proposal }
+}
+
+/** The shared clean-tree → run → settle → capture scaffolding. `action` invokes
+ *  the right ClaudeService method (op or thread turn) and returns its opId/note;
+ *  the settle watcher and restore-on-failure are armed around it (B11.2). */
+async function runWithCapture<T extends { opId: string; note: string }>(
+  doc: DocumentSession,
+  req: ClaudeRequest,
+  action: () => Promise<T>,
+): Promise<{ result: T; proposal: ReviewProposal | null }> {
+  doc.review.assertSpansFree(req.spans)
+  await doc.review.prepare()
+
+  // Arm the settle watcher BEFORE the op so an edit that flushes after claude
+  // exits is still awaited. It only waits for writes to land — never recompiles.
+  const watcher = armSettleWatcher(doc.info.root, { quietMs: 400, capMs: 3000 })
+  let result: T
+  try {
+    result = await action()
+    await watcher.settled()
+  } catch (err) {
+    await doc.git.restoreAll() // failed/timed-out op never leaves edits behind
+    throw err
+  } finally {
+    watcher.dispose()
+  }
+
+  const proposal = await doc.review.capture(result.opId, req.instruction, req.spans)
+  return { result, proposal }
+}
+
+/** Append a user+agent turn to a thread record, refreshing its session id and
+ *  block anchor. An edit turn (proposal present) tags the agent turn with its
+ *  opId so accept/reject can find it later. */
+function persistThreadTurn(
+  root: string,
+  req: ClaudeTurnRequest,
+  result: { opId: string; note: string; sessionId: string },
+  proposal: ReviewProposal | null,
+): void {
+  const ts = new Date().toISOString()
+  const turns: ThreadTurn[] = [
+    { role: 'user', text: req.instruction, ts },
+    { role: 'agent', text: result.note, ts, ...(proposal ? { opId: result.opId, accepted: null } : {}) },
+  ]
+  const existing = store.getProject(root).threads ?? []
+  const withMeta = upsertThread(existing, {
+    threadId: req.threadId,
+    sessionId: result.sessionId,
+    blockIds: req.blockIds,
+    ts,
+  })
+  store.setProject(root, { threads: appendTurns(withMeta, req.threadId, turns) })
 }
 
 /** Run the priming pipeline with prime:status events and prime:cancel
@@ -528,6 +600,14 @@ function patchOpRecord(root: string, opId: string, patch: Partial<OpRecord>): vo
     op.opId === opId ? { ...op, ...patch } : op,
   )
   store.setProject(root, { ops })
+}
+
+/** Record a thread edit turn's accept/reject. No-op when the op isn't a thread
+ *  turn (it's a doc op instead) — patchTurnByOpId leaves non-owners untouched. */
+function patchThreadTurnAccepted(root: string, opId: string, accepted: boolean): void {
+  const threads = store.getProject(root).threads
+  if (!threads) return
+  store.setProject(root, { threads: patchTurnByOpId(threads, opId, { accepted }) })
 }
 
 /** Post-op result: fresh listing + a new DocumentInfo only when the op

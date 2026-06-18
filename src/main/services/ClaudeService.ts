@@ -46,6 +46,22 @@ export class ClaudeService {
     return result
   }
 
+  /** A turn of a persistent conversation bubble. Runs on the THREAD's own
+   *  session (isolated from the doc session): `sessionId` null primes a fresh
+   *  one and returns its id; otherwise resumes the given id. Serialized through
+   *  the same queue as doc ops — every CLI call shares the one working tree. */
+  runThreadTurn(
+    sessionId: string | null,
+    req: ClaudeRequest,
+    onStatus: (s: ClaudeStatus) => void,
+  ): Promise<{ opId: string; note: string; sessionId: string }> {
+    const opId = randomUUID()
+    onStatus({ opId, state: 'priming' })
+    const result = this.queue.then(() => this.executeTurn(opId, sessionId, req, onStatus))
+    this.queue = result.catch(() => {})
+    return result
+  }
+
   private async execute(
     opId: string,
     req: ClaudeRequest,
@@ -53,25 +69,70 @@ export class ClaudeService {
   ): Promise<{ opId: string; note: string }> {
     try {
       const sessionId = await this.ensureSession()
-      onStatus({ opId, state: 'running' })
-      const proc = await this.claude([
-        '-p',
-        '--resume',
-        sessionId,
-        '--output-format',
-        'json',
-        '--permission-mode',
-        'acceptEdits',
-        opPrompt(req),
-      ])
-      assertCompleted(proc, this.timeoutMs)
-      const note = extractNote(proc.stdout)
-      onStatus({ opId, state: 'done' })
-      return { opId, note }
+      return await this.runOpOnSession(opId, sessionId, req, onStatus)
     } catch (err) {
       onStatus({ opId, state: 'failed', detail: String(err) })
       throw err
     }
+  }
+
+  private async executeTurn(
+    opId: string,
+    threadSessionId: string | null,
+    req: ClaudeRequest,
+    onStatus: (s: ClaudeStatus) => void,
+  ): Promise<{ opId: string; note: string; sessionId: string }> {
+    try {
+      const sessionId = threadSessionId ?? (await this.primeThreadSession())
+      const done = await this.runOpOnSession(opId, sessionId, req, onStatus)
+      return { ...done, sessionId }
+    } catch (err) {
+      onStatus({ opId, state: 'failed', detail: String(err) })
+      throw err
+    }
+  }
+
+  /** The resume+op CLI call shared by doc ops and thread turns. */
+  private async runOpOnSession(
+    opId: string,
+    sessionId: string,
+    req: ClaudeRequest,
+    onStatus: (s: ClaudeStatus) => void,
+  ): Promise<{ opId: string; note: string }> {
+    onStatus({ opId, state: 'running' })
+    const proc = await this.claude([
+      '-p',
+      '--resume',
+      sessionId,
+      '--output-format',
+      'json',
+      '--permission-mode',
+      'acceptEdits',
+      opPrompt(req),
+    ])
+    assertCompleted(proc, this.timeoutMs)
+    const note = extractNote(proc.stdout)
+    onStatus({ opId, state: 'done' })
+    return { opId, note }
+  }
+
+  /** Prime a fresh, isolated session for a new thread and return its id. Unlike
+   *  ensureSession this does NOT touch ProjectRecord.sessionId (the doc session);
+   *  the id is owned by the thread record. */
+  private async primeThreadSession(): Promise<string> {
+    const sessionId = randomUUID()
+    const proc = await this.claude([
+      '-p',
+      '--session-id',
+      sessionId,
+      '--add-dir',
+      this.doc.root,
+      '--output-format',
+      'json',
+      primePrompt(this.doc),
+    ])
+    assertCompleted(proc, this.timeoutMs)
+    return sessionId
   }
 
   /** Returns the persisted session id, priming a new session first

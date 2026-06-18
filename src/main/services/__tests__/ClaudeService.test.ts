@@ -244,3 +244,76 @@ describe('ClaudeService.runOp', () => {
     expect(runner.calls[0]!.cmd).toBe('/mocks/claude-mock.sh')
   })
 })
+
+describe('ClaudeService.runThreadTurn (persistent bubble)', () => {
+  test('first turn primes a FRESH session and returns its id; doc session untouched', async () => {
+    const runner = new MockRunner(() => claudeJson('hi'))
+    const service = new ClaudeService(runner, store, doc)
+
+    const res = await service.runThreadTurn(null, { instruction: 'make it formal', spans: [] }, () => {})
+
+    expect(runner.calls).toHaveLength(2)
+    const prime = runner.calls[0]!
+    expect(prime.args.slice(0, 2)).toEqual(['-p', '--session-id'])
+    expect(prime.args[2]).toMatch(UUID_RE)
+    expect(prime.args[7]).toContain('You are the editing engine inside Stanza')
+
+    const op = runner.calls[1]!
+    expect(op.args.slice(0, 3)).toEqual(['-p', '--resume', prime.args[2]])
+    expect(op.args.at(-1)).toContain('Instruction: make it formal')
+
+    expect(res.sessionId).toBe(prime.args[2]) // the thread's own session id
+    expect(res.note).toBe('hi')
+    // The thread session lives in the thread record, NOT ProjectRecord.sessionId.
+    expect(store.getProject('/proj').sessionId).toBeUndefined()
+  })
+
+  test('a given session id resumes only (no prime) — restart / later turns', async () => {
+    const runner = new MockRunner(() => claudeJson('again'))
+    const service = new ClaudeService(runner, store, doc)
+
+    const res = await service.runThreadTurn(
+      'tttttttt-tttt-tttt-tttt-tttttttttttt',
+      { instruction: 'shorter', spans: [] },
+      () => {},
+    )
+
+    expect(runner.calls).toHaveLength(1)
+    expect(runner.calls[0]!.args.slice(0, 3)).toEqual([
+      '-p',
+      '--resume',
+      'tttttttt-tttt-tttt-tttt-tttttttttttt',
+    ])
+    expect(res.sessionId).toBe('tttttttt-tttt-tttt-tttt-tttttttttttt')
+  })
+
+  test('emits priming → running → done', async () => {
+    const runner = new MockRunner(() => claudeJson('ok'))
+    const service = new ClaudeService(runner, store, doc)
+    const states: ClaudeStatus['state'][] = []
+
+    await service.runThreadTurn('s-s-s', { instruction: 'x', spans: [] }, (s) => states.push(s.state))
+
+    expect(states).toEqual(['priming', 'running', 'done'])
+  })
+
+  test('thread turns share the queue with doc ops (serialize on one tree)', async () => {
+    store.setProject('/proj', { sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' })
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const runner = new MockRunner(async (_spec, call) => {
+      if (call === 0) await gate
+      return claudeJson(`r${call}`)
+    })
+    const service = new ClaudeService(runner, store, doc)
+
+    const op = service.runOp({ instruction: 'doc', spans: [] }, () => {})
+    const turn = service.runThreadTurn('s-s-s', { instruction: 'thread', spans: [] }, () => {})
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(runner.calls).toHaveLength(1) // thread turn waits behind the doc op
+
+    release()
+    await Promise.all([op, turn])
+    expect(runner.calls).toHaveLength(2)
+  })
+})
