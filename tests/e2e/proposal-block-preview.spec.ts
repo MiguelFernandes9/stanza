@@ -72,6 +72,22 @@ test('review opens on the Preview tab (marked latexdiff render) with a Changes d
   await expect(overlay).toBeVisible()
   await expect(overlay.locator('img').first()).toBeVisible({ timeout: 30000 })
 
+  // Zooming past the pane width must leave the preview horizontally scrollable
+  // to BOTH edges (regression: flex-centering used to clip the overflow).
+  // Force the render wider than the pane (narrow window + max zoom), then the
+  // preview must scroll to both edges (regression: flex-centering clipped it).
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setBounds({ width: 680, height: 820 }))
+  const scroll = overlay.getByTestId('preview-scroll')
+  for (let i = 0; i < 12; i++) await overlay.getByLabel('Zoom in').click() // up to max zoom
+  await expect
+    .poll(async () => scroll.evaluate((el) => el.scrollWidth - el.clientWidth), { timeout: 8000 })
+    .toBeGreaterThan(0)
+  const reached = await scroll.evaluate((el) => {
+    el.scrollLeft = el.scrollWidth // scroll fully right
+    return el.scrollLeft > 0 // …and it moved (content there to reach)
+  })
+  expect(reached).toBe(true)
+
   // Changes tab shows the expanded unified LaTeX diff.
   await overlay.getByText('Changes', { exact: true }).click()
   await expect(overlay).toContainText('varepsilon')

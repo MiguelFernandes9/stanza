@@ -62,7 +62,10 @@ export function DiffPreviewPane({ opId, fetchPreview }: Props): JSX.Element {
         )
       ) : state.kind === 'loading' ? (
         <Centered>
-          <Loader2 size={20} style={{ color: 'var(--ink-300)', animation: 'stz-spin 0.9s linear infinite' }} />
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <Loader2 size={16} style={{ color: 'var(--ink-300)', animation: 'stz-spin 0.9s linear infinite' }} />
+            Still compiling…
+          </span>
         </Centered>
       ) : (
         <Centered>{state.message}</Centered>
@@ -115,8 +118,10 @@ function PreviewBody({ items, zoom }: { items: PreviewItem[]; zoom: number }): J
   }, [items, zoom])
 
   return (
-    <div style={{ flex: 1, overflow: 'auto', background: 'var(--surface-app)', padding: 16 }}>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+    <div data-testid="preview-scroll" style={{ flex: 1, overflow: 'auto', background: 'var(--surface-app)', padding: 16 }}>
+      {/* max-content + margin auto: centers when it fits, but collapses margins
+          when wider/taller than the pane so scrolling reaches every edge. */}
+      <div style={{ width: 'max-content', margin: '0 auto', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
         {shots.map((s, i) =>
           'error' in s ? (
             <span key={i} style={{ font: 'var(--text-xs)/1.5 var(--font-sans)', color: 'var(--ink-400)' }}>
