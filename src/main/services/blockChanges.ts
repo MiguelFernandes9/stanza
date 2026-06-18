@@ -122,17 +122,17 @@ function emit(classified: Classified[], beforeText: string, afterText: string): 
     const nested = topLevelDescendants(c, classified)
     const before = c.beforeBlock ? clip(beforeText, c.beforeBlock, nested.map((d) => d.beforeBlock)) : ''
     const after = c.afterBlock ? clip(afterText, c.afterBlock, nested.map((d) => d.afterBlock)) : ''
-    // Drop a modified block whose OWN content is unchanged — i.e. only a nested
-    // block changed. Compared on ownContent (lines minus every child, minus
-    // blanks), NOT the clipped text, so adding or removing a child — e.g.
-    // splitting one paragraph into two inside a section — doesn't read as a
-    // change via differing sentinel / blank-line counts (which left a phantom
-    // "section modified" card and ballooned the preview to the whole section).
+    // Drop a modified block whose OWN content is unchanged — only a nested block
+    // changed. Compared on the block's own line-extent (ownSpan: its lines up to
+    // its first child), which is invariant to how many children it has — so
+    // splitting one paragraph into two inside a section doesn't read as the
+    // section changing (which left a phantom "section modified" card and
+    // ballooned the preview to the whole section).
     if (
       c.status === 'modified' &&
       c.beforeBlock &&
       c.afterBlock &&
-      ownContent(beforeText, c.beforeBlock) === ownContent(afterText, c.afterBlock)
+      sliceSpan(beforeText, ownSpan(c.beforeBlock)) === sliceSpan(afterText, ownSpan(c.afterBlock))
     )
       continue
     changes.push({
@@ -140,8 +140,10 @@ function emit(classified: Classified[], beforeText: string, afterText: string): 
       kind: c.kind,
       name: c.name,
       file: c.file,
-      beforeSpan: c.beforeBlock?.span,
-      afterSpan: c.afterBlock?.span,
+      // The block's OWN extent, not its widened subtree span: a section carries
+      // just its heading line(s) so the preview region never balloons.
+      beforeSpan: c.beforeBlock ? ownSpan(c.beforeBlock) : undefined,
+      afterSpan: c.afterBlock ? ownSpan(c.afterBlock) : undefined,
       beforeText: before,
       afterText: after,
     })
@@ -179,32 +181,24 @@ function clip(text: string, block: BlockNode, descendants: (BlockNode | undefine
 }
 
 function slice(text: string, block: BlockNode): string {
-  return text
-    .split('\n')
-    .slice(block.span.startLine - 1, block.span.endLine)
-    .join('\n')
+  return sliceSpan(text, block.span)
 }
 
-/** A block's OWN source: its lines with every child range removed and all blank
- *  lines dropped — what the block itself contributes, independent of its
- *  children. A section reduces to its `\section{...}` heading line; a leaf with
- *  no children reduces to its non-blank lines. Removing whole children (not a
- *  per-child sentinel) and blanks makes this invariant to the NUMBER of children
- *  — so a child split/merge isn't mistaken for the parent changing. */
-function ownContent(text: string, block: BlockNode): string {
-  const base = block.span.startLine
-  const lines = text.split('\n').slice(block.span.startLine - 1, block.span.endLine)
-  const ranges = block.children
-    .map((c) => ({ s: c.span.startLine - base, e: c.span.endLine - base }))
-    .sort((x, y) => x.s - y.s)
-  const out: string[] = []
-  let i = 0
-  for (const r of ranges) {
-    for (; i < r.s && i < lines.length; i++) out.push(lines[i])
-    i = Math.max(i, r.e + 1)
-  }
-  for (; i < lines.length; i++) out.push(lines[i])
-  return out.filter((l) => l.trim() !== '').join('\n')
+function sliceSpan(text: string, span: BlockNode['span']): string {
+  return text.split('\n').slice(span.startLine - 1, span.endLine).join('\n')
+}
+
+/** A block's OWN line-extent: from its start to just before its first child
+ *  (children are in document order, so the block's own lines precede them). A
+ *  leaf (no children) keeps its full span; a section narrows to its heading
+ *  line(s) — its span was widened (closeSectionSpans) to envelope the whole
+ *  section for selection geometry, which is the wrong extent for the edit /
+ *  preview. Keying off the first child keeps this kind-agnostic (no per-kind
+ *  check) and covers a multi-line heading, which startLine alone would clip. */
+function ownSpan(node: BlockNode): BlockNode['span'] {
+  const firstChild = node.children[0]
+  if (!firstChild) return node.span
+  return { ...node.span, endLine: Math.max(node.span.startLine, firstChild.span.startLine - 1) }
 }
 
 function start(c: BlockChange): number {

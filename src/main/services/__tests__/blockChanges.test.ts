@@ -150,4 +150,31 @@ describe('computeBlockChanges', () => {
     const para = changes.find((c) => c.afterText.includes('Second part'))
     expect(para?.kind).toBe('paragraph')
   })
+
+  test('a section heading rename carries the full (multi-line) heading extent, not the whole section', async () => {
+    // The section span is widened to envelope the whole section; the emitted
+    // change must carry only the heading's own line(s) — here lines 3-4 (the
+    // wrapped \section{...}), not line 3 alone and not down to the body (line 5).
+    const before = ['\\documentclass{article}', '\\begin{document}', '\\section{A long title that', 'wraps across lines}', 'Body paragraph.', '\\end{document}', ''].join('\n')
+    const after = ['\\documentclass{article}', '\\begin{document}', '\\section{A NEW long title that', 'wraps across lines}', 'Body paragraph.', '\\end{document}', ''].join('\n')
+    const diff = fileHeader('main.tex') + '@@ -3 +3 @@\n-\\section{A long title that\n+\\section{A NEW long title that\n'
+
+    const changes = await computeBlockChanges(diff, 'HEAD', 'branch', show({ HEAD: { 'main.tex': before }, branch: { 'main.tex': after } }))
+
+    const sec = changes.find((c) => c.kind === 'section')
+    expect(sec?.status).toBe('modified')
+    expect(sec!.afterSpan).toEqual({ file: 'main.tex', startLine: 3, endLine: 4 })
+  })
+
+  test('a blank-line-only edit inside a leaf environment is kept, not dropped', async () => {
+    // verbatim is a leaf (no children) so its own extent is its full span —
+    // blanks are significant content and a blank-only edit must still surface.
+    const before = ['\\documentclass{article}', '\\begin{document}', '\\begin{verbatim}', 'code1', 'code2', '\\end{verbatim}', '\\end{document}', ''].join('\n')
+    const after = ['\\documentclass{article}', '\\begin{document}', '\\begin{verbatim}', 'code1', '', 'code2', '\\end{verbatim}', '\\end{document}', ''].join('\n')
+    const diff = fileHeader('main.tex') + '@@ -4,2 +4,3 @@\n code1\n+\n code2\n'
+
+    const changes = await computeBlockChanges(diff, 'HEAD', 'branch', show({ HEAD: { 'main.tex': before }, branch: { 'main.tex': after } }))
+
+    expect(changes.find((c) => c.name === 'verbatim')?.status).toBe('modified')
+  })
 })
