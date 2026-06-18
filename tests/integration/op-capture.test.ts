@@ -21,19 +21,21 @@ let git: GitClient
 let review: ReviewService
 let claude: ClaudeService
 
-/** Mirrors registry runClaudeOp: arm watcher → run op → await settle →
- *  capture. This is the exact ordering the race fix depends on. */
+/** Mirrors registry runClaudeOp: wip-commit → open isolated worktree → arm
+ *  watcher on it → run op there → await settle → capture. This is the exact
+ *  ordering the race fix depends on (now in the worktree, not the main tree). */
 async function runOp(req: ClaudeRequest) {
   await review.prepare()
-  const watcher = armSettleWatcher(root, { quietMs: 400, capMs: 3000 })
+  const dir = await review.openWorktree()
+  const watcher = armSettleWatcher(dir, { quietMs: 400, capMs: 3000 })
   let op: { opId: string; note: string }
   try {
-    op = await claude.runOp(req, () => {})
+    op = await claude.runOp(req, () => {}, { cwd: dir })
     await watcher.settled()
   } finally {
     watcher.dispose()
   }
-  return { op, proposal: await review.capture(op.opId, req.instruction, req.spans) }
+  return { op, proposal: await review.captureWorktree(op.opId, dir, req.instruction, req.spans) }
 }
 
 beforeEach(() => {

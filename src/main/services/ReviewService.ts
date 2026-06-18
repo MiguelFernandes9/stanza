@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { BlockSpan } from '../../shared/ipc/claude'
 import type {
   ReviewDecision,
@@ -10,10 +13,10 @@ import { changedFilesInDiff, outsideSpanFiles } from './diffSpans'
 
 const BRANCH_PREFIX = 'stanza/op-'
 
-/** Proposal-branch review (spec FR7): one op executes at a time, each
- *  result is captured to a temp branch and the tree restored clean, so
- *  N proposals can await review while the next op runs.
- *  Accept = merge --no-ff (conflicts surfaced), reject = branch -D. */
+/** Proposal-branch review (spec FR7, §11): each op runs in its own detached git
+ *  worktree, so the main tree is never touched mid-op and ops run concurrently.
+ *  The result is captured onto stanza/op-<id>, so N proposals await review while
+ *  more ops run. Accept = merge --no-ff (conflicts surfaced), reject = branch -D. */
 export class ReviewService {
   /** Spans of unresolved proposals, for op locking (FR5). In-memory:
    *  after a crash, recovered proposals (list()) lock nothing. */
@@ -31,20 +34,55 @@ export class ReviewService {
     }
   }
 
-  /** After the op: move the working-tree edits onto stanza/op-<opId>
-   *  and restore the tree. Null when the op changed nothing. */
-  async capture(
+  /** Open a detached worktree (off main HEAD) for an op to edit in isolation.
+   *  Returns its dir — the op's `cwd`. Removed at capture/abandon time. */
+  async openWorktree(): Promise<string> {
+    const dir = join(tmpdir(), `stanza-op-${randomUUID()}`)
+    await this.git.addWorktree(dir)
+    return dir
+  }
+
+  /** After the op: commit the worktree's edits onto stanza/op-<opId> and remove
+   *  the worktree (the branch persists in the shared .git). The main tree is
+   *  never touched. Null when the op changed nothing (worktree clean). */
+  async captureWorktree(
     opId: string,
+    dir: string,
     instruction: string,
     spans: BlockSpan[],
   ): Promise<ReviewProposal | null> {
-    if (await this.git.isClean()) return null
+    const wt = this.git.worktreeClient(dir)
+    try {
+      if (await wt.isClean()) {
+        await this.git.removeWorktree(dir)
+        return null
+      }
+      const branch = BRANCH_PREFIX + opId
+      await wt.switchCreate(branch) // detached HEAD → new branch, carrying the edits
+      await wt.commitAll(commitSubject(instruction))
+      await this.git.removeWorktree(dir)
+      this.pendingSpans.set(opId, spans)
+      return this.proposalFor(opId, branch, instruction)
+    } catch (err) {
+      // A mid-capture git failure (e.g. commitAll after switchCreate already made
+      // the branch) must not leak the worktree OR strand a half-created branch as
+      // a phantom proposal in list(). Tear both down, then surface the error.
+      await this.abandonWorktree(opId, dir).catch(() => {})
+      throw err
+    }
+  }
+
+  /** Discard a failed op: remove its worktree and any branch it created. */
+  async abandonWorktree(opId: string, dir: string): Promise<void> {
+    await this.git.removeWorktree(dir)
     const branch = BRANCH_PREFIX + opId
-    await this.git.switchCreate(branch)
-    await this.git.commitAll(commitSubject(instruction))
-    await this.git.switchBack()
-    this.pendingSpans.set(opId, spans)
-    return this.proposalFor(opId, branch, instruction)
+    if (await this.git.branchExists(branch)) await this.git.deleteBranch(branch)
+  }
+
+  /** Crash recovery (on open): clear worktrees orphaned by a process that died
+   *  mid-op. Pending op branches (the recoverable proposals) are left intact. */
+  async pruneWorktrees(): Promise<void> {
+    if (await this.git.isRepo()) await this.git.pruneOpWorktrees()
   }
 
   /** Pending proposals rebuilt from op branches — also the crash

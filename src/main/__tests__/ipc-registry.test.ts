@@ -263,6 +263,47 @@ esac`)
       }),
     ).rejects.toThrow('SPANS_LOCKED')
   }, 20_000)
+
+  test('Accept of a pending proposal is NOT blocked by a slow in-flight op (spec §11)', async () => {
+    // A SLOWOP op sleeps 1.5s mid-run; every other op is instant. Ops run in
+    // isolated worktrees, so accepting an earlier proposal must merge right away
+    // — the wide-mutex design made it wait for the running op (the hang Miguel hit).
+    vi.stubEnv(
+      'STANZA_CLAUDE_BIN',
+      makeClaudeStub(`case "$*" in
+  *--resume*SLOWOP*) sleep 1.5; printf 'b\\n' >> main.tex; echo '{"result":"b"}' ;;
+  *--resume*) printf 'a\\n' >> main.tex; echo '{"result":"a"}' ;;
+  *) echo '{"result":"primed"}' ;;
+esac`),
+    )
+    const root = makeProject()
+    await invoke('document:open', root)
+
+    // proposal A — captured and pending (locks span 3-3)
+    const a = (await invoke('claude:run', {
+      instruction: 'edit A',
+      spans: [{ file: 'main.tex', startLine: 3, endLine: 3 }],
+    })) as ClaudeResult
+    expect(a.proposal).not.toBeNull()
+
+    // op B starts and stays in-flight for 1.5s, on a NON-overlapping span — don't await
+    const bRunning = Promise.resolve(
+      invoke('claude:run', {
+        instruction: 'SLOWOP rewrite',
+        spans: [{ file: 'main.tex', startLine: 10, endLine: 10 }],
+      }),
+    )
+    await new Promise((r) => setTimeout(r, 150)) // let B reach its 1.5s sleep
+
+    const t0 = Date.now()
+    const res = (await invoke('review:resolve', { opId: a.proposal!.opId, accept: true })) as ReviewResolution
+    const elapsed = Date.now() - t0
+
+    expect(res.committed).toBe(true)
+    expect(elapsed).toBeLessThan(900) // merged immediately — did NOT queue behind B's 1.5s op
+    expect(readFileSync(join(root, 'main.tex'), 'utf8')).toContain('a') // A's edit merged into main
+    await bRunning.catch(() => {}) // let B finish so its worktree is cleaned up
+  }, 20_000)
 })
 
 describe('file management channels (v0.2)', () => {
