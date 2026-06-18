@@ -43,6 +43,15 @@ const MIN_SIDE = 2
 /** Half-line slack (pt) for matching an item's y to a band — an item sitting
  *  between two baselines still lands in the right band. */
 const BAND_SLACK = 7
+/** Two-column is a PAGE property: a genuine two-column body is TALL — its
+ *  two-column bands cover most of the page's text height. A local x-cluster on an
+ *  otherwise single-column page — a numbered display equation (formula left,
+ *  number right), a multi-line aligned equation, a table's own columns, a plot's
+ *  tick labels — is SHORT relative to the page, so demote the two-column verdict
+ *  unless two-column bands cover this fraction of the page's text height. (Height,
+ *  not row count: a dense equation can have many rows yet occupy little height.)
+ *  Without this, those clusters split single-column block boxes. */
+const TWO_COL_PAGE_FRAC = 0.5
 
 /** Cluster rows into vertical bands by baseline gap (reuses the MAX_LINE_GAP
  *  clustering paperModel.contentBand uses), then classify each band's column
@@ -55,7 +64,21 @@ export function pageColumnLayout(rows: TextRow[]): ColumnLayout {
     if (sorted[i]!.baseline - sorted[i - 1]!.baseline > BAND_GAP) groups.push([])
     groups[groups.length - 1]!.push(sorted[i]!)
   }
-  return { bands: groups.map(detectBand) }
+  const bands = groups.map(detectBand)
+  // Page-level gate: keep two-column bands only when they cover most of the page's
+  // text HEIGHT; otherwise an isolated cluster (equation+number, a multi-line
+  // aligned equation, table cells, plot ticks) would falsely split an otherwise
+  // single-column page's boxes. textHeight is the top-to-bottom span so the sparse
+  // prose around a local cluster counts toward the denominator and demotes it — a
+  // page that is MOSTLY one cluster (a near-full-page equation/table) relies on
+  // this. (Known limit: a real two-column body sitting under a very tall full-width
+  // title band can fall under the threshold and wrongly demote; unobserved on the
+  // demo, needs a two-column fixture to address without regressing the clusters.)
+  const twoHeight = bands.reduce((h, b) => h + (b.kind === 'two' ? b.bottom - b.top : 0), 0)
+  const textHeight = bands[bands.length - 1]!.bottom - bands[0]!.top
+  if (textHeight > 0 && twoHeight < TWO_COL_PAGE_FRAC * textHeight)
+    return { bands: bands.map((b) => (b.kind === 'two' ? { top: b.top, bottom: b.bottom, kind: 'single' as const } : b)) }
+  return { bands }
 }
 
 /** Classify one baseline-band: find the central x where the FEWEST rows overlap

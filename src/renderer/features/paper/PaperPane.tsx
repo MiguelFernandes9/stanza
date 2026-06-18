@@ -17,7 +17,6 @@ import { WholeDocRail } from './WholeDocRail'
 import { FillerPage } from './FillerPage'
 import { PaperToolbar } from './PaperToolbar'
 import { binContentToBlocks, blockGeometryRects, cardAnchorTops, combinedSpanLabel, expandIds, isMathEnvName, isTightAbove, spanLabel, washBoxes } from './paperModel'
-import { isFloatEnv } from '../../../shared/blocks/container'
 import type { BlockMark, PageBlock } from './paperModel'
 import type { ColumnLayout } from './columnLayout'
 import { pageTextRows } from './pdfTextRows'
@@ -195,23 +194,10 @@ export function PaperPane(props: Props): JSX.Element {
       const { boxesById, contentTopByPage, columnsByPage: cols } = binContentToBlocks(
         new Map(perBlock.map(({ b, rects }) => [b.id, rects])),
         rowsByPage,
-        graphicsByPage,
-        // env name per block so the binner can snap a MATH region's top to its
-        // rendered ink (synctex is ~a line off for display math) — M2-9.
-        new Map(perBlock.flatMap(({ b }) => (b.envName ? [[b.id, b.envName] as const] : []))),
-        // structural meta so the binner NESTS boxes: a container env encloses its
-        // children, a float (figure/table) takes its children's box (no source-
-        // site phantom), a section keeps its heading line only.
-        new Map(
-          perBlock.map(
-            ({ b }) =>
-              [b.id, { parentId: b.parentId, isFloat: isFloatEnv(b.envName), isSection: b.kind === 'heading' }] as const
-          )
-        )
+        graphicsByPage
       )
-      // Nested boxes (a parent encloses its children) DO overlap by design — the
-      // old "disjoint partition" assumption is retired; innermost-wins resolves a
-      // click to the deepest box (selection layer).
+      // One box per block from its rendered ink; a section's box is its heading
+      // line, selection expands to its members via expandIds (selection layer).
       setBlockRects(boxesById)
       setContentTops(contentTopByPage)
       columnsByPage.current = cols // Phase 2 (two-rail bubbles) will consume this

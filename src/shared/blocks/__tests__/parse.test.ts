@@ -306,7 +306,11 @@ describe('display math joins the paragraph; \\begin envs stay blocks (BUG-45)', 
   })
 })
 
-describe('nested environments (recursive block model)', () => {
+describe('flat content model — environments are atomic leaves', () => {
+  // Every environment is ONE block spanning \begin..\end; its interior — prose,
+  // math, sub-environments, \item, \caption — is ABSORBED, never a child block,
+  // so selecting it hands Claude the whole unit and the overlay is one clean box.
+  // Only sections nest (the structural axis). Supersedes the recursive model (#103).
   // line numbers:                              1
   const NESTED = [
     '\\documentclass{article}', //              1
@@ -336,46 +340,44 @@ describe('nested environments (recursive block model)', () => {
     '\\end{document}', //                      25
   ].join('\n')
 
-  test('theorem nests only its equation as a child; prose is absorbed', () => {
+  test('a section nests its environments as leaf children — no grandchildren', () => {
     const s = parseBlocks(FILE, NESTED)[1]! // [preamble, section S]
-    const theorem = s.children[0]!
-    expect(theorem).toMatchObject({ kind: 'environment', name: 'theorem' })
-    // "Prose line." (5) is part of the theorem, not its own child block; only the
-    // distinct equation sub-block is a child (decision 0).
-    expect(theorem.children.map((c) => c.kind)).toEqual(['environment'])
-    expect(theorem.children[0]!).toMatchObject({
-      name: 'equation',
-      span: { startLine: 6, endLine: 8 },
-    })
-    expect(theorem.children[0]!.children).toEqual([]) // equation is atomic
+    expect(s).toMatchObject({ kind: 'section', name: 'S' })
+    expect(s.children.map((c) => [c.kind, c.name])).toEqual([
+      ['environment', 'theorem'],
+      ['environment', 'figure'],
+      ['environment', 'enumerate'],
+      ['environment', 'verbatim'],
+    ])
+    // every environment is a leaf — its interior is absorbed
+    expect(s.children.every((c) => c.children.length === 0)).toBe(true)
   })
 
-  test('figure nests tikzpicture (atomic leaf) + caption; \\centering is not a block', () => {
+  test('theorem absorbs its prose AND its equation — one block, no children', () => {
+    const theorem = parseBlocks(FILE, NESTED)[1]!.children[0]!
+    expect(theorem).toMatchObject({ name: 'theorem', span: { startLine: 4, endLine: 9 } })
+    expect(theorem.children).toEqual([])
+  })
+
+  test('figure absorbs tikzpicture + caption — one block, no children', () => {
     const figure = parseBlocks(FILE, NESTED)[1]!.children[1]!
-    expect(figure).toMatchObject({ kind: 'environment', name: 'figure' })
-    expect(figure.children.map((c) => c.kind)).toEqual(['environment', 'paragraph'])
-    const tikz = figure.children[0]!
-    expect(tikz.name).toBe('tikzpicture')
-    expect(tikz.children).toEqual([]) // drawing env is atomic
-    // caption block starts at the \caption line, NOT the \centering line above
-    expect(figure.children[1]!.span.startLine).toBe(15)
+    expect(figure).toMatchObject({ name: 'figure', span: { startLine: 10, endLine: 17 } })
+    expect(figure.children).toEqual([])
   })
 
-  test('enumerate nests one child block per \\item', () => {
+  test('enumerate absorbs its items — one block, no children', () => {
     const list = parseBlocks(FILE, NESTED)[1]!.children[2]!
-    expect(list).toMatchObject({ kind: 'environment', name: 'enumerate' })
-    expect(list.children.map((c) => c.kind)).toEqual(['paragraph', 'paragraph'])
-    expect(list.children[0]!.span).toMatchObject({ startLine: 19, endLine: 19 })
-    expect(list.children[1]!.span).toMatchObject({ startLine: 20, endLine: 20 })
+    expect(list).toMatchObject({ name: 'enumerate', span: { startLine: 18, endLine: 21 } })
+    expect(list.children).toEqual([])
   })
 
-  test('verbatim stays an atomic leaf (string content, no children, no crash)', () => {
+  test('verbatim stays an atomic leaf (string content, no crash)', () => {
     const vrb = parseBlocks(FILE, NESTED)[1]!.children[3]!
-    expect(vrb).toMatchObject({ kind: 'environment', name: 'verbatim' })
+    expect(vrb).toMatchObject({ name: 'verbatim', span: { startLine: 22, endLine: 24 } })
     expect(vrb.children).toEqual([])
   })
 
-  test('nested child ids are unique and stable across reparses', () => {
+  test('block ids are unique and stable across reparses', () => {
     const ids1 = collectIds(parseBlocks(FILE, NESTED))
     const ids2 = collectIds(parseBlocks(FILE, NESTED))
     expect(ids1).toEqual(ids2)

@@ -2,9 +2,10 @@ import type { PDFPageProxy } from '../pdf/pdfjsSetup'
 
 /** One painted image / graphic, in the SAME top-left point space as `TextRow`
  *  (`getViewport({ scale: 1 })`). The pdf.js text layer has zero rows for a
- *  vector image (`\includegraphics{plot.pdf}` is an embedded-PDF Form XObject),
- *  so the rendered graphic bbox is the source of truth for a figure's extent —
- *  the missing half of "a block's box = the union of everything it painted". */
+ *  graphic — whether an embedded-PDF Form XObject (`\includegraphics{plot.pdf}`)
+ *  or NATIVE vector paths (a tikz/pgfplots plot is a stream of stroke/fill ops) —
+ *  so the rendered graphic bbox is the source of truth for a figure's extent: the
+ *  missing half of "a block's box = the union of everything it painted". */
 export interface GraphicBox {
   yTop: number
   yBottom: number
@@ -24,6 +25,16 @@ export type GraphicOp =
    *  (`\includegraphics` of an embedded PDF). */
   | { op: 'form'; matrix: number[] | null; bbox: number[] | null }
   | { op: 'formEnd' }
+  /** A native vector path (tikz/pgfplots strokes & fills, rules). `minMax` is the
+   *  path's [minX,minY,maxX,maxY] bbox in PRE-CTM space (pdf.js `constructPath`);
+   *  `paints` is false for a clip / `endPath` that draws no ink. A plot is a stream
+   *  of these — the only rendered signal a vector graphic leaves (no image/form). */
+  | { op: 'path'; paints: boolean; minMax: number[] | null }
+  /** A clip (`W`/`W*`) applied to the just-constructed path: intersects the active
+   *  clip region with that path's `minMax` bbox under the CTM. pgfplots clips its
+   *  plot to the axis box, so without this a data line drawn past the axis would
+   *  contribute its full pre-clip bbox and inflate the figure's box past its caption. */
+  | { op: 'clip'; minMax: number[] | null }
 
 /** Compose two affine matrices `[a,b,c,d,e,f]` (point (x,y) ↦ (ax+cy+e,
  *  bx+dy+f)): the result applies `n` first, then `m` — i.e. concatenating `n`
@@ -63,16 +74,30 @@ const UNIT_SQUARE = [[0, 0], [1, 0], [1, 1], [0, 1]]
  *  glyph boxes live in one coordinate space. Pure; `convert` is injectable. */
 export function graphicBoxesFromOps(ops: GraphicOp[], convert: (x: number, y: number) => number[]): GraphicBox[] {
   let ctm = [1, 0, 0, 1, 0, 0]
-  const stack: number[][] = []
+  let clip: GraphicBox | null = null // active clip region (device/top-left space), or none
+  const stack: { ctm: number[]; clip: GraphicBox | null }[] = []
   const out: GraphicBox[] = []
+  const boxOf = (mm: number[]): GraphicBox => {
+    const [x0, y0, x1, y1] = mm
+    return cornersBox(ctm, [[x0!, y0!], [x1!, y0!], [x1!, y1!], [x0!, y1!]], convert)
+  }
+  // Intersect a box with the active clip; null when the clip excludes it entirely.
+  const clipped = (b: GraphicBox): GraphicBox | null => {
+    if (!clip) return b
+    const xLeft = Math.max(b.xLeft, clip.xLeft), xRight = Math.min(b.xRight, clip.xRight)
+    const yTop = Math.max(b.yTop, clip.yTop), yBottom = Math.min(b.yBottom, clip.yBottom)
+    return xRight > xLeft && yBottom > yTop ? { xLeft, xRight, yTop, yBottom } : null
+  }
   for (const g of ops) {
     switch (g.op) {
       case 'save':
-        stack.push(ctm.slice())
+        stack.push({ ctm: ctm.slice(), clip })
         break
-      case 'restore':
-        ctm = stack.pop() ?? ctm
+      case 'restore': {
+        const s = stack.pop()
+        if (s) { ctm = s.ctm; clip = s.clip }
         break
+      }
       case 'transform':
         ctm = compose(ctm, g.m)
         break
@@ -85,16 +110,70 @@ export function graphicBoxesFromOps(ops: GraphicOp[], convert: (x: number, y: nu
           const [x0, y0, x1, y1] = g.bbox
           out.push(cornersBox(m, [[x0!, y0!], [x1!, y0!], [x1!, y1!], [x0!, y1!]], convert))
         }
-        stack.push(ctm.slice()) // the form body runs under CTM ∘ matrix
+        stack.push({ ctm: ctm.slice(), clip }) // the form body runs under CTM ∘ matrix
         ctm = m
         break
       }
-      case 'formEnd':
-        ctm = stack.pop() ?? ctm
+      case 'formEnd': {
+        const s = stack.pop()
+        if (s) { ctm = s.ctm; clip = s.clip }
         break
+      }
+      case 'clip':
+        // Tighten the active clip to this path's bbox (clipping is intersective).
+        if (g.minMax) clip = clipped(boxOf(g.minMax)) ?? clip
+        break
+      case 'path': {
+        // A painted vector path: its minMax bbox under the CTM, then CLIPPED to the
+        // active region — so a pgfplots line drawn past its axis contributes only the
+        // visible (clipped) extent, not its full pre-clip bbox.
+        if (g.paints && g.minMax) {
+          const c = clipped(boxOf(g.minMax))
+          if (c) out.push(c)
+        }
+        break
+      }
     }
   }
   return out
+}
+
+/** Normalise a pdf.js operator list (`fnArray` + `argsArray`) to the bbox-relevant
+ *  `GraphicOp` stream — the only ops `graphicBoxesFromOps` tracks (CTM save/restore/
+ *  transform, image, Form XObject, painted vector path). `OPS` is injected so this
+ *  stays pdfjs-free and unit-testable; `pageGraphics` and the offline geometry
+ *  harness share this one mapping. */
+export function graphicOpsFromList(
+  fnArray: ArrayLike<number>,
+  argsArray: ArrayLike<unknown[]>,
+  OPS: Record<string, number>
+): GraphicOp[] {
+  const ops: GraphicOp[] = []
+  let lastMinMax: number[] | null = null // bbox of the most recent path, for a following clip
+  for (let i = 0; i < fnArray.length; i++) {
+    const fn = fnArray[i]!
+    const args = argsArray[i] as unknown[]
+    if (fn === OPS.save) ops.push({ op: 'save' })
+    else if (fn === OPS.restore) ops.push({ op: 'restore' })
+    else if (fn === OPS.transform) ops.push({ op: 'transform', m: Array.from(args as number[]) })
+    else if (fn === OPS.paintImageXObject || fn === OPS.paintImageMaskXObject || fn === OPS.paintInlineImageXObject)
+      ops.push({ op: 'image' })
+    else if (fn === OPS.paintFormXObjectBegin)
+      ops.push({ op: 'form', matrix: args[0] ? Array.from(args[0] as number[]) : null, bbox: args[1] ? Array.from(args[1] as number[]) : null })
+    else if (fn === OPS.paintFormXObjectEnd) ops.push({ op: 'formEnd' })
+    // pdf.js 6.x folds path painting into one op: args = [paintOp, data, minMax].
+    // minMax is the path bbox (pre-CTM); endPath (a clip / `n`) paints no ink.
+    else if (fn === OPS.constructPath) {
+      const paintOp = args[0] as number
+      const minMax = args[2] as ArrayLike<number> | undefined
+      lastMinMax = minMax ? Array.from(minMax) : null
+      ops.push({ op: 'path', paints: paintOp !== OPS.endPath, minMax: lastMinMax })
+    }
+    // A clip (`W`/`W*`) follows the path it clips against — carry that path's bbox
+    // so graphicBoxesFromOps can tighten the clip region.
+    else if (fn === OPS.clip || fn === OPS.eoClip) ops.push({ op: 'clip', minMax: lastMinMax })
+  }
+  return ops
 }
 
 const cache = new WeakMap<PDFPageProxy, Promise<GraphicBox[]>>()
@@ -112,19 +191,7 @@ export function pageGraphics(page: PDFPageProxy): Promise<GraphicBox[]> {
     const { OPS } = await import('../pdf/pdfjsSetup')
     const viewport = page.getViewport({ scale: 1 })
     const list = await page.getOperatorList()
-    const ops: GraphicOp[] = []
-    for (let i = 0; i < list.fnArray.length; i++) {
-      const fn = list.fnArray[i]
-      const args = list.argsArray[i] as unknown[]
-      if (fn === OPS.save) ops.push({ op: 'save' })
-      else if (fn === OPS.restore) ops.push({ op: 'restore' })
-      else if (fn === OPS.transform) ops.push({ op: 'transform', m: Array.from(args as number[]) })
-      else if (fn === OPS.paintImageXObject || fn === OPS.paintImageMaskXObject || fn === OPS.paintInlineImageXObject)
-        ops.push({ op: 'image' })
-      else if (fn === OPS.paintFormXObjectBegin)
-        ops.push({ op: 'form', matrix: args[0] ? Array.from(args[0] as number[]) : null, bbox: args[1] ? Array.from(args[1] as number[]) : null })
-      else if (fn === OPS.paintFormXObjectEnd) ops.push({ op: 'formEnd' })
-    }
+    const ops = graphicOpsFromList(list.fnArray, list.argsArray as ArrayLike<unknown[]>, OPS as unknown as Record<string, number>)
     return graphicBoxesFromOps(ops, (x, y) => viewport.convertToViewportPoint(x, y))
   })()
   cache.set(page, boxes)
