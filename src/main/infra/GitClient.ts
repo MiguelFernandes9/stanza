@@ -5,6 +5,14 @@ import type { ProcessRunner, ProcResult } from './ProcessRunner'
 /** Git's canonical empty tree — the diff base for a root commit (no parent). */
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 
+/** Stanza's own scratch files (preview snippet + chapter-scope compiles) are
+ *  written into the doc root for path resolution but must never be staged,
+ *  reported dirty, or cleaned by the proposal flow — otherwise a preview that's
+ *  compiling when `git add -A` runs leaks its snippet into the op branch's diff.
+ *  Excluding them at the git boundary makes them invisible regardless of whether
+ *  the doc's .gitignore lists them (existing docs may not). */
+const SCRATCH_EXCLUDE = ['--', '.', ':(exclude).stanza-snippet*', ':(exclude).stanza-scope*']
+
 /** Git plumbing for the DOCUMENT repo (the user's paper folder),
  *  built on ProcessRunner. Used by ReviewService for the
  *  proposal-branch flow: capture op → temp branch, accept → merge
@@ -32,13 +40,13 @@ export class GitClient {
   }
 
   async isClean(): Promise<boolean> {
-    const res = await this.must(['status', '--porcelain'])
+    const res = await this.must(['status', '--porcelain', ...SCRATCH_EXCLUDE])
     return res.stdout.trim() === ''
   }
 
   /** Modified + staged + untracked, relative paths. */
   async changedFiles(): Promise<string[]> {
-    const res = await this.must(['status', '--porcelain'])
+    const res = await this.must(['status', '--porcelain', ...SCRATCH_EXCLUDE])
     return res.stdout
       .split('\n')
       .filter((line) => line.trim() !== '')
@@ -64,7 +72,7 @@ export class GitClient {
   }
 
   async commitAll(subject: string): Promise<void> {
-    await this.must(['add', '-A'])
+    await this.must(['add', '-A', ...SCRATCH_EXCLUDE])
     await this.must(['commit', '-m', subject])
   }
 
@@ -183,7 +191,7 @@ export class GitClient {
   }
 
   private async untrackedFiles(): Promise<string[]> {
-    const res = await this.must(['status', '--porcelain'])
+    const res = await this.must(['status', '--porcelain', ...SCRATCH_EXCLUDE])
     return res.stdout
       .split('\n')
       .filter((line) => line.startsWith('?? '))
