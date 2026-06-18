@@ -24,7 +24,8 @@ export interface RecentProject {
   root: string
   name: string
   hasSession: boolean
-  blockCount?: number
+  /** ISO timestamp of the last open — drives the recents "opened … ago" line. */
+  lastOpened?: string
 }
 
 export interface CommitInfo {
