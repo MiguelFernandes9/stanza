@@ -51,6 +51,26 @@ describe('GitClient basics', () => {
     expect((await git.changedFiles()).sort()).toEqual(['extra.tex', 'main.tex'])
   })
 
+  test('stanza scratch files never count as dirty or get committed', async () => {
+    // The preview compiler drops .stanza-snippet*/.stanza-scope* in the root.
+    // They must be invisible to git regardless of the doc's .gitignore, or a
+    // preview compiling during `git add -A` leaks its snippet into the op branch.
+    await initWithCommit() // no .gitignore in this temp repo
+    write('.stanza-snippet-1-old.tex', 'PREAMBLE old\n')
+    write('.stanza-snippet-1.tex', 'marked\n')
+    write('.stanza-scope.tex', 'scope\n')
+    expect(await git.isClean()).toBe(true) // scratch-only dirtiness reads as clean
+
+    write('main.tex', 'edited\n')
+    expect(await git.changedFiles()).toEqual(['main.tex']) // scratch omitted
+
+    await git.commitAll('claude: edit')
+    expect(await git.isClean()).toBe(true) // scratch still ignored after commit
+    expect(await git.show('HEAD', 'main.tex')).toBe('edited\n') // real edit committed
+    expect(await git.show('HEAD', '.stanza-snippet-1.tex')).toBe('') // scratch NOT committed
+    expect(existsSync(join(root, '.stanza-snippet-1.tex'))).toBe(true) // left for SnippetCompiler cleanup
+  })
+
   test('diff covers tracked changes and untracked files', async () => {
     await initWithCommit()
     write('main.tex', 'changed\n')

@@ -12,20 +12,21 @@ import { opPrompt, primePrompt } from './prompts'
 // generous so a real op is never cut short, but finite so a deadlock frees.
 const DEFAULT_TIMEOUT_MS = 1_800_000 // 30 min
 
-/** One Claude Code CLI session per document: primed on first op,
- *  resumed for every op after (also across app restarts via Store).
- *
- *  v1 serializes ops through a FIFO queue — queued ops report
- *  'priming' until started. Callers must NOT assume serial execution:
- *  v1.1 swaps the queue for --fork-session + a doc-repo worktree per
- *  op behind this same method (spec §11). */
+/** One Claude Code CLI session per document, run in the doc's op WORKTREE
+ *  (`workDir`, defaults to the doc root). Claude's file sandbox is pinned to the
+ *  dir it is primed in, so priming + every op share `workDir` — ops edit that
+ *  tree, never the user's checkout, which is what lets Accept run unblocked.
+ *  Primed lazily on the first op; ops serialize through a FIFO queue. */
 export class ClaudeService {
   private queue: Promise<unknown> = Promise.resolve()
+  /** In-flight prime, so concurrent first-ops share one priming call. */
+  private priming?: Promise<string>
 
   constructor(
     private runner: ProcessRunner,
     private store: Store,
     private doc: DocumentInfo,
+    private workDir: string = doc.root,
     private timeoutMs: number = DEFAULT_TIMEOUT_MS,
   ) {}
 
@@ -58,6 +59,8 @@ export class ClaudeService {
         '-p',
         '--resume',
         sessionId,
+        '--add-dir',
+        this.workDir,
         '--output-format',
         'json',
         '--permission-mode',
@@ -74,12 +77,23 @@ export class ClaudeService {
     }
   }
 
-  /** Returns the persisted session id, priming a new session first
-   *  when this project has none yet. */
+  /** Session id for `workDir`, priming a new one when none was primed there yet.
+   *  A session primed in a DIFFERENT dir (e.g. an older doc-root session) can't
+   *  be resumed here — Claude's sandbox is pinned to the primed dir — so it is
+   *  re-primed. Concurrent first-ops share one priming call (the latch). */
   private async ensureSession(signal?: AbortSignal): Promise<string> {
-    const existing = this.store.getProject(this.doc.root).sessionId
-    if (existing) return existing
+    const proj = this.store.getProject(this.doc.root)
+    if (proj.sessionId && proj.primedWorkdir === this.workDir) return proj.sessionId
+    if (!this.priming) {
+      this.priming = this.primeNewSession(signal).catch((err: unknown) => {
+        this.priming = undefined // a failed prime must not stick — allow retry
+        throw err
+      })
+    }
+    return this.priming
+  }
 
+  private async primeNewSession(signal?: AbortSignal): Promise<string> {
     const sessionId = randomUUID()
     const proc = await this.claude(
       [
@@ -87,7 +101,7 @@ export class ClaudeService {
         '--session-id',
         sessionId,
         '--add-dir',
-        this.doc.root,
+        this.workDir,
         '--output-format',
         'json',
         primePrompt(this.doc),
@@ -95,7 +109,7 @@ export class ClaudeService {
       signal,
     )
     assertCompleted(proc, this.timeoutMs)
-    this.store.setProject(this.doc.root, { sessionId })
+    this.store.setProject(this.doc.root, { sessionId, primedWorkdir: this.workDir })
     return sessionId
   }
 
@@ -103,7 +117,7 @@ export class ClaudeService {
     return this.runner.run({
       cmd: process.env.STANZA_CLAUDE_BIN ?? 'claude',
       args,
-      cwd: this.doc.root,
+      cwd: this.workDir,
       timeoutMs: this.timeoutMs,
       env: claudeEnv(),
       ...(signal ? { signal } : {}),

@@ -5,14 +5,16 @@ import type {
   ReviewResolution,
 } from '../../shared/ipc/review'
 import type { GitClient } from '../infra/GitClient'
+import { computeBlockChanges } from './blockChanges'
 import { changedFilesInDiff, outsideSpanFiles } from './diffSpans'
 
 const BRANCH_PREFIX = 'stanza/op-'
 
-/** Proposal-branch review (spec FR7): one op executes at a time, each
- *  result is captured to a temp branch and the tree restored clean, so
- *  N proposals can await review while the next op runs.
- *  Accept = merge --no-ff (conflicts surfaced), reject = branch -D. */
+/** Proposal-branch review (spec FR7, §11): each op runs in the doc's persistent
+ *  op WORKTREE, never the user's checkout. The result is captured onto
+ *  stanza/op-<id>, so N proposals await review; Accept = merge --no-ff into the
+ *  user's tree (conflicts surfaced), reject = branch -D. Because ops touch the
+ *  worktree and Accept touches the user's tree, Accept never waits on an op. */
 export class ReviewService {
   /** Spans of unresolved proposals, for op locking (FR5). In-memory:
    *  after a crash, recovered proposals (list()) lock nothing. */
@@ -30,20 +32,36 @@ export class ReviewService {
     }
   }
 
-  /** After the op: move the working-tree edits onto stanza/op-<opId>
-   *  and restore the tree. Null when the op changed nothing. */
-  async capture(
+  /** Sync the op worktree to the user tree's current HEAD before an op, so the
+   *  op forks from the latest accepted + manual-edit state. */
+  async syncWorktree(dir: string): Promise<void> {
+    await this.git.worktreeClient(dir).resetHard(await this.git.head())
+  }
+
+  /** After the op: commit the worktree's edits onto stanza/op-<opId>, then detach
+   *  the worktree back to HEAD (freeing the branch + readying it for the next op).
+   *  The user's tree is never touched. Null when the op changed nothing. */
+  async captureWorktree(
+    dir: string,
     opId: string,
     instruction: string,
     spans: BlockSpan[],
   ): Promise<ReviewProposal | null> {
-    if (await this.git.isClean()) return null
+    const gitW = this.git.worktreeClient(dir)
     const branch = BRANCH_PREFIX + opId
-    await this.git.switchCreate(branch)
-    await this.git.commitAll(commitSubject(instruction))
-    await this.git.switchBack()
-    this.pendingSpans.set(opId, spans)
-    return this.proposalFor(opId, branch, instruction)
+    try {
+      if (await gitW.isClean()) return null
+      await gitW.switchCreate(branch) // detached HEAD + edits → new branch carrying them
+      await gitW.commitAll(commitSubject(instruction))
+      await gitW.checkoutDetach(await this.git.head()) // free the branch, ready W for reuse
+      this.pendingSpans.set(opId, spans)
+      return this.proposalFor(opId, branch, instruction)
+    } catch (err) {
+      // Leave the worktree reusable + drop any half-created branch, then surface.
+      await gitW.checkoutDetach(await this.git.head()).catch(() => {})
+      if (await this.git.branchExists(branch)) await this.git.deleteBranch(branch)
+      throw err
+    }
   }
 
   /** Pending proposals rebuilt from op branches — also the crash
@@ -130,6 +148,9 @@ export class ReviewService {
       files: changedFilesInDiff(diff),
       outsideSpan: outsideSpanFiles(diff, spans),
       diff,
+      blocks: await computeBlockChanges(diff, 'HEAD', branch, (rev, file) =>
+        this.git.show(rev, file),
+      ),
     }
   }
 }

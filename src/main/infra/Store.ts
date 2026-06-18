@@ -6,6 +6,11 @@ import type { CompileOptions, GlobalSettings } from '../../shared/ipc/settings'
 /** Everything Stanza persists about one project, keyed by its root. */
 export interface ProjectRecord {
   sessionId?: string
+  /** The dir the session was primed in (the doc's op worktree). A session can
+   *  only be resumed in the dir it was primed in — Claude's file sandbox is
+   *  pinned there — so a stored session whose `primedWorkdir` ≠ the current
+   *  worktree must be re-primed. */
+  primedWorkdir?: string
   ops?: OpRecord[]
   lastOpened?: string // ISO — recents ordering
   blockCount?: number // recents card detail

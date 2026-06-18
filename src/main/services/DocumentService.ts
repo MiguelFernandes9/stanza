@@ -29,6 +29,7 @@ const docGitignore = (mainBase: string) => `# stanza: build outputs
 *.bbl
 *.blg
 .stanza-scope.*
+.stanza-snippet*
 `
 
 const TEMPLATE = (name: string) => `\\documentclass[11pt]{article}

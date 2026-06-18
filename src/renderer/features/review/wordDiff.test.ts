@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { extractAffectedText, splitDiffByFile, wordSegments } from './wordDiff'
+import { splitDiffByFile, wordSegments } from './wordDiff'
 
 describe('wordSegments', () => {
   it('marks deletions and additions at word level', () => {
@@ -14,27 +14,6 @@ describe('wordSegments', () => {
 
   it('returns one kept segment when texts match', () => {
     expect(wordSegments('same text', 'same text')).toEqual([['k', 'same text']])
-  })
-})
-
-describe('extractAffectedText', () => {
-  const before = ['l1', 'old sentence one.', 'old sentence two.', 'l4'].join('\n')
-  const after = ['l1', 'new sentence.', 'l4'].join('\n')
-  const diff = ['@@ -2,2 +2,1 @@', '-old sentence one.', '-old sentence two.', '+new sentence.'].join('\n')
-
-  it('slices the hunk region from both sides', () => {
-    const out = extractAffectedText(before, after, diff)
-    expect(out).toEqual({ before: 'old sentence one. old sentence two.', after: 'new sentence.' })
-  })
-
-  it('returns null for non-prose regions (environments)', () => {
-    const envBefore = ['\\begin{equation}', 'x = 1', '\\end{equation}'].join('\n')
-    const envDiff = ['@@ -1,3 +1,3 @@', '-x = 1', '+x = 2'].join('\n')
-    expect(extractAffectedText(envBefore, envBefore, envDiff)).toBeNull()
-  })
-
-  it('returns null when the diff has no hunk header', () => {
-    expect(extractAffectedText(before, after, 'no hunks here')).toBeNull()
   })
 })
 

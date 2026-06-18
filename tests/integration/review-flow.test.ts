@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -11,6 +12,7 @@ import { ClaudeService } from '../../src/main/services/ClaudeService'
 import { ReviewService } from '../../src/main/services/ReviewService'
 import type { DocumentInfo } from '../../src/shared/ipc/document'
 import type { ClaudeStatus } from '../../src/shared/ipc/claude'
+import type { ReviewProposal } from '../../src/shared/ipc/review'
 
 // T5: the full diff-gated op pipeline — real git, real processes,
 // Claude played by the T4 mock (recordings in tests/mocks/recordings).
@@ -25,13 +27,19 @@ afterAll(() => {
   delete process.env.STANZA_CLAUDE_BIN
 })
 
+type Span = { file: string; startLine: number; endLine: number }
+
 interface Harness {
   doc: DocumentInfo
   git: GitClient
   review: ReviewService
   claude: ClaudeService
   statuses: ClaudeStatus[]
-  runOp(instruction: string, spans: { file: string; startLine: number; endLine: number }[]): Promise<string>
+  /** Run the op in the doc's op worktree (cwd=wt), as the registry does (§11) —
+   *  the mock writes there, the user tree is untouched. */
+  runOp(instruction: string, spans: Span[]): Promise<string>
+  /** Capture the worktree onto the op's proposal branch. */
+  capture(opId: string, instruction: string, spans: Span[]): Promise<ReviewProposal | null>
 }
 
 function makeHarness(fixture: string, texFiles: string[]): Harness {
@@ -42,13 +50,21 @@ function makeHarness(fixture: string, texFiles: string[]): Harness {
   // store lives OUTSIDE the doc repo (like <userData>) — inside it,
   // the session-id write would pollute the proposal diff
   const store = new Store(join(mkdtempSync(join(tmpdir(), 'stanza-t5-store-')), 'projects.json'))
-  const claude = new ClaudeService(runner, store, doc, 10_000)
+  const wt = join(tmpdir(), `stanza-t5-wt-${randomUUID()}`)
+  const claude = new ClaudeService(runner, store, doc, wt, 10_000)
   const statuses: ClaudeStatus[] = []
+  let worktreeReady: Promise<void> | undefined
+  const ensureWt = () => (worktreeReady ??= git.addWorktree(wt))
   return {
     doc, git, review, claude, statuses,
     async runOp(instruction, spans) {
+      await ensureWt()
+      await review.syncWorktree(wt)
       const { opId } = await claude.runOp({ instruction, spans }, (s) => statuses.push(s))
       return opId
+    },
+    capture(opId, instruction, spans) {
+      return review.captureWorktree(wt, opId, instruction, spans)
     },
   }
 }
@@ -64,7 +80,7 @@ describe('within-span op → accept', () => {
     const opId = await h.runOp('Formalize this paragraph', SINGLE_SPAN)
     expect(h.statuses.map((s) => s.state)).toEqual(['priming', 'running', 'done'])
 
-    const proposal = await h.review.capture(opId, 'Formalize this paragraph', SINGLE_SPAN)
+    const proposal = await h.capture(opId, 'Formalize this paragraph', SINGLE_SPAN)
     expect(proposal).not.toBeNull()
     expect(proposal!.branch).toBe(`stanza/op-${opId}`)
     expect(proposal!.files).toEqual(['main.tex'])
@@ -89,7 +105,7 @@ describe('within-span op → reject', () => {
     const preOp = readFileSync(join(h.doc.root, 'main.tex'), 'utf8')
 
     const opId = await h.runOp('Rewrite the selected lines', SINGLE_SPAN)
-    expect(await h.review.capture(opId, 'Rewrite the selected lines', SINGLE_SPAN)).not.toBeNull()
+    expect(await h.capture(opId, 'Rewrite the selected lines', SINGLE_SPAN)).not.toBeNull()
 
     const res = await h.review.resolve({ opId, accept: false })
     expect(res.committed).toBe(false)
@@ -106,7 +122,7 @@ describe('edit outside the span', () => {
     const spans = [{ file: 'chapters/ch1.tex', startLine: 6, endLine: 7 }]
 
     const opId = await h.runOp('Sneak an edit outside the span', spans)
-    const proposal = await h.review.capture(opId, 'Sneak an edit outside the span', spans)
+    const proposal = await h.capture(opId, 'Sneak an edit outside the span', spans)
     expect(proposal).not.toBeNull()
     expect(proposal!.files).toContain('preamble.tex')
     expect(proposal!.outsideSpan).toContain('preamble.tex')
@@ -119,7 +135,7 @@ describe('accept conflict', () => {
     await h.review.prepare()
 
     const opId = await h.runOp('Formalize this paragraph', SINGLE_SPAN)
-    expect(await h.review.capture(opId, 'Formalize this paragraph', SINGLE_SPAN)).not.toBeNull()
+    expect(await h.capture(opId, 'Formalize this paragraph', SINGLE_SPAN)).not.toBeNull()
 
     // manual edit on the same lines lands on main before the accept
     const mainTex = join(h.doc.root, 'main.tex')
@@ -141,7 +157,7 @@ describe('span locking', () => {
     const h = makeHarness('single', ['main.tex'])
     await h.review.prepare()
     const opId = await h.runOp('Formalize this paragraph', SINGLE_SPAN)
-    await h.review.capture(opId, 'Formalize this paragraph', SINGLE_SPAN)
+    await h.capture(opId, 'Formalize this paragraph', SINGLE_SPAN)
 
     expect(() =>
       h.review.assertSpansFree([{ file: 'main.tex', startLine: 14, endLine: 20 }]),

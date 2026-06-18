@@ -737,7 +737,7 @@ export function PaperPane(props: Props): JSX.Element {
             proposal={reviewTask.proposal}
             note={reviewTask.note}
             blockTag={tag}
-            loadFileAt={(file) => client.reviewFileAt({ opId: reviewTask.proposal!.opId, file })}
+            fetchPreview={client.reviewPreview}
             onClose={() => setReviewId(null)}
             onResolve={(accept) => {
               setReviewId(null)
