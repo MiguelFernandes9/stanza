@@ -19,6 +19,14 @@ const SECTION_LEVELS: Record<string, number> = {
  *  fall-through at the end of walkNodes (BUG-45). */
 const ENVIRONMENT_TYPES = new Set(['environment', 'mathenv', 'verbatim'])
 
+/** Environments that are their OWN top-level document division — LaTeX renders
+ *  them with a sectioning heading ("References", "Index") and they belong after
+ *  the body, not inside whatever \section happens to precede them. They close the
+ *  open section stack so e.g. `thebibliography` after \section{Conclusion} is a
+ *  sibling of the sections, not a child — selecting Conclusion then never hands the
+ *  bibliography to the editor, and the bib is one independent block. */
+const SECTIONING_ENVS = new Set(['thebibliography', 'theindex'])
+
 /** Structural macros that carry no prose: they end the current paragraph
  *  and are skipped (like whitespace/comments), never becoming a selectable
  *  block. Otherwise \maketitle/\tableofcontents/\include et al. fall into
@@ -239,6 +247,10 @@ function walkScope(file: string, nodes: Ast.Node[], out: BlockNode[]): void {
         flushParagraph()
         const env = node as Ast.Environment
         const name = envName(env)
+        // A backmatter sectioning environment (bibliography/index) is a top-level
+        // division: close every open section so it attaches at the root, not inside
+        // the preceding \section.
+        if (SECTIONING_ENVS.has(name)) sectionStack.length = 0
         const envBlock = block('environment', file, start.line, end.line, name)
         // Record the first real content line only when leading invisible macros
         // push it past the line after \begin; every ordinary env keeps the

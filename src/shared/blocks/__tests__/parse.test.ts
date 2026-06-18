@@ -73,6 +73,32 @@ describe('parseBlocks', () => {
   })
 })
 
+describe('backmatter sectioning environments (bibliography/index)', () => {
+  const DOC = [
+    '\\begin{document}', //                 1
+    '\\section{Conclusion}', //             2
+    'We summarize the results.', //         3
+    '\\begin{thebibliography}{9}', //       4
+    '\\bibitem{a} Author. Title. 2020.', // 5
+    '\\end{thebibliography}', //            6
+    '\\end{document}', //                   7
+  ].join('\n')
+
+  test('thebibliography is a top-level block, NOT a child of the preceding section', () => {
+    const roots = parseBlocks(FILE, DOC)
+    expect(roots.map((b) => b.kind)).toEqual(['section', 'environment'])
+    const conclusion = roots[0]!
+    const bib = roots[1]!
+    expect(conclusion.name).toBe('Conclusion')
+    // the section closes at its own prose — it does NOT swallow the bibliography
+    expect(conclusion.span.endLine).toBe(3)
+    expect(conclusion.children.some((c) => c.name === 'thebibliography')).toBe(false)
+    // the bibliography is its own independent block (one box over all entries)
+    expect(bib).toMatchObject({ kind: 'environment', name: 'thebibliography' })
+    expect(bib.span).toMatchObject({ startLine: 4, endLine: 6 })
+  })
+})
+
 describe('standalone structural macros', () => {
   // A book preamble whose body is only structural macros — no prose.
   const TITLE_DOC = [

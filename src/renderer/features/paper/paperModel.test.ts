@@ -1036,6 +1036,31 @@ describe('environmentInteriorSpan — exclude \\begin/\\end delimiter lines (BUG
       endLine: 6
     })
   })
+
+  it('INCLUDES the \\begin line for a heading env (abstract/thebibliography)', () => {
+    // `\begin{abstract}` (43) renders the "Abstract" title, so geometry must start
+    // AT 43 — else the box misses the title. \end (51) is still dropped.
+    const abstract: PageBlock = {
+      id: 'abs#1', kind: 'environment', envName: 'abstract',
+      span: { file: 'main.tex', startLine: 43, endLine: 51 },
+      sectionId: null, parentId: null, depth: 0
+    }
+    expect(environmentInteriorSpan(abstract)).toEqual({ file: 'main.tex', startLine: 43, endLine: 50 })
+    // thebibliography's \begin renders "References" — same rule.
+    const bib: PageBlock = {
+      id: 'bib#1', kind: 'environment', envName: 'thebibliography',
+      span: { file: 'main.tex', startLine: 373, endLine: 388 },
+      sectionId: null, parentId: null, depth: 0
+    }
+    expect(environmentInteriorSpan(bib)).toEqual({ file: 'main.tex', startLine: 373, endLine: 387 })
+    // a non-heading env still strips \begin (figure's \begin galleys, BUG-21).
+    const fig: PageBlock = {
+      id: 'fig#1', kind: 'environment', envName: 'figure',
+      span: { file: 'main.tex', startLine: 43, endLine: 51 },
+      sectionId: null, parentId: null, depth: 0
+    }
+    expect(environmentInteriorSpan(fig)).toEqual({ file: 'main.tex', startLine: 44, endLine: 50 })
+  })
 })
 
 describe('blockGeometryRects — query interior, exclude \\end phantom (BUG-21)', () => {

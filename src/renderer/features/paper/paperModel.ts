@@ -634,19 +634,30 @@ export function binContentToBlocks(
   return { boxesById, contentTopByPage, columnsByPage, contested }
 }
 
+/** Environments whose `\begin` line RENDERS a sectioning heading ("Abstract",
+ *  "References") rather than a galley — so geometry must INCLUDE that line, else
+ *  the auto-heading sits in no block and the section's box misses its own title. */
+const HEADING_ENVS = new Set(['abstract', 'thebibliography', 'theindex'])
+
 /** Geometry query span for a block, excluding an environment's \begin/\end
  *  delimiter lines: they carry no visible content and forward-map to stray
  *  galley positions — e.g. \end{figure} lands on the next paragraph's first
  *  line, dragging the figure box bottom onto the paragraph below (BUG-21).
  *  Returns the interior span startLine+1..endLine-1 for an environment, or
  *  null (caller uses the full span) for a non-environment or a too-small
- *  interior. Only the geometry query narrows — the block's own span is
- *  unchanged, so taskSpans/Claude still see \begin..\end. */
+ *  interior. EXCEPTION: a HEADING_ENV's \begin line renders its title (Abstract /
+ *  References), so the span starts AT startLine to keep the heading in the box;
+ *  \end is still dropped (it has no visible content and galleys downward). Only
+ *  the geometry query narrows — the block's own span is unchanged, so
+ *  taskSpans/Claude still see \begin..\end. */
 export function environmentInteriorSpan(block: PageBlock): BlockSpan | null {
   if (block.kind !== 'environment') return null
-  // Skip leading invisible-macro lines (a \label maps onto the prose line above,
-  // M2-7); fall back to the line after \begin when the parser recorded none.
-  const startLine = block.contentStartLine ?? block.span.startLine + 1
+  // Heading envs: include the \begin line (it draws the title). Otherwise skip
+  // leading invisible-macro lines (a \label maps onto the prose line above, M2-7),
+  // falling back to the line after \begin when the parser recorded none.
+  const startLine = block.envName && HEADING_ENVS.has(block.envName)
+    ? block.span.startLine
+    : block.contentStartLine ?? block.span.startLine + 1
   const endLine = block.span.endLine - 1
   return endLine >= startLine ? { ...block.span, startLine, endLine } : null
 }
