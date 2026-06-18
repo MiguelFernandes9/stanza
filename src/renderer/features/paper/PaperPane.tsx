@@ -16,7 +16,8 @@ import { BlockOverlay } from './BlockOverlay'
 import { WholeDocRail } from './WholeDocRail'
 import { FillerPage } from './FillerPage'
 import { PaperToolbar } from './PaperToolbar'
-import { binContentToBlocks, blockGeometryRects, cardAnchorTops, combinedSpanLabel, expandIds, isMathEnvName, isTightAbove, spanLabel, washBoxes } from './paperModel'
+import { binContentToBlocks, blockForSourceLine, blockGeometryRects, cardAnchorTops, combinedSpanLabel, expandIds, isMathEnvName, isTightAbove, spanLabel, washBoxes } from './paperModel'
+import { resolveToKnownFile } from '@renderer/lib/paths'
 import type { BlockMark, PageBlock } from './paperModel'
 import type { ColumnLayout } from './columnLayout'
 import { pageTextRows } from './pdfTextRows'
@@ -191,16 +192,45 @@ export function PaperPane(props: Props): JSX.Element {
       // band drops running heads / folios / footers and header-margin stray rects
       // first (M2-6, BUG-30); a region's box runs to the next region's top, so a
       // dropped last line is included and a figure covers its image + caption.
-      const { boxesById, contentTopByPage, columnsByPage: cols } = binContentToBlocks(
-        new Map(perBlock.map(({ b, rects }) => [b.id, rects])),
-        rowsByPage,
-        graphicsByPage
-      )
+      const rectsById = new Map(perBlock.map(({ b, rects }) => [b.id, rects]))
+      const bin = binContentToBlocks(rectsById, rowsByPage, graphicsByPage)
+      // Galley collision: a unit inside ≥2 blocks' regions (a list's \begin maps onto
+      // a figure's caption) can't be attributed by tightest-span geometry. Resolve
+      // each authoritatively via the synctex BACKWARD map — the rendered point → its
+      // true source line → the block that drew it — then re-bin with those forced
+      // owners. Only fires when a collision exists (empty in the common case).
+      let result = bin
+      if (bin.contested.length) {
+        const knownFiles = [...new Set(pageBlocks.map((b) => b.span.file))]
+        // Units on ONE rendered line share a source line, so backward-map a single
+        // representative per (page, baseline, column-ish x) band and apply the owner
+        // to the whole band — a dense colliding page (figure + table + list) costs ~a
+        // dozen synctex edits, not one per glyph row.
+        const bands = new Map<string, typeof bin.contested>()
+        for (const c of bin.contested) {
+          const k = `${c.page}|${Math.round(c.y)}|${Math.round(c.x / 180)}`
+          const g = bands.get(k)
+          if (g) g.push(c)
+          else bands.set(k, [c])
+        }
+        const forced = new Map<string, string>()
+        await Promise.all(
+          [...bands.values()].map(async (group) => {
+            const c = group[0]!
+            const loc = await client.synctexInverse({ page: c.page, x: c.x, y: c.y }).catch(() => null)
+            if (!loc) return
+            const owner = blockForSourceLine(pageBlocks, resolveToKnownFile(loc.file, knownFiles), loc.line)
+            if (owner) for (const u of group) forced.set(u.key, owner)
+          })
+        )
+        if (!alive) return
+        if (forced.size) result = binContentToBlocks(rectsById, rowsByPage, graphicsByPage, forced)
+      }
       // One box per block from its rendered ink; a section's box is its heading
       // line, selection expands to its members via expandIds (selection layer).
-      setBlockRects(boxesById)
-      setContentTops(contentTopByPage)
-      columnsByPage.current = cols // Phase 2 (two-rail bubbles) will consume this
+      setBlockRects(result.boxesById)
+      setContentTops(result.contentTopByPage)
+      columnsByPage.current = result.columnsByPage // Phase 2 (two-rail bubbles) will consume this
     })
     return () => {
       alive = false

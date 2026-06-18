@@ -3,6 +3,7 @@ import type { BlockNode } from '../../../shared/blocks/types'
 import type { BlockSpan, PdfRect } from '../../../shared/ipc'
 import {
   binContentToBlocks,
+  blockForSourceLine,
   blockGeometryRects,
   cardAnchorTops,
   combinedSpanLabel,
@@ -649,6 +650,81 @@ describe('binContentToBlocks — flat model: absorbed math, floats, section head
     const sec = boxesById.get('sec#1')![0]!
     expect(boxBottom(sec)).toBeCloseTo(110, 1) // heading row only — NOT down to the prose at 144
     expect(boxBottom(boxesById.get('par#1')![0]!)).toBeCloseTo(144, 1)
+  })
+})
+
+describe('blockForSourceLine — tightest block covering a source line (backward map)', () => {
+  const blocks = [
+    { id: 'fig#1', span: { file: 'main.tex', startLine: 182, endLine: 219 } },
+    { id: 'it#1', span: { file: 'main.tex', startLine: 249, endLine: 260 } },
+    { id: 'sec#1', span: { file: 'main.tex', startLine: 150, endLine: 300 } } // encloses both
+  ]
+  it('picks the leaf (figure) over the enclosing section for a caption line', () => {
+    expect(blockForSourceLine(blocks, 'main.tex', 216)).toBe('fig#1') // \caption inside the figure
+  })
+  it('resolves a line in the sibling list to the list, not the figure', () => {
+    expect(blockForSourceLine(blocks, 'main.tex', 255)).toBe('it#1')
+  })
+  it('returns null when no block covers the line / file', () => {
+    expect(blockForSourceLine(blocks, 'main.tex', 999)).toBeNull()
+    expect(blockForSourceLine(blocks, 'other.tex', 216)).toBeNull()
+  })
+})
+
+describe('binContentToBlocks — galley collision resolved by forced owners (backward map)', () => {
+  // The test_2 convergence figure: a pgfplots figure (\caption at the bottom) is
+  // immediately followed by a section whose \begin{itemize} forward-maps (galley)
+  // ONTO the figure's caption. The itemize's caption region is a hair tighter than
+  // the figure's gap-spanning region, so tightest-span gives the caption to the
+  // itemize → the figure reads as plot-only and the caption shows as a stray itemize
+  // box on the figure's page. The itemize's real list renders on the next page.
+  const rectsById = new Map<string, PdfRect[]>([
+    // figure: plot area + caption line union → a tall region spanning y300–500
+    ['fig#1', [prect(1, 110, 300, 380, 150), prect(1, 72, 476, 430, 24)]],
+    // itemize: a TIGHT galley rect on the caption (p1) + its real list (p2)
+    ['it#1', [prect(1, 80, 478, 300, 20), prect(2, 80, 100, 320, 110)]]
+  ])
+  const rowsByPage = new Map<number, TextRow[]>([
+    [1, [trow(477, 486, 80, 480), trow(488, 497, 80, 480)]], // the 2 caption lines
+    [2, [trow(109, 120, 80, 400), trow(129, 140, 80, 400), trow(149, 160, 80, 400)]] // the list items
+  ])
+  const graphics = new Map<number, GraphicBox[]>([
+    [1, [{ yTop: 305, yBottom: 450, xLeft: 110, xRight: 490 }]] // the pgfplots vector plot
+  ])
+
+  it('WITHOUT forced owners: tightest-span steals the caption (the bug)', () => {
+    const { boxesById, contested } = binContentToBlocks(rectsById, rowsByPage, graphics)
+    // the two caption rows fall inside BOTH the figure and the itemize galley → contested
+    expect(contested).toHaveLength(2)
+    expect(contested.every((c) => c.page === 1)).toBe(true)
+    // the figure box stops at the plot — it never reaches the caption (bug)
+    const fig = boxesById.get('fig#1')!
+    expect(boxBottom(fig[0]!)).toBeLessThan(460)
+    // the itemize has a stray box on the figure's page (the stolen caption)
+    expect(boxesById.get('it#1')!.some((b) => b.page === 1)).toBe(true)
+  })
+
+  it('WITH backward-mapped forced owners: the caption rejoins the figure, one box', () => {
+    // The caption rows backward-map (synctex edit) to the \caption line (216) →
+    // blockForSourceLine → 'fig#1'. PaperPane feeds that back as forcedOwners.
+    const { contested } = binContentToBlocks(rectsById, rowsByPage, graphics)
+    const owner = blockForSourceLine(
+      [{ id: 'fig#1', span: { file: 'main.tex', startLine: 182, endLine: 219 } }],
+      'main.tex',
+      216
+    )!
+    const forced = new Map(contested.map((c) => [c.key, owner]))
+    const { boxesById } = binContentToBlocks(rectsById, rowsByPage, graphics, forced)
+    // figure: ONE box on its page, covering plot (top ~305) AND caption (bottom ~497)
+    const fig = boxesById.get('fig#1')!
+    expect(fig).toHaveLength(1)
+    expect(fig[0]!.page).toBe(1)
+    expect(fig[0]!.y).toBeCloseTo(305, 0)
+    expect(boxBottom(fig[0]!)).toBeGreaterThan(495)
+    // the itemize no longer has a box on the figure's page — only its real list (p2)
+    const it = boxesById.get('it#1')!
+    expect(it.length).toBeGreaterThanOrEqual(1)
+    expect(it.every((b) => b.page === 2)).toBe(true)
   })
 })
 

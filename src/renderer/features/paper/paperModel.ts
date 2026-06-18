@@ -305,6 +305,20 @@ export function contentBand(rowsByPage: Map<number, TextRow[]>): { top: number; 
   return { top: clusters[lo]![0]!, bottom: clusters[hi]![clusters[hi]!.length - 1]! }
 }
 
+/** A rendered unit (text row / graphic) that falls inside the synctex regions of
+ *  TWO OR MORE different blocks — a galley collision (e.g. a list's `\begin`
+ *  forward-maps onto a figure's caption). Tightest-span geometry can't tell which
+ *  block truly drew it; the caller backward-maps `(page,x,y)` (`synctex edit`) to
+ *  the real source line and feeds the answer back as `forcedOwners`. `key` is the
+ *  unit's stable id (must match the binner's internal `unitKey`). */
+export interface ContestedUnit {
+  key: string
+  page: number
+  /** PDF pt, top-left (the row's left / baseline) — a valid `synctex edit` point. */
+  x: number
+  y: number
+}
+
 export interface BinnedContent {
   /** Per-page boxes per block, built from the rendered text rows. Each box
    *  carries its `col` (full/l/r); a block flowing across the column break has a
@@ -317,6 +331,9 @@ export interface BinnedContent {
   /** Per-page column geometry (gutter + bands) the boxes were binned against —
    *  Phase 2's two-rail layout reads this to place bubbles per column. */
   columnsByPage: Map<number, ColumnLayout>
+  /** Units inside ≥2 blocks' regions — the galley collisions the caller resolves
+   *  authoritatively via the synctex backward map (empty in the common case). */
+  contested: ContestedUnit[]
 }
 
 /** Build every block's box from what it RENDERED (glyph rows + graphic bboxes).
@@ -340,6 +357,12 @@ export interface BinnedContent {
  *     box covers graphic ∪ caption with no snap and no float exemption. A unit no
  *     region contains joins the nearest region above whose ink is CONTIGUOUS
  *     (within MAX_LINE_GAP of its growing box) — the wrapped lines synctex drops.
+ *     Tightest-span is ambiguous at a GALLEY COLLISION (a `\begin` forward-maps
+ *     onto another block's content, e.g. a list onto a figure's caption); those
+ *     units are reported in `contested`, and `forcedOwners` (unit key → block id,
+ *     from the caller's synctex BACKWARD map) overrides geometry to route each to
+ *     the block that truly drew it. Without `forcedOwners` the result is identical
+ *     to pure tightest-span — the override is purely additive.
  *
  *  3. KEEP / BOX: a block with cells on several (page, col) keeps only those that
  *     WON ≥ INK_KEEP_FRAC of its richest — a galley/phantom cell wins ~nothing (its
@@ -352,7 +375,8 @@ export interface BinnedContent {
 export function binContentToBlocks(
   rectsById: Map<string, PdfRect[]>,
   rowsByPage: Map<number, TextRow[]>,
-  graphicsByPage: Map<number, GraphicBox[]> = new Map()
+  graphicsByPage: Map<number, GraphicBox[]> = new Map(),
+  forcedOwners?: Map<string, string>
 ): BinnedContent {
   const band = contentBand(rowsByPage)
   const inBand = (yTop: number, yBottom: number): boolean =>
@@ -398,6 +422,51 @@ export function binContentToBlocks(
     }
   }
 
+  // Stable id for a rendered unit (page + rounded baseline/left) — shared by the
+  // contested scan and the forced-owner lookup so a backward-mapped answer keyed in
+  // the caller lands on the same unit here.
+  const unitKey = (page: number, key: number, xLeft: number): string => `${page}|${Math.round(key)}|${Math.round(xLeft)}`
+  const colOf = (layout: ColumnLayout | undefined, u: { yTop: number; yBottom: number; xLeft: number; xRight: number }): PdfCol =>
+    layout ? columnOf(layout, u) : 'full'
+  // A region can claim a unit when they share a column (or either is 'full') and
+  // overlap in x — a region never claims ink in another column.
+  const candidate = (rg: Region, col: PdfCol, xLeft: number, xRight: number): boolean =>
+    (rg.col === col || rg.col === 'full' || col === 'full') && xRight > rg.xLeft && xLeft < rg.xRight
+  // Every rendered unit on a page in sweep order (baseline / graphic-top), so the
+  // contiguity frontier grows as ink is added. Header/footer-margin rows dropped.
+  const unitsForPage = (page: number): { key: number; xLeft: number; yTop: number; xRight: number; yBottom: number }[] => {
+    const rows = (rowsByPage.get(page) ?? []).filter((r) => inBand(r.baseline, r.baseline))
+    const graphics = graphicsByPage.get(page) ?? []
+    return [
+      ...rows.map((r) => ({ key: r.baseline, xLeft: r.xLeft, yTop: r.yTop, xRight: r.xRight, yBottom: r.yBottom })),
+      ...graphics.map((g) => ({ key: g.yTop, xLeft: g.xLeft, yTop: g.yTop, xRight: g.xRight, yBottom: g.yBottom }))
+    ].sort((a, b) => a.key - b.key)
+  }
+
+  // A unit inside ≥2 different blocks' regions is a GALLEY COLLISION: tightest-span
+  // can't tell which block drew it (a list's `\begin` maps onto a figure's caption).
+  // Report it so the caller backward-maps the point to the true source line; the
+  // common single-owner case yields an empty list and the binner is unchanged.
+  const contested: ContestedUnit[] = []
+  const seenContested = new Set<string>()
+  for (const [page, regions] of regionsByPage) {
+    const layout = columnsByPage.get(page)
+    for (const u of unitsForPage(page)) {
+      const col = colOf(layout, u)
+      const ids = new Set<string>()
+      for (const rg of regions) {
+        if (!candidate(rg, col, u.xLeft, u.xRight)) continue
+        if (u.key < rg.top - BAND_EPS || u.key > rg.bottom + BAND_EPS) continue
+        ids.add(rg.id)
+      }
+      if (ids.size < 2) continue
+      const key = unitKey(page, u.key, u.xLeft)
+      if (seenContested.has(key)) continue
+      seenContested.add(key)
+      contested.push({ key, page, x: u.xLeft, y: u.key })
+    }
+  }
+
   // Assign every rendered unit to the region that most TIGHTLY contains it (the
   // block whose synctex extent ends soonest after the unit) — else, for a unit no
   // region contains, the nearest region above whose ink is CONTIGUOUS (within
@@ -425,26 +494,33 @@ export function binContentToBlocks(
     }
     for (const [page, regions] of active) {
       const layout = columnsByPage.get(page)
-      const rows = (rowsByPage.get(page) ?? []).filter((r) => inBand(r.baseline, r.baseline))
-      const graphics = graphicsByPage.get(page) ?? []
+      const units = unitsForPage(page)
 
       // A page with regions but no rendered ink → the coarse synctex region IS the
       // box, so a box is never lost (e.g. a page whose text layer failed to extract).
-      if (!rows.length && !graphics.length) {
+      if (!units.length) {
         for (const rg of regions) addUnit(rg, page, rg.xLeft, rg.top, rg.xRight, rg.bottom)
         continue
       }
 
-      const colOf = (u: { yTop: number; yBottom: number; xLeft: number; xRight: number }): PdfCol =>
-        layout ? columnOf(layout, u) : 'full'
-      // A region is a candidate for a unit when they share a column (or either is
-      // 'full') and overlap in x — so a region never claims ink in another column.
-      const candidate = (rg: Region, col: PdfCol, xLeft: number, xRight: number): boolean =>
-        (rg.col === col || rg.col === 'full' || col === 'full') && xRight > rg.xLeft && xLeft < rg.xRight
       const runningBottom = (rg: Region): number =>
         boxAcc.get(rg.id)?.get(`${page}|${rg.col}`)?.bottom ?? -Infinity
       const span = (rg: Region): number => rg.bottom - rg.top
       const ownerOf = (key: number, col: PdfCol, xLeft: number, xRight: number): Region | null => {
+        // A backward-mapped (authoritative) owner overrides geometry at a galley
+        // collision: route the unit to that block's region here — one that contains
+        // it, else the nearest — since the synctex edit map says this block drew it.
+        const forcedId = forcedOwners?.get(unitKey(page, key, xLeft))
+        if (forcedId) {
+          let pick: Region | null = null
+          for (const rg of regions) {
+            if (rg.id !== forcedId || !candidate(rg, col, xLeft, xRight)) continue
+            if (key >= rg.top - BAND_EPS && key <= rg.bottom + BAND_EPS) return rg
+            if (!pick || Math.abs(rg.top - key) < Math.abs(pick.top - key)) pick = rg
+          }
+          if (pick) return pick
+          // forced block has no region on this page/col (forward missed) → geometry.
+        }
         let inside: Region | null = null
         for (const rg of regions) {
           if (!candidate(rg, col, xLeft, xRight)) continue
@@ -474,14 +550,10 @@ export function binContentToBlocks(
         }
         return above
       }
-      // Sweep units in key (baseline / graphic-top) order so the contiguity frontier
-      // grows as ink is added.
-      const units = [
-        ...rows.map((r) => ({ key: r.baseline, xLeft: r.xLeft, yTop: r.yTop, xRight: r.xRight, yBottom: r.yBottom })),
-        ...graphics.map((g) => ({ key: g.yTop, xLeft: g.xLeft, yTop: g.yTop, xRight: g.xRight, yBottom: g.yBottom }))
-      ].sort((a, b) => a.key - b.key)
+      // Sweep `units` (already in baseline / graphic-top order) so the contiguity
+      // frontier grows as ink is added.
       for (const u of units) {
-        const o = ownerOf(u.key, colOf(u), u.xLeft, u.xRight)
+        const o = ownerOf(u.key, colOf(layout, u), u.xLeft, u.xRight)
         if (o) addUnit(o, page, u.xLeft, u.yTop, u.xRight, u.yBottom)
       }
     }
@@ -536,7 +608,7 @@ export function binContentToBlocks(
       const cur = contentTopByPage.get(b.page)
       if (cur === undefined || b.y < cur) contentTopByPage.set(b.page, b.y)
     }
-  return { boxesById, contentTopByPage, columnsByPage }
+  return { boxesById, contentTopByPage, columnsByPage, contested }
 }
 
 /** Geometry query span for a block, excluding an environment's \begin/\end
@@ -570,6 +642,26 @@ export async function blockGeometryRects(
     if (rects.length > 0) return rects
   }
   return forward(block.span)
+}
+
+/** The block whose source span TIGHTEST contains (file, line) — the authoritative
+ *  owner of a rendered unit, from the synctex BACKWARD map (`synctex edit`). Used to
+ *  resolve a galley collision: a contested unit (in ≥2 blocks' regions) backward-maps
+ *  to one source line, and the smallest-span block covering it truly drew it. A
+ *  section's span dwarfs the leaf inside it, so the leaf (figure, list, paragraph)
+ *  wins naturally — no kind gate. Returns the block id, or null if none covers it. */
+export function blockForSourceLine(
+  blocks: { id: string; span: BlockSpan }[],
+  file: string,
+  line: number
+): string | null {
+  let best: { id: string; size: number } | null = null
+  for (const b of blocks) {
+    if (b.span.file !== file || line < b.span.startLine || line > b.span.endLine) continue
+    const size = b.span.endLine - b.span.startLine
+    if (!best || size < best.size) best = { id: b.id, size }
+  }
+  return best?.id ?? null
 }
 
 /** Geometry-anchored ideal top (px, within the page-stack wrap) for each
