@@ -343,7 +343,7 @@ export function PaperPane(props: Props): JSX.Element {
         if (rect.page !== pageNo) continue
         out.push(
           <BlockOverlay
-            key={`${b.id}@${rect.page}`}
+            key={`${b.id}@${rect.page}@${rect.col ?? 'full'}`}
             block={b}
             rect={{ page: rect.page, x: rect.x * zoom, y: rect.y * zoom, width: rect.width * zoom, height: rect.height * zoom }}
             mark={marks[b.id] ?? null}

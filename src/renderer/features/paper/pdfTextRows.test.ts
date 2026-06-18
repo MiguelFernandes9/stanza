@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { textRows } from './pdfTextRows'
+import { textRows, pageGutter } from './pdfTextRows'
 
 /** Scale-1, rotation-0 viewport: user space (bottom-up) → top-left device, so
  *  convertToViewportPoint(x, y) = [x, pageHeight − y]. Mirrors pdf.js. */
@@ -93,5 +93,65 @@ describe('textRows — pdf.js bottom-up items → top-left rows', () => {
       viewport(792)
     )
     expect(rows).toEqual([])
+  })
+})
+
+describe('pageGutter — page-level two-column gutter detection', () => {
+  const cell = (xLeft: number, xRight: number, baseline: number) => ({ xLeft, xRight, baseline, yTop: baseline - 9, yBottom: baseline + 2 })
+  // A balanced two-column body: n baselines, each a left run [56,300] and a right
+  // run [310,554] (a 10pt gutter — the standard \columnsep that the old per-row
+  // threshold could not split). Columns ~244pt ≈ 49% of the 498pt text width.
+  const twoColumn = (n: number) => {
+    const out: ReturnType<typeof cell>[] = []
+    for (let i = 0; i < n; i++) { const b = 100 + i * 14; out.push(cell(56, 300, b), cell(310, 554, b)) }
+    return out
+  }
+
+  it('finds the empty central stripe on a balanced two-column page', () => {
+    const g = pageGutter(twoColumn(14))
+    expect(g).not.toBeNull()
+    expect(g!.left).toBeGreaterThanOrEqual(300) // left column's right edge
+    expect(g!.left).toBeLessThan(310)
+    expect(g!.right).toBeGreaterThan(300)
+    expect(g!.right).toBeLessThanOrEqual(310) // right column's left edge
+  })
+
+  it('returns null for a single-column page (full-width rows, no empty stripe)', () => {
+    const out: ReturnType<typeof cell>[] = []
+    for (let i = 0; i < 14; i++) out.push(cell(56, 554, 100 + i * 14)) // full-width prose
+    expect(pageGutter(out)).toBeNull()
+  })
+
+  it('returns null for a numbered-equation page (thin right column fails the width floor)', () => {
+    // formula left [56,256], equation number right [530,545] — a wide empty gap but
+    // the right "column" is ~3% of the width, NOT a real column. Must not split.
+    const out: ReturnType<typeof cell>[] = []
+    for (let i = 0; i < 14; i++) { const b = 100 + i * 14; out.push(cell(56, 256, b), cell(530, 545, b)) }
+    expect(pageGutter(out)).toBeNull()
+  })
+
+  it('returns null for a local cluster that does not span the body (low coverage)', () => {
+    // mostly full-width prose, with a small two-column-looking cluster of 3 lines —
+    // the cluster covers < 50% of the body height, so it is not a page gutter.
+    const out: ReturnType<typeof cell>[] = []
+    for (let i = 0; i < 14; i++) out.push(cell(56, 554, 100 + i * 14)) // body prose
+    for (let i = 0; i < 3; i++) { const b = 110 + i * 14; out.push(cell(56, 300, b), cell(310, 554, b)) }
+    expect(pageGutter(out)).toBeNull()
+  })
+})
+
+describe('textRows — splits a 10pt column gutter via pageGutter', () => {
+  it('splits each two-column baseline into a left row and a right row', () => {
+    // 12 baselines × (left run [56,300] + right run [310,554]); the 10pt gutter is
+    // below the per-row COLUMN_GAP_FRACTION threshold, so only page-level detection
+    // can separate them. Each baseline must yield TWO rows, neither crossing x305.
+    const items = []
+    for (let i = 0; i < 12; i++) {
+      const f = 700 - i * 14
+      items.push(item(56, f, 244, 11), item(310, f, 244, 11))
+    }
+    const rows = textRows(items, viewport(792))
+    expect(rows).toHaveLength(24) // 12 lines × 2 columns, not 12 merged full-width rows
+    expect(rows.every((r) => r.xRight <= 305 || r.xLeft >= 305)).toBe(true) // none crosses the gutter
   })
 })
