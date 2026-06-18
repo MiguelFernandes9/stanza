@@ -112,8 +112,23 @@ describe('columnOf — classify an item against a page layout', () => {
   it('classifies a gutter-spanning item in a two-col band as full', () => {
     expect(columnOf(layout, { yTop: 250, yBottom: 262, xLeft: 54, xRight: 558 })).toBe('full')
   })
-  it('classifies any item in a single (full-width) band as full', () => {
-    expect(columnOf(layout, { yTop: 96, yBottom: 108, xLeft: 74, xRight: 200 })).toBe('full')
+  it('classifies a full-width item in a single band as full (spans the page gutter)', () => {
+    expect(columnOf(layout, { yTop: 96, yBottom: 108, xLeft: 74, xRight: 538 })).toBe('full')
+  })
+  it('classifies a one-column item in a single band by the page gutter (figure-internal band)', () => {
+    // a side-by-side figure's graphic landing in a thin single band still belongs to
+    // its column on a two-column page — not blanket full.
+    expect(columnOf(layout, { yTop: 96, yBottom: 108, xLeft: 319, xRight: 538 })).toBe('r')
+    expect(columnOf(layout, { yTop: 96, yBottom: 108, xLeft: 54, xRight: 293 })).toBe('l')
+  })
+  it('treats a rect that merely pokes past the gutter as one column, not full', () => {
+    // a tikz figure's garbage synctex rect (left column + a small overshoot across
+    // the gutter) must NOT read as full — it stays in its own column (COL_SPAN_MIN).
+    expect(columnOf(layout, { yTop: 96, yBottom: 108, xLeft: 54, xRight: 340 })).toBe('l')
+  })
+  it('classifies a single-band item as full on a single-column page (no page gutter)', () => {
+    const single = pageColumnLayout([row(96, 74, 538), row(108, 74, 538), row(120, 74, 538)])
+    expect(columnOf(single, { yTop: 96, yBottom: 108, xLeft: 74, xRight: 200 })).toBe('full')
   })
   it('defaults to full when there is no layout', () => {
     expect(columnOf({ bands: [] }, { yTop: 0, yBottom: 10, xLeft: 0, xRight: 10 })).toBe('full')
