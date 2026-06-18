@@ -613,10 +613,19 @@ export function PaperPane(props: Props): JSX.Element {
             </div>
           </div>
         ) : (
-          <div style={{ display: 'flex', justifyContent: 'center', padding: '28px 24px 40px' }}>
-            <div style={{ width: pageWidth }}>
-              <FillerPage state={props.compile.state} errors={props.compile.errors} />
-            </div>
+          // No PDF yet: a minimal status indicator centred on the parchment
+          // (both axes), not a page-shaped white card. minHeight:100% fills the
+          // scroll container so it sits mid-pane (mirrors the pdf branch above).
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              minHeight: '100%',
+              padding: 24
+            }}
+          >
+            <FillerPage state={props.compile.state} errors={props.compile.errors} />
           </div>
         )}
       </div>
