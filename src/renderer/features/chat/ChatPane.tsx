@@ -25,6 +25,9 @@ interface Props {
   messages: ChatMessage[]
   busy: boolean
   chips: ComposeChip[]
+  /** Select-blocks mode owns editing through the rail bubbles, so the whole-doc
+   *  composer is deactivated then — history stays readable, the input is locked. */
+  disabled?: boolean
   onRemoveChip: (blockId: string) => void
   onSubmit: (instruction: string) => void
   onResolveOp: (opId: string, accept: boolean) => void
@@ -89,7 +92,7 @@ function ProposalBlock({ proposal, resolved, onResolve }: { proposal?: ReviewPro
 
 /** Assistant panel (⌘J) — design §2/ChatPane: session history with inline
  *  proposals, composer acting on the newest compose task. */
-export function ChatPane({ messages, busy, chips, onRemoveChip, onSubmit, onResolveOp }: Props): JSX.Element {
+export function ChatPane({ messages, busy, chips, disabled = false, onRemoveChip, onSubmit, onResolveOp }: Props): JSX.Element {
   const [instruction, setInstruction] = useState('')
   const streamRef = useRef<HTMLDivElement | null>(null)
 
@@ -98,7 +101,7 @@ export function ChatPane({ messages, busy, chips, onRemoveChip, onSubmit, onReso
   }, [messages.length, busy])
 
   const submit = (): void => {
-    if (!instruction.trim() || busy) return
+    if (disabled || !instruction.trim() || busy) return
     onSubmit(instruction.trim())
     setInstruction('')
   }
@@ -219,11 +222,14 @@ export function ChatPane({ messages, busy, chips, onRemoveChip, onSubmit, onReso
             border: '1px solid var(--border-strong)',
             borderRadius: 'var(--radius-lg)',
             padding: '8px 8px 8px 12px',
-            boxShadow: 'var(--shadow-inset)'
+            boxShadow: 'var(--shadow-inset)',
+            opacity: disabled ? 0.5 : 1,
+            pointerEvents: disabled ? 'none' : undefined
           }}
         >
           <textarea
             value={instruction}
+            disabled={disabled}
             onChange={(e) => setInstruction(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
@@ -245,20 +251,28 @@ export function ChatPane({ messages, busy, chips, onRemoveChip, onSubmit, onReso
               padding: '5px 0'
             }}
           />
-          <Button size="sm" variant="primary" disabled={!instruction.trim() || busy} onClick={submit} style={{ padding: '0 10px' }} iconLeft={<ArrowUp size={15} />}>
+          <Button size="sm" variant="primary" disabled={disabled || !instruction.trim() || busy} onClick={submit} style={{ padding: '0 10px' }} iconLeft={<ArrowUp size={15} />}>
             Run
           </Button>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 7, paddingLeft: 2 }}>
-          <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>
-            Claude Code edits the <span style={{ fontFamily: 'var(--font-mono)' }}>.tex</span> source directly ·{' '}
-          </span>
-          <span style={{ display: 'inline-flex', gap: 3, alignItems: 'center' }}>
-            <Kbd>⌘</Kbd>
-            <Kbd>↵</Kbd>
-          </span>
-          <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>to run</span>
-        </div>
+        {disabled ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 7, paddingLeft: 2 }}>
+            <span style={{ font: 'var(--text-2xs)/1.4 var(--font-sans)', color: 'var(--ink-400)' }}>
+              Editing blocks — switch to Read mode (<Kbd>⌘</Kbd> <Kbd>B</Kbd>) to chat with the whole document.
+            </span>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 7, paddingLeft: 2 }}>
+            <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>
+              Claude Code edits the <span style={{ fontFamily: 'var(--font-mono)' }}>.tex</span> source directly ·{' '}
+            </span>
+            <span style={{ display: 'inline-flex', gap: 3, alignItems: 'center' }}>
+              <Kbd>⌘</Kbd>
+              <Kbd>↵</Kbd>
+            </span>
+            <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>to run</span>
+          </div>
+        )}
       </div>
     </div>
   )

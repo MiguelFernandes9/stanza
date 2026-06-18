@@ -854,6 +854,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
             messages={messages}
             busy={chatBusy}
             chips={chips}
+            disabled={state.view === 'select'}
             onRemoveChip={(blockId) => dispatch({ type: 'toggle-block', ids: [blockId], additive: true })}
             onSubmit={chatSubmit}
             onResolveOp={resolveByOp}
