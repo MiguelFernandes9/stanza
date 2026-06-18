@@ -66,6 +66,7 @@ export type TaskAction =
   | { type: 'set-adding'; adding: boolean }
   | { type: 'set-view'; view: PaneView }
   | { type: 'toggle-view' }
+  | { type: 'clear-drafts' }
 
 const patchTask = (s: TaskState, id: number, patch: Partial<EditTask>): TaskState => ({
   ...s,
@@ -257,5 +258,15 @@ export function taskReducer(s: TaskState, a: TaskAction): TaskState {
       return applyView(s, a.view)
     case 'toggle-view':
       return applyView(s, s.view === 'read' ? 'select' : 'read')
+    case 'clear-drafts': {
+      // Esc deselects: drop every compose draft (and its wash); pending
+      // busy/review/noop tasks own a backend op or note and survive. Null the
+      // active pointer only if it referenced a dropped draft.
+      const tasks = s.tasks.filter((t) => t.phase !== 'compose')
+      if (tasks.length === s.tasks.length) return s
+      const active = s.tasks.find((t) => t.id === s.activeTask)
+      const activeTask = active && active.phase === 'compose' ? null : s.activeTask
+      return { ...s, tasks, activeTask, adding: false }
+    }
   }
 }

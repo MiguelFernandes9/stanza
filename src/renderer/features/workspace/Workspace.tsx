@@ -375,6 +375,19 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
+      // Esc in Select-blocks mode deselects: drop every compose draft (and its
+      // wash); pending busy/review/noop cards survive (clear-drafts). A foreign
+      // editable (source editor, rename field) keeps its own Esc; the bubble's
+      // own textarea is let through so one Esc clears the whole selection.
+      if (e.key === 'Escape' && state.view === 'select') {
+        const ae = document.activeElement as HTMLElement | null
+        const editable = !!ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)
+        const inBubble = !!ae?.closest('[data-testid="rail-bubble"]')
+        if (editable && !inBubble) return
+        e.preventDefault()
+        dispatch({ type: 'clear-drafts' })
+        return
+      }
       if (!(e.metaKey || e.ctrlKey)) return
       const key = e.key.toLowerCase()
       if (key === 'r' || key === 'enter') {
@@ -433,7 +446,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [saveAndCompile, toggleSource])
+  }, [saveAndCompile, toggleSource, state.view])
 
   const pageBlocks = flattenBlocks(blocks)
 
