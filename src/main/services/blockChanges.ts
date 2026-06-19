@@ -163,7 +163,7 @@ function topLevelDescendants(c: Classified, all: Classified[]): Classified[] {
  *  shows only THIS block's own change). */
 function clip(text: string, block: BlockNode, descendants: (BlockNode | undefined)[]): string {
   const own = descendants.filter((d): d is BlockNode => d != null)
-  if (own.length === 0) return slice(text, block)
+  if (own.length === 0) return sliceSpan(text, block.span)
   const base = block.span.startLine
   const lines = text.split('\n').slice(block.span.startLine - 1, block.span.endLine)
   const ranges = own
@@ -178,10 +178,6 @@ function clip(text: string, block: BlockNode, descendants: (BlockNode | undefine
   }
   for (; i < lines.length; i++) out.push(lines[i])
   return out.join('\n')
-}
-
-function slice(text: string, block: BlockNode): string {
-  return sliceSpan(text, block.span)
 }
 
 function sliceSpan(text: string, span: BlockNode['span']): string {

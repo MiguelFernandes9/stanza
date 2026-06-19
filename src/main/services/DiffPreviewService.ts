@@ -43,7 +43,7 @@ export class DiffPreviewService {
     // even when the edit is in an \input'd chapter — so the snippet compiles.
     const preamble = this.git.show(branch, this.info.mainFile).then(splitPreamble).catch(() => '')
     const byFile = groupRenderableByFile(blocks)
-    const out: SnippetResult[] = []
+    const regions: { pre: string; oldRegion: string; newRegion: string }[] = []
     for (const [file, fileBlocks] of byFile) {
       const [oldText, newText, pre] = await Promise.all([
         this.git.show('HEAD', file).catch(() => ''),
@@ -54,12 +54,12 @@ export class DiffPreviewService {
       // becomes its own preview, so two far-apart edits never pull the unchanged
       // span between them into a single ballooned render.
       for (const cluster of clusterBlocks(fileBlocks, oldText, newText)) {
-        const oldRegion = sliceRegion(oldText, bounds(cluster, 'before'))
-        const newRegion = sliceRegion(newText, bounds(cluster, 'after'))
-        out.push(await this.sem.run(() => this.snippets.renderDiff(pre, oldRegion, newRegion)))
+        regions.push({ pre, oldRegion: sliceRegion(oldText, bounds(cluster, 'before')), newRegion: sliceRegion(newText, bounds(cluster, 'after')) })
       }
     }
-    return out
+    // Compile through the semaphore so two regions render concurrently (each gets a
+    // unique snippet base, so they never collide); Promise.all keeps UI order.
+    return Promise.all(regions.map((r) => this.sem.run(() => this.snippets.renderDiff(r.pre, r.oldRegion, r.newRegion))))
   }
 }
 

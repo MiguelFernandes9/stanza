@@ -21,10 +21,10 @@ const block = (over: Partial<BlockChange>): BlockChange => ({
   ...over,
 })
 
-function setup(blocks: BlockChange[]) {
+function setup(blocks: BlockChange[], old = OLD_MAIN, neu = NEW_MAIN) {
   const show = vi.fn(async (rev: string, file: string) => {
     if (file !== 'main.tex') return ''
-    return rev === 'HEAD' ? OLD_MAIN : NEW_MAIN
+    return rev === 'HEAD' ? old : neu
   })
   const renderDiff = vi.fn(
     async (_preamble: string, _before: string, _after: string): Promise<SnippetResult> => ({ pdf: Buffer.from('PDF') })
@@ -90,23 +90,13 @@ describe('DiffPreviewService', () => {
 
   // Two edits with unchanged content between them must NOT be rendered as one span
   // swallowing the middle — each contiguous run gets its own preview.
-  function setupText(old: string, neu: string, blocks: BlockChange[]) {
-    const show = vi.fn(async (rev: string) => (rev === 'HEAD' ? old : neu))
-    const renderDiff = vi.fn(
-      async (_preamble: string, _before: string, _after: string): Promise<SnippetResult> => ({ pdf: Buffer.from('PDF') })
-    )
-    const svc = new DiffPreviewService({ show } as unknown as GitClient, { renderDiff } as unknown as SnippetCompiler, info)
-    svc.prime('op1', 'stanza/op-op1', blocks)
-    return { svc, renderDiff }
-  }
-
   test('far-apart edits in one file render as separate previews (gap elided)', async () => {
     const OLD = ['\\documentclass{article}', '\\begin{document}', 'intro old.', '', 'unchanged middle.', '', 'tail old.', '\\end{document}', ''].join('\n')
     const NEW = ['\\documentclass{article}', '\\begin{document}', 'intro new.', '', 'unchanged middle.', '', 'tail new.', '\\end{document}', ''].join('\n')
-    const { svc, renderDiff } = setupText(OLD, NEW, [
+    const { svc, renderDiff } = setup([
       block({ kind: 'paragraph', beforeSpan: span(3, 3), afterSpan: span(3, 3) }),
       block({ kind: 'paragraph', beforeSpan: span(7, 7), afterSpan: span(7, 7) }),
-    ])
+    ], OLD, NEW)
     const results = await svc.get('op1')
     expect(results).toHaveLength(2) // two previews, not one ballooned region
     expect(renderDiff).toHaveBeenCalledTimes(2)
@@ -120,10 +110,10 @@ describe('DiffPreviewService', () => {
   test('edits separated only by a blank line render as one preview', async () => {
     const OLD = ['\\documentclass{article}', '\\begin{document}', 'para A old.', '', 'para B old.', '\\end{document}', ''].join('\n')
     const NEW = ['\\documentclass{article}', '\\begin{document}', 'para A new.', '', 'para B new.', '\\end{document}', ''].join('\n')
-    const { svc, renderDiff } = setupText(OLD, NEW, [
+    const { svc, renderDiff } = setup([
       block({ kind: 'paragraph', beforeSpan: span(3, 3), afterSpan: span(3, 3) }),
       block({ kind: 'paragraph', beforeSpan: span(5, 5), afterSpan: span(5, 5) }),
-    ])
+    ], OLD, NEW)
     const results = await svc.get('op1')
     expect(results).toHaveLength(1) // blank-only gap → one contiguous preview
     const [, oldRegion] = renderDiff.mock.calls[0]
