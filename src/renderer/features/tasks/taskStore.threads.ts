@@ -60,3 +60,35 @@ export function withResolvedTurn(task: EditTask, accept: boolean): EditTask {
 export function withTurnError(task: EditTask, error: string): EditTask {
   return { ...task, phase: task.turns?.length ? 'thread-idle' : 'compose', error }
 }
+
+/** Rebuild a persistent task from a persisted thread record on open. Its
+ *  `blockIds` are already re-anchored to the current tree by the caller. When the
+ *  thread closed with a still-pending edit turn, the caller passes that turn's
+ *  live `proposal` so the bubble restores straight into review; otherwise it
+ *  rests in thread-idle. */
+export function restoredTask(
+  record: {
+    threadId: string
+    threadSessionId?: string
+    blockIds: string[]
+    turns: ThreadTurn[]
+    proposal?: ReviewProposal | null
+  },
+  id: number
+): EditTask {
+  const proposal = record.proposal ?? null
+  const lastAgent = [...record.turns].reverse().find((t) => t.role === 'agent')
+  return {
+    id,
+    blockIds: record.blockIds,
+    instruction: '',
+    phase: proposal ? 'review' : 'thread-idle',
+    proposal,
+    opId: proposal?.opId,
+    persistent: true,
+    threadId: record.threadId,
+    threadSessionId: record.threadSessionId,
+    turns: record.turns,
+    note: lastAgent?.text,
+  }
+}

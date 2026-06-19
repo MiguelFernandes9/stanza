@@ -567,6 +567,16 @@ async function runClaudeTurn(
         watcher.dispose()
       }
 
+      // First turn primed a fresh session — persist its id BEFORE capture so a
+      // capture failure can't orphan it (the next turn must resume the same one).
+      // Later turns already have it persisted (req.sessionId set), so skip.
+      if (req.sessionId == null) {
+        const ts = new Date().toISOString()
+        const threads = store.getProject(doc.info.root).threads ?? []
+        store.setProject(doc.info.root, {
+          threads: upsertThread(threads, { threadId: req.threadId, sessionId: turn.sessionId, blockIds: req.blockIds, ts }),
+        })
+      }
       const proposal = await doc.review.captureWorktree(doc.worktreeDir, turn.opId, req.instruction, req.spans)
       if (proposal) doc.diffPreview.prime(proposal.opId, proposal.branch, proposal.blocks)
       persistThreadTurn(doc.info.root, req, turn, proposal)

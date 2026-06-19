@@ -1,5 +1,5 @@
 import type { ReviewProposal, ThreadTurn } from '../../../shared/ipc'
-import { withResolvedTurn, withTurnError, withTurnResult, withUserTurn } from './taskStore.threads'
+import { restoredTask, withResolvedTurn, withTurnError, withTurnResult, withUserTurn } from './taskStore.threads'
 
 /** Margin-rail task model — design "Task model": every edit is a task
  *  rendered as a card; phases compose → busy → review; accept/reject
@@ -85,6 +85,16 @@ export type TaskAction =
   | { type: 'turn-result'; taskId: number; turn: ThreadTurn; proposal: ReviewProposal | null; sessionId: string }
   | { type: 'turn-failed'; taskId: number; error: string }
   | { type: 'resolve-thread-turn'; taskId: number; accept: boolean }
+  | {
+      type: 'restore-threads'
+      threads: {
+        threadId: string
+        threadSessionId?: string
+        blockIds: string[]
+        turns: ThreadTurn[]
+        proposal?: ReviewProposal | null
+      }[]
+    }
 
 const patchTask = (s: TaskState, id: number, patch: Partial<EditTask>): TaskState => ({
   ...s,
@@ -309,6 +319,20 @@ export function taskReducer(s: TaskState, a: TaskAction): TaskState {
       const t = s.tasks.find((x) => x.id === a.taskId)
       if (!t) return s
       return patchTask(s, a.taskId, withResolvedTurn(t, a.accept))
+    }
+    case 'restore-threads': {
+      // Rebuild persistent bubbles from the Store on open. Skip any thread id
+      // already present (idempotent — restore fires once, but guard re-entry).
+      const have = new Set(s.tasks.map((t) => t.threadId).filter(Boolean))
+      const fresh = a.threads.filter((t) => !have.has(t.threadId))
+      if (!fresh.length) return s
+      // Drop any one-shot unanchored review card a racing reEmitPendingProposals
+      // already created for a restored thread's pending op (avoid a twin card).
+      const restoredOps = new Set(fresh.map((t) => t.proposal?.opId).filter(Boolean))
+      const base = s.tasks.filter((t) => t.persistent || !t.proposal || !restoredOps.has(t.proposal.opId))
+      let id = s.nextId
+      const restored = fresh.map((t) => restoredTask(t, id++))
+      return { ...s, nextId: id, tasks: [...base, ...restored] }
     }
   }
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { BlockNode } from '../../../shared/blocks/types'
-import { computeReanchor, pendingRemap, vanishedThreads } from './reanchor'
+import { computeReanchor, pendingRemap, restoreAnchors, vanishedThreads } from './reanchor'
 import type { EditTask } from './taskStore'
 
 /** Leaf block factory: id carries `path#hash`; span pins file + position. */
@@ -160,5 +160,27 @@ describe('vanishedThreads', () => {
     const newTree = [blk('par7#dddddd', 'main.tex', 5)]
     const review: EditTask = { id: 1, blockIds: ['par2#bbbbbb'], instruction: '', phase: 'review', proposal: null }
     expect(vanishedThreads(oldTree, newTree, [review])).toEqual([])
+  })
+})
+
+describe('restoreAnchors (open-time, no old tree)', () => {
+  it('keeps an exact id when the doc is unchanged since close', () => {
+    const tree = [blk('par2#bbbbbb', 'main.tex', 5)]
+    expect(restoreAnchors(tree, ['par2#bbbbbb'])).toEqual({ ids: ['par2#bbbbbb'], gone: false })
+  })
+
+  it('remaps a moved block by hash', () => {
+    const tree = [blk('par5#bbbbbb', 'main.tex', 9)]
+    expect(restoreAnchors(tree, ['par2#bbbbbb'])).toEqual({ ids: ['par5#bbbbbb'], gone: false })
+  })
+
+  it('remaps a content-edited block by path', () => {
+    const tree = [blk('par2#cccccc', 'main.tex', 5)]
+    expect(restoreAnchors(tree, ['par2#bbbbbb'])).toEqual({ ids: ['par2#cccccc'], gone: false })
+  })
+
+  it('reports gone when no id/hash/path matches (block deleted while closed)', () => {
+    const tree = [blk('par9#dddddd', 'main.tex', 5)]
+    expect(restoreAnchors(tree, ['par2#bbbbbb'])).toEqual({ ids: [], gone: true })
   })
 })

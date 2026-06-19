@@ -39,7 +39,7 @@ import { expandIds, flattenBlocks, parentOf, spanLabel, taskSpans } from '../pap
 import { resolveToKnownFile } from '@renderer/lib/paths'
 import { blockLabel, tagKind } from '../tasks/TaskCard'
 import { dismissRoute, initialTaskState, taskReducer } from '../tasks/taskStore'
-import { pendingRemap, vanishedThreads } from '../tasks/reanchor'
+import { pendingRemap, restoreAnchors, vanishedThreads } from '../tasks/reanchor'
 import { planMove } from './fileDrag'
 import { revealBlock } from './revealBlock'
 import { ResizeHandle } from './ResizeHandle'
@@ -262,6 +262,37 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
     )
   }, [doc.mainFile])
 
+  // Rehydrate persistent "Keep chat" bubbles from the Store on open. Self-
+  // contained (fetches its own blocks + pending proposals) so it doesn't race
+  // loadBlocks or the reEmitPendingProposals push: anchors are resolved against
+  // the current tree (dropping threads whose block was deleted while closed),
+  // and a thread that closed mid-review restores straight into its proposal.
+  const restoreThreads = useCallback(() => {
+    void Promise.all([client.threadsList(), client.documentProjectBlocks(), client.reviewList()]).then(
+      ([records, blocks, proposals]) => {
+        const pendingByOp = new Map(proposals.map((p) => [p.opId, p]))
+        const threads = []
+        for (const r of records) {
+          const { ids, gone } = restoreAnchors(blocks, r.blockIds)
+          if (gone) {
+            void client.threadsDelete(r.threadId).catch(() => undefined)
+            continue
+          }
+          const pending = r.turns.find((t) => t.opId && t.accepted == null && pendingByOp.has(t.opId))
+          threads.push({
+            threadId: r.threadId,
+            threadSessionId: r.sessionId,
+            blockIds: ids,
+            turns: r.turns,
+            proposal: pending ? pendingByOp.get(pending.opId!) : null,
+          })
+        }
+        if (threads.length) dispatch({ type: 'restore-threads', threads })
+      },
+      () => undefined
+    )
+  }, [])
+
   useEffect(() => {
     loadFiles()
     // Blocks for the whole project (all \include'd files), not just main —
@@ -269,7 +300,8 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
     loadBlocks()
     loadHistory()
     loadOps()
-  }, [doc, loadFiles, loadBlocks, loadHistory, loadOps])
+    restoreThreads()
+  }, [doc, loadFiles, loadBlocks, loadHistory, loadOps, restoreThreads])
 
   // Refresh autocomplete data when the file tree changes (new/renamed/deleted
   // files, and the initial listing).

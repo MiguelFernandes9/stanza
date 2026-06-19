@@ -84,6 +84,30 @@ export function pendingRemap(
   return staleIds.length ? computeReanchor(oldRoots, newRoots, staleIds) : {}
 }
 
+/** Resolve a persisted thread's block ids against the current tree at OPEN time —
+ *  there is no "old tree" to compare against (the app just started), so match on
+ *  the id alone: exact id (doc unchanged since close) → same `#hash` (block moved)
+ *  → same `blockPath` (block edited in place). `gone` is true only when EVERY id
+ *  failed (the conversation's anchor was deleted while the app was closed). */
+export function restoreAnchors(
+  newRoots: BlockNode[],
+  ids: string[]
+): { ids: string[]; gone: boolean } {
+  const newFlat = flatten(newRoots)
+  const live = new Set(newFlat.map((b) => b.id))
+  const resolved: string[] = []
+  for (const id of ids) {
+    if (live.has(id)) {
+      resolved.push(id)
+      continue
+    }
+    const byHash = newFlat.find((b) => hashOf(b.id) === hashOf(id))
+    const match = byHash ?? newFlat.find((b) => blockPath(b.id) === blockPath(id))
+    if (match) resolved.push(match.id)
+  }
+  return { ids: resolved, gone: resolved.length === 0 }
+}
+
 /** Persistent threads whose anchor block has VANISHED from the new tree — no id,
  *  hash, or path match for ANY of its blocks (the user deleted the block). The
  *  caller deletes those conversations: a chat with no block to live on is gone.

@@ -467,3 +467,57 @@ describe('taskReducer — persistent conversation bubbles', () => {
     expect(s.tasks).toHaveLength(0)
   })
 })
+
+describe('taskReducer — restore-threads (open)', () => {
+  const userTurn = { role: 'user' as const, text: 'hi', ts: 't0' }
+
+  it('rebuilds resting persistent bubbles from records', () => {
+    const s = run(initialTaskState, {
+      type: 'restore-threads',
+      threads: [{ threadId: 'th-1', threadSessionId: 'sess', blockIds: ['p1'], turns: [userTurn] }]
+    })
+    expect(s.tasks).toHaveLength(1)
+    expect(s.tasks[0]).toMatchObject({
+      persistent: true,
+      phase: 'thread-idle',
+      threadId: 'th-1',
+      threadSessionId: 'sess',
+      blockIds: ['p1']
+    })
+    expect(s.tasks[0].proposal).toBeNull()
+  })
+
+  it('restores a thread that closed mid-review straight into its proposal', () => {
+    const agentTurn = { role: 'agent' as const, text: 'x', ts: 't1', opId: 'op-1', accepted: null }
+    const s = run(initialTaskState, {
+      type: 'restore-threads',
+      threads: [{ threadId: 'th-1', blockIds: ['p1'], turns: [userTurn, agentTurn], proposal }]
+    })
+    expect(s.tasks[0]).toMatchObject({ phase: 'review', opId: 'op-1', persistent: true })
+    expect(s.tasks[0].proposal).toEqual(proposal)
+  })
+
+  it('drops a racing unanchored review card for a restored op (no twin)', () => {
+    let s = run(initialTaskState, { type: 'restore-proposal', proposal }) // reEmit created an unanchored card
+    expect(s.tasks).toHaveLength(1)
+    const agentTurn = { role: 'agent' as const, text: 'x', ts: 't1', opId: 'op-1', accepted: null }
+    s = run(s, {
+      type: 'restore-threads',
+      threads: [{ threadId: 'th-1', blockIds: ['p1'], turns: [agentTurn], proposal }]
+    })
+    expect(s.tasks).toHaveLength(1) // twin removed, thread kept
+    expect(s.tasks[0]).toMatchObject({ persistent: true, threadId: 'th-1', phase: 'review' })
+  })
+
+  it('is idempotent — skips a threadId already present', () => {
+    let s = run(initialTaskState, {
+      type: 'restore-threads',
+      threads: [{ threadId: 'th-1', blockIds: ['p1'], turns: [] }]
+    })
+    s = run(s, {
+      type: 'restore-threads',
+      threads: [{ threadId: 'th-1', blockIds: ['p1'], turns: [] }]
+    })
+    expect(s.tasks).toHaveLength(1)
+  })
+})
