@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import type { JSX } from 'react'
+import type { CSSProperties, JSX } from 'react'
 import { ArrowUp, Camera, Check, CircleSlash, FileText, Maximize2, Plus, Sparkles, X } from 'lucide-react'
 import { BlockTag, Button, DiffHunk, IconButton, Kbd } from '@renderer/components'
 import type { BlockTagKind } from '@renderer/components'
@@ -10,6 +10,22 @@ import { summarizeBlocks } from '@shared/blocks/changes'
 
 export const RAIL = 316
 export const RAIL_GAP = 22
+
+/** Shared style for the compose-row pill buttons ("+ blocks", "snapshot").
+ *  `active` is the pill's on-state (adding mode / image attached). */
+const pillStyle = (active: boolean): CSSProperties => ({
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  height: 22,
+  padding: '0 8px',
+  borderRadius: 'var(--radius-pill)',
+  cursor: 'pointer',
+  border: `1px ${active ? 'solid var(--clay-400)' : 'dashed var(--line-ink)'}`,
+  background: active ? 'var(--clay-50)' : 'transparent',
+  color: active ? 'var(--clay-700)' : 'var(--ink-500)',
+  font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-sans)'
+})
 
 interface Props {
   task: EditTask
@@ -251,22 +267,7 @@ export function TaskCard({
             ))
           )}
           {task.phase === 'compose' && (
-            <button
-              onClick={onToggleAdding}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 4,
-                height: 22,
-                padding: '0 8px',
-                borderRadius: 'var(--radius-pill)',
-                cursor: 'pointer',
-                border: `1px ${adding ? 'solid var(--clay-400)' : 'dashed var(--line-ink)'}`,
-                background: adding ? 'var(--clay-50)' : 'transparent',
-                color: adding ? 'var(--clay-700)' : 'var(--ink-500)',
-                font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-sans)'
-              }}
-            >
+            <button onClick={onToggleAdding} style={pillStyle(adding)}>
               <Plus size={11} /> blocks
             </button>
           )}
@@ -274,19 +275,7 @@ export function TaskCard({
             <button
               onClick={onSnapshot}
               title={task.image ? 'Snapshot attached — click to retake' : "Attach a snapshot of the block's rendered output"}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 4,
-                height: 22,
-                padding: '0 8px',
-                borderRadius: 'var(--radius-pill)',
-                cursor: 'pointer',
-                border: `1px ${task.image ? 'solid var(--clay-400)' : 'dashed var(--line-ink)'}`,
-                background: task.image ? 'var(--clay-50)' : 'transparent',
-                color: task.image ? 'var(--clay-700)' : 'var(--ink-500)',
-                font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-sans)'
-              }}
+              style={pillStyle(!!task.image)}
             >
               {task.image ? <Check size={11} /> : <Camera size={11} />} snapshot
             </button>

@@ -255,24 +255,24 @@ export function ChatPane({ messages, busy, chips, disabled = false, onRemoveChip
             Run
           </Button>
         </div>
-        {disabled ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 7, paddingLeft: 2 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 7, paddingLeft: 2 }}>
+          {disabled ? (
             <span style={{ font: 'var(--text-2xs)/1.4 var(--font-sans)', color: 'var(--ink-400)' }}>
               Editing blocks — switch to Read mode (<Kbd>⌘</Kbd> <Kbd>B</Kbd>) to chat with the whole document.
             </span>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 7, paddingLeft: 2 }}>
-            <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>
-              Claude Code edits the <span style={{ fontFamily: 'var(--font-mono)' }}>.tex</span> source directly ·{' '}
-            </span>
-            <span style={{ display: 'inline-flex', gap: 3, alignItems: 'center' }}>
-              <Kbd>⌘</Kbd>
-              <Kbd>↵</Kbd>
-            </span>
-            <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>to run</span>
-          </div>
-        )}
+          ) : (
+            <>
+              <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>
+                Claude Code edits the <span style={{ fontFamily: 'var(--font-mono)' }}>.tex</span> source directly ·{' '}
+              </span>
+              <span style={{ display: 'inline-flex', gap: 3, alignItems: 'center' }}>
+                <Kbd>⌘</Kbd>
+                <Kbd>↵</Kbd>
+              </span>
+              <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>to run</span>
+            </>
+          )}
+        </div>
       </div>
     </div>
   )
