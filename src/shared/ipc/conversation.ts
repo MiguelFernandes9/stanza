@@ -26,15 +26,21 @@ export interface ThreadRecord {
   /** The thread's own Claude session uuid — undefined until the first turn primes
    *  it; thereafter the resume target (also across restart). */
   sessionId?: string
+  /** The op worktree `sessionId` was primed in. A session's CLI sandbox and baked
+   *  context are pinned to its prime dir, so a record whose `primedWorkdir` ≠ the
+   *  current worktree — a relocated tmpdir, or a pre-fix session primed at the
+   *  user checkout — can't be resumed; runClaudeTurn re-primes a fresh one. */
+  primedWorkdir?: string
   blockIds: string[]
   turns: ThreadTurn[]
   ts: string
 }
 
-/** claude:runTurn payload. `sessionId` null on the first turn (main primes a
- *  fresh session and returns the new id); the stored id thereafter. `blockIds`
- *  is the thread's current anchor, persisted with each turn so a restart
- *  re-anchors to the latest tree. */
+/** claude:runTurn payload. Main resolves the resume target from the persisted
+ *  thread record (the authority), re-priming a fresh session whenever it was
+ *  primed in a different worktree; `sessionId` here is only the renderer's last
+ *  known id (advisory). `blockIds` is the thread's current anchor, persisted with
+ *  each turn so a restart re-anchors to the latest tree. */
 export interface ClaudeTurnRequest {
   threadId: string
   sessionId: string | null

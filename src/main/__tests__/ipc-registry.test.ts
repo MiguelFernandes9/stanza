@@ -7,12 +7,14 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { BrowserWindow } from 'electron'
 import { IpcChannels } from '../../shared/ipc'
 import type { ClaudeResult } from '../../shared/ipc/claude'
+import type { ClaudeTurnResult, ThreadRecord } from '../../shared/ipc/conversation'
 import type { ReviewResolution } from '../../shared/ipc/review'
 import type { CommitInfo, FileEntry, FileMutationResult, HistoryDiff, PrimeStep } from '../../shared/ipc/document'
 import { DefaultProcessRunner } from '../infra/ProcessRunner'
@@ -292,6 +294,90 @@ esac`),
     expect(elapsed).toBeLessThan(900) // merged immediately — did NOT queue behind B's 1.5s op
     expect(readFileSync(join(root, 'main.tex'), 'utf8')).toContain('a') // A's edit merged in
     await bRunning.catch(() => {})
+  }, 20_000)
+})
+
+describe('claude:runTurn persistent thread (worktree self-heal)', () => {
+  // Logs every claude argv so a test can assert which session id (if any) was
+  // resumed. On --resume it edits main.tex so the turn yields a proposal.
+  const threadStub = (argvLog: string) =>
+    makeClaudeStub(`printf '%s\\n' "$*" >> '${argvLog}'
+case "$*" in
+  *--resume*) printf 'thread edit\\n' >> main.tex; echo '{"result":"edited"}' ;;
+  *) echo '{"result":"primed"}' ;;
+esac`)
+
+  // The op worktree session.ts derives for a root (stable hash under tmpdir).
+  const worktreeFor = (root: string) =>
+    join(tmpdir(), 'stanza-wt', createHash('sha1').update(root).digest('hex').slice(0, 16))
+
+  const seedThread = (root: string, rec: Record<string, unknown>): void => {
+    writeFileSync(join(h.userData, 'projects.json'), JSON.stringify({ [root]: { threads: [rec] } }))
+    h.handlers.clear()
+    registerIpcHandlers() // re-read the seeded store
+  }
+
+  const readThread = (root: string, threadId: string) =>
+    (JSON.parse(readFileSync(join(h.userData, 'projects.json'), 'utf8')) as Record<string, { threads: ThreadRecord[] }>)[
+      root
+    ].threads.find((t) => t.threadId === threadId)!
+
+  test('a session primed in a stale worktree is re-primed, never resumed (the poison bug)', async () => {
+    const root = makeProject()
+    const argvLog = join(makeDir('stanza-thread-argv-'), 'argv.log')
+    vi.stubEnv('STANZA_CLAUDE_BIN', threadStub(argvLog))
+    // Pre-fix / relocated thread: its session was primed at the user checkout,
+    // which the op worktree doesn't grant — resuming it fails "Permission denied".
+    seedThread(root, {
+      threadId: 'T1',
+      sessionId: 'poison-session-id',
+      primedWorkdir: root, // ≠ the op worktree
+      blockIds: ['main.tex#h'],
+      turns: [],
+      ts: '2026-01-01',
+    })
+    await invoke('document:open', root)
+
+    const res = (await invoke('claude:runTurn', {
+      threadId: 'T1',
+      sessionId: 'poison-session-id', // renderer's stale hint — must be ignored
+      instruction: 'elaborate more',
+      spans: [{ file: 'main.tex', startLine: 3, endLine: 3 }],
+      blockIds: ['main.tex#h'],
+    })) as ClaudeTurnResult
+
+    expect(readFileSync(argvLog, 'utf8')).not.toContain('poison-session-id') // never resumed
+    expect(res.proposal).not.toBeNull() // the fresh session did the edit
+    expect(res.sessionId).not.toBe('poison-session-id') // a new id took over
+    const rec = readThread(root, 'T1')
+    expect(rec.primedWorkdir).toBe(worktreeFor(root)) // re-primed in the op worktree
+    expect(rec.sessionId).toBe(res.sessionId)
+  }, 20_000)
+
+  test('a session primed in the current worktree is resumed, not re-primed', async () => {
+    const root = makeProject()
+    const argvLog = join(makeDir('stanza-thread-argv-'), 'argv.log')
+    vi.stubEnv('STANZA_CLAUDE_BIN', threadStub(argvLog))
+    seedThread(root, {
+      threadId: 'T2',
+      sessionId: 'good-session-id',
+      primedWorkdir: worktreeFor(root), // already primed in THIS worktree
+      blockIds: ['main.tex#h'],
+      turns: [],
+      ts: '2026-01-01',
+    })
+    await invoke('document:open', root)
+
+    const res = (await invoke('claude:runTurn', {
+      threadId: 'T2',
+      sessionId: 'good-session-id',
+      instruction: 'continue',
+      spans: [{ file: 'main.tex', startLine: 3, endLine: 3 }],
+      blockIds: ['main.tex#h'],
+    })) as ClaudeTurnResult
+
+    expect(readFileSync(argvLog, 'utf8')).toContain('--resume good-session-id') // resumed, no re-prime
+    expect(res.sessionId).toBe('good-session-id') // unchanged
   }, 20_000)
 })
 

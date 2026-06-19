@@ -556,10 +556,21 @@ async function runClaudeTurn(
       await doc.ensureWorktree()
       await doc.review.syncWorktree(doc.worktreeDir)
 
+      // Resume the thread's session only if it was primed in THIS worktree.
+      // Otherwise re-prime a fresh one: a session's sandbox + baked root are
+      // pinned to its prime dir, so a relocated worktree — or a pre-fix session
+      // primed at the user checkout (no primedWorkdir) — can't be resumed and
+      // would fail "Permission denied on read". Mirrors ClaudeService's doc-session
+      // self-heal (ensureSession re-primes on primedWorkdir mismatch).
+      // The Store record is the authority for the resume id (not the renderer's
+      // req.sessionId, which may be stale after a heal).
+      const rec = (store.getProject(doc.info.root).threads ?? []).find((t) => t.threadId === req.threadId)
+      const resumeId = rec?.primedWorkdir === doc.worktreeDir ? (rec.sessionId ?? null) : null
+
       const watcher = armSettleWatcher(doc.worktreeDir, { quietMs: 400, capMs: 3000 })
       let turn: { opId: string; note: string; sessionId: string }
       try {
-        turn = await doc.claude.runThreadTurn(req.sessionId, claudeReq, (status) =>
+        turn = await doc.claude.runThreadTurn(resumeId, claudeReq, (status) =>
           sendTo(wc, IpcChannels.claudeStatus, status),
         )
         await watcher.settled()
@@ -567,14 +578,21 @@ async function runClaudeTurn(
         watcher.dispose()
       }
 
-      // First turn primed a fresh session — persist its id BEFORE capture so a
-      // capture failure can't orphan it (the next turn must resume the same one).
-      // Later turns already have it persisted (req.sessionId set), so skip.
-      if (req.sessionId == null) {
+      // A fresh prime (first turn OR self-heal) yields a new session id — persist
+      // it AND the worktree it was primed in BEFORE capture, so a capture failure
+      // can't orphan it (the next turn must resume the same one). A resumed turn
+      // already has both persisted, so skip.
+      if (resumeId == null) {
         const ts = new Date().toISOString()
         const threads = store.getProject(doc.info.root).threads ?? []
         store.setProject(doc.info.root, {
-          threads: upsertThread(threads, { threadId: req.threadId, sessionId: turn.sessionId, blockIds: req.blockIds, ts }),
+          threads: upsertThread(threads, {
+            threadId: req.threadId,
+            sessionId: turn.sessionId,
+            primedWorkdir: doc.worktreeDir,
+            blockIds: req.blockIds,
+            ts,
+          }),
         })
       }
       const proposal = await doc.review.captureWorktree(doc.worktreeDir, turn.opId, req.instruction, req.spans)
