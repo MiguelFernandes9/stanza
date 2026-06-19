@@ -94,6 +94,9 @@ describe('ClaudeService.runOp', () => {
       const addDir = call.args.indexOf('--add-dir')
       expect(call.args[addDir + 1]).toBe('/tmp/stanza-wt/abc')
     }
+    // The prime prompt must root Claude at the worktree (the only granted dir),
+    // not the user checkout — else span paths resolve outside the grant (denied).
+    expect(runner.calls[0]!.args.at(-1)).toContain('Project root: /tmp/stanza-wt/abc')
     // session recorded as primed in the worktree (so resume only happens there)
     expect(store.getProject('/proj').primedWorkdir).toBe('/tmp/stanza-wt/abc')
   })

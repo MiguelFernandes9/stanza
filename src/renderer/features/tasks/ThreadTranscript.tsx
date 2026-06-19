@@ -18,7 +18,9 @@ interface Props {
  *  with Accept/Reject; a resolved edit turn shows an accepted/rejected chip. */
 export function ThreadTranscript({ turns, proposal, busy, onResolve, onOpenReview }: Props): JSX.Element {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 320, overflow: 'auto' }}>
+    <div
+      style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 320, overflow: 'auto', userSelect: 'text' }}
+    >
       {turns.map((t, i) =>
         t.role === 'user' ? (
           <UserTurn key={i} text={t.text} />

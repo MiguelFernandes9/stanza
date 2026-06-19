@@ -100,7 +100,11 @@ export function WholeDocRail({
               <FileText size={14} />
             </button>
             {isOpen && (
-              <div data-testid="whole-doc-bubble" style={{ width: RAIL }}>
+              <div
+                data-testid="whole-doc-bubble"
+                onPointerDown={(e) => e.stopPropagation()}
+                style={{ width: RAIL }}
+              >
                 <TaskCard
                   task={t}
                   blocks={[]}

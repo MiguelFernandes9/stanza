@@ -632,6 +632,10 @@ export function PaperPane(props: Props): JSX.Element {
                     <div
                       key={t.id}
                       data-testid="rail-bubble"
+                      // A press inside the bubble must not start the pane's marquee
+                      // (it'd suppress text selection mid-drag) — let the user
+                      // select + copy the conversation text instead.
+                      onPointerDown={(e) => e.stopPropagation()}
                       style={{
                         position: 'absolute',
                         left: railLeft,

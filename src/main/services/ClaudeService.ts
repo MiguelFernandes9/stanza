@@ -135,7 +135,7 @@ export class ClaudeService {
       this.workDir,
       '--output-format',
       'json',
-      primePrompt(this.doc),
+      primePrompt(this.doc, this.workDir),
     ])
     assertCompleted(proc, this.timeoutMs)
     return sessionId
@@ -168,7 +168,7 @@ export class ClaudeService {
         this.workDir,
         '--output-format',
         'json',
-        primePrompt(this.doc),
+        primePrompt(this.doc, this.workDir),
       ],
       signal,
     )
