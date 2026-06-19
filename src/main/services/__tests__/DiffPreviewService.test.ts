@@ -87,4 +87,47 @@ describe('DiffPreviewService', () => {
     expect(oldRegion).toContain('old para.') // region spans the heading + edited paragraph…
     expect(oldRegion).not.toContain('x=1') // …not the equation below (line 5-7)
   })
+
+  // Two edits with unchanged content between them must NOT be rendered as one span
+  // swallowing the middle — each contiguous run gets its own preview.
+  function setupText(old: string, neu: string, blocks: BlockChange[]) {
+    const show = vi.fn(async (rev: string) => (rev === 'HEAD' ? old : neu))
+    const renderDiff = vi.fn(
+      async (_preamble: string, _before: string, _after: string): Promise<SnippetResult> => ({ pdf: Buffer.from('PDF') })
+    )
+    const svc = new DiffPreviewService({ show } as unknown as GitClient, { renderDiff } as unknown as SnippetCompiler, info)
+    svc.prime('op1', 'stanza/op-op1', blocks)
+    return { svc, renderDiff }
+  }
+
+  test('far-apart edits in one file render as separate previews (gap elided)', async () => {
+    const OLD = ['\\documentclass{article}', '\\begin{document}', 'intro old.', '', 'unchanged middle.', '', 'tail old.', '\\end{document}', ''].join('\n')
+    const NEW = ['\\documentclass{article}', '\\begin{document}', 'intro new.', '', 'unchanged middle.', '', 'tail new.', '\\end{document}', ''].join('\n')
+    const { svc, renderDiff } = setupText(OLD, NEW, [
+      block({ kind: 'paragraph', beforeSpan: span(3, 3), afterSpan: span(3, 3) }),
+      block({ kind: 'paragraph', beforeSpan: span(7, 7), afterSpan: span(7, 7) }),
+    ])
+    const results = await svc.get('op1')
+    expect(results).toHaveLength(2) // two previews, not one ballooned region
+    expect(renderDiff).toHaveBeenCalledTimes(2)
+    const [, r0] = renderDiff.mock.calls[0]
+    const [, r1] = renderDiff.mock.calls[1]
+    expect(r0).toContain('intro old.')
+    expect(r0).not.toContain('unchanged middle.') // the gap is not rendered
+    expect(r1).toContain('tail old.')
+  })
+
+  test('edits separated only by a blank line render as one preview', async () => {
+    const OLD = ['\\documentclass{article}', '\\begin{document}', 'para A old.', '', 'para B old.', '\\end{document}', ''].join('\n')
+    const NEW = ['\\documentclass{article}', '\\begin{document}', 'para A new.', '', 'para B new.', '\\end{document}', ''].join('\n')
+    const { svc, renderDiff } = setupText(OLD, NEW, [
+      block({ kind: 'paragraph', beforeSpan: span(3, 3), afterSpan: span(3, 3) }),
+      block({ kind: 'paragraph', beforeSpan: span(5, 5), afterSpan: span(5, 5) }),
+    ])
+    const results = await svc.get('op1')
+    expect(results).toHaveLength(1) // blank-only gap → one contiguous preview
+    const [, oldRegion] = renderDiff.mock.calls[0]
+    expect(oldRegion).toContain('para A old.')
+    expect(oldRegion).toContain('para B old.')
+  })
 })
