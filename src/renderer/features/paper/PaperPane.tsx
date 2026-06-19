@@ -203,7 +203,10 @@ export function PaperPane(props: Props): JSX.Element {
       // first (M2-6, BUG-30); a region's box runs to the next region's top, so a
       // dropped last line is included and a figure covers its image + caption.
       const rectsById = new Map(perBlock.map(({ b, rects }) => [b.id, rects]))
-      const bin = binContentToBlocks(rectsById, rowsByPage, graphicsByPage)
+      // `*` floats (table*/figure*) are full-width — one 'full' box, never split into
+      // per-cell l/r boxes by their narrow constituent synctex rects.
+      const fullWidthIds = new Set(pageBlocks.filter((b) => b.envName?.endsWith('*')).map((b) => b.id))
+      const bin = binContentToBlocks(rectsById, rowsByPage, graphicsByPage, undefined, fullWidthIds)
       // Galley collision: a unit inside ≥2 blocks' regions (a list's \begin maps onto
       // a figure's caption) can't be attributed by tightest-span geometry. Resolve
       // each authoritatively via the synctex BACKWARD map — the rendered point → its
@@ -239,7 +242,7 @@ export function PaperPane(props: Props): JSX.Element {
           })
         )
         if (!alive) return
-        if (forced.size) result = binContentToBlocks(rectsById, rowsByPage, graphicsByPage, forced)
+        if (forced.size) result = binContentToBlocks(rectsById, rowsByPage, graphicsByPage, forced, fullWidthIds)
       }
       // One box per block from its rendered ink; a section's box is its heading
       // line, selection expands to its members via expandIds (selection layer).
