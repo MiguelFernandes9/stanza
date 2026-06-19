@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import type { ClaudeRequest, ClaudeStatus } from '../../shared/ipc/claude'
 import type { DocumentInfo } from '../../shared/ipc/document'
 import type { ProcessRunner, ProcResult } from '../infra/ProcessRunner'
@@ -52,21 +55,19 @@ export class ClaudeService {
     req: ClaudeRequest,
     onStatus: (s: ClaudeStatus) => void,
   ): Promise<{ opId: string; note: string }> {
+    // A snapshot of the selected block travels as a PNG written OUTSIDE the op
+    // worktree (writing it into workDir would leak the image into the captured
+    // diff). Claude reads it via its Read tool, so the shot dir is granted with a
+    // second --add-dir; the file is removed once the op returns.
+    let shotPath: string | undefined
     try {
       const sessionId = await this.ensureSession()
       onStatus({ opId, state: 'running' })
-      const proc = await this.claude([
-        '-p',
-        '--resume',
-        sessionId,
-        '--add-dir',
-        this.workDir,
-        '--output-format',
-        'json',
-        '--permission-mode',
-        'acceptEdits',
-        opPrompt(req),
-      ])
+      if (req.imageDataUrl) shotPath = writeShot(opId, req.imageDataUrl)
+      const args = ['-p', '--resume', sessionId, '--add-dir', this.workDir]
+      if (shotPath) args.push('--add-dir', dirname(shotPath))
+      args.push('--output-format', 'json', '--permission-mode', 'acceptEdits', opPrompt(req, shotPath))
+      const proc = await this.claude(args)
       assertCompleted(proc, this.timeoutMs)
       const note = extractNote(proc.stdout)
       onStatus({ opId, state: 'done' })
@@ -74,6 +75,8 @@ export class ClaudeService {
     } catch (err) {
       onStatus({ opId, state: 'failed', detail: String(err) })
       throw err
+    } finally {
+      if (shotPath) rmSync(shotPath, { force: true })
     }
   }
 
@@ -123,6 +126,19 @@ export class ClaudeService {
       ...(signal ? { signal } : {}),
     })
   }
+}
+
+const SHOT_DIR = join(tmpdir(), 'stanza-shots')
+
+/** Persist a captured block PNG (data-URL) to the shot dir so the CLI's Read
+ *  tool can open it; returns the absolute path. Kept out of the op worktree so
+ *  it never lands in the captured diff. */
+function writeShot(opId: string, dataUrl: string): string {
+  mkdirSync(SHOT_DIR, { recursive: true })
+  const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '')
+  const path = join(SHOT_DIR, `${opId}.png`)
+  writeFileSync(path, Buffer.from(base64, 'base64'))
+  return path
 }
 
 /** The child env for the claude CLI, with the API-key overrides removed so the
