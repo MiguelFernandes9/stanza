@@ -415,12 +415,22 @@ export function binContentToBlocks(
   // no distinctive ink, collects nothing, and yields no box — dissolving the
   // float-only cleanRects / floatRenderPage machinery into one ink-grounded rule.
   interface Region { id: string; page: number; col: PdfCol; top: number; bottom: number; xLeft: number; xRight: number }
+  // A band-tall synctex rect (≥90% of a real page's content height) that COEXISTS with
+  // smaller in-band rects of the SAME block on the SAME page is a whole-column galley
+  // locator — a \begin/macro forward-mapped to the full text height, while the small
+  // rects are the real per-line content. Kept, the galley anchors a column-tall region
+  // that wins rows far from the block's ink: a giant, misplaced box overlapping and
+  // starving its neighbours. Drop it. A LONE tall rect (a block that genuinely fills a
+  // column — no competing small rect on that page) is real and kept. The ≥300pt band
+  // gate means synthetic tiny-page fixtures never trip this.
+  const bandH = band ? band.bottom - band.top : Infinity
+  const isTallRect = (r: PdfRect): boolean => bandH >= 300 && r.height >= 0.9 * bandH
   const regionsByPage = new Map<number, Region[]>()
   for (const [id, rects] of rectsById) {
     const byCell = new Map<string, Region>()
-    for (const r of rects) {
-      if (r.width <= 0 || r.height <= 0) continue
-      if (!inBand(r.y, r.y + r.height)) continue // header/footer-margin stray (BUG-30)
+    const inb = rects.filter((r) => r.width > 0 && r.height > 0 && inBand(r.y, r.y + r.height))
+    const smallPages = new Set(inb.filter((r) => !isTallRect(r)).map((r) => r.page))
+    for (const r of inb.filter((r) => !(isTallRect(r) && smallPages.has(r.page)))) {
       const layout = columnsByPage.get(r.page)
       const col: PdfCol = fullWidthIds.has(id)
         ? 'full'

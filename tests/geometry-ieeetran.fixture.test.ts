@@ -60,4 +60,18 @@ describe('real-doc IEEEtran two-column geometry', () => {
       for (const [, n] of perPage) expect(n, `${b.envName} one box per page`).toBe(1)
     }
   })
+
+  it('B4: a whole-column galley synctex rect does not make a giant misplaced box', () => {
+    // main.tex:198's paragraph forward-maps a full content-band rect (y≈47–717).
+    // Kept, it anchored a giant box at y≈469 (168pt above its real content y≈637),
+    // overlapping the Methodology blocks and stealing their lower lines. Dropping the
+    // galley rect boxes it at its real rendered content.
+    const b = fx.blocks.find((x) => x.file.endsWith('main.tex') && x.startLine === 198 && x.kind === 'paragraph')!
+    const boxes = boxesById.get(b.id) ?? []
+    expect(boxes.length).toBeGreaterThan(0)
+    const realTop = Math.min(...b.rects.filter((r) => r.page === 2 && r.height > 0 && r.height < 120).map((r) => r.y))
+    const p2 = boxes.find((x) => x.page === 2)!
+    expect(Math.abs(p2.y - realTop), 'box sits at its real content, not drifted up the column').toBeLessThan(40)
+    expect(p2.height, 'not a whole-column giant box').toBeLessThan(300)
+  })
 })
