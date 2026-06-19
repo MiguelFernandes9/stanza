@@ -38,7 +38,7 @@ import type { PdfFlash } from '../paper/PaperPane'
 import { expandIds, flattenBlocks, parentOf, spanLabel, taskSpans } from '../paper/paperModel'
 import { resolveToKnownFile } from '@renderer/lib/paths'
 import { blockLabel, tagKind } from '../tasks/TaskCard'
-import { dismissRoute, initialTaskState, taskReducer } from '../tasks/taskStore'
+import { dismissRoute, initialTaskState, isWholeDocTask, taskReducer } from '../tasks/taskStore'
 import { pendingRemap } from '../tasks/reanchor'
 import { planMove } from './fileDrag'
 import { revealBlock } from './revealBlock'
@@ -688,7 +688,12 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
   // Assistant panel = whole-document conversation only (chatModel filters out
   // block-scoped edits, which live in their rail bubbles).
   const messages = chatMessages(opRecords, state.tasks)
+  // Any in-flight op (block or whole-doc) — gates the console's Fix-with-Claude.
   const chatBusy = state.tasks.some((t) => t.phase === 'busy')
+  // The assistant panel only shows whole-doc history (chatMessages), so its busy
+  // indicator must track only whole-doc ops — else a block edit shows a thinking
+  // indicator in the panel with no matching message (review C5).
+  const chatPaneBusy = state.tasks.some((t) => t.phase === 'busy' && isWholeDocTask(t))
   const chips: ComposeChip[] = state.tasks
     .filter((t) => t.phase === 'compose')
     .flatMap((t) => t.blockIds)
@@ -838,12 +843,19 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           onDismissTask={dismissTask}
           onResolveTask={resolveTask}
           onAttachImage={(taskId, image) => dispatch({ type: 'attach-image', taskId, image })}
+          onSnapshotError={() =>
+            setToast({
+              title: "Couldn't snapshot the block",
+              message: 'Make sure the block is visible in the preview, then try again.',
+              tone: 'danger'
+            })
+          }
           onView={(view) => dispatch({ type: 'set-view', view })}
         />
         {chatOpen && (
           <ChatPane
             messages={messages}
-            busy={chatBusy}
+            busy={chatPaneBusy}
             chips={chips}
             disabled={state.view === 'select'}
             onRemoveChip={(blockId) => dispatch({ type: 'toggle-block', ids: [blockId], additive: true })}
