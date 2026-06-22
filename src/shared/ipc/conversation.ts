@@ -47,6 +47,9 @@ export interface ClaudeTurnRequest {
   instruction: string
   spans: BlockSpan[]
   blockIds: string[]
+  /** Optional PNG snapshot (data URL) of the anchor block, staged by the thread
+   *  composer's snapshot button so Claude sees the rendered output this turn. */
+  imageDataUrl?: string
 }
 
 export interface ClaudeTurnResult {

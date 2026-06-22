@@ -379,6 +379,33 @@ esac`)
     expect(readFileSync(argvLog, 'utf8')).toContain('--resume good-session-id') // resumed, no re-prime
     expect(res.sessionId).toBe('good-session-id') // unchanged
   }, 20_000)
+
+  test('a thread turn forwards an attached screenshot to the CLI (--add-dir shot dir)', async () => {
+    const root = makeProject()
+    const argvLog = join(makeDir('stanza-thread-argv-'), 'argv.log')
+    vi.stubEnv('STANZA_CLAUDE_BIN', threadStub(argvLog))
+    seedThread(root, {
+      threadId: 'T3',
+      sessionId: 'shot-session-id',
+      primedWorkdir: worktreeFor(root),
+      blockIds: ['main.tex#h'],
+      turns: [],
+      ts: '2026-01-01',
+    })
+    await invoke('document:open', root)
+
+    await invoke('claude:runTurn', {
+      threadId: 'T3',
+      sessionId: 'shot-session-id',
+      instruction: 'explain this rendering',
+      spans: [{ file: 'main.tex', startLine: 3, endLine: 3 }],
+      blockIds: ['main.tex#h'],
+      imageDataUrl: 'data:image/png;base64,iVBORw0KGgo=',
+    })
+
+    // The PNG was written + granted as a second --add-dir, end-to-end via the IPC.
+    expect(readFileSync(argvLog, 'utf8')).toContain('stanza-shots')
+  }, 20_000)
 })
 
 describe('file management channels (v0.2)', () => {

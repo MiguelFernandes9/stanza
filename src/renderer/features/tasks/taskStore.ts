@@ -36,6 +36,10 @@ export interface EditTask {
   threadSessionId?: string
   /** The conversation transcript (persistent tasks only). */
   turns?: ThreadTurn[]
+  /** PNG snapshot (data URL) of the block, staged by the snapshot button and sent
+   *  with the next Run/turn so Claude sees the rendered output. Cleared after send
+   *  (a thread can stage a fresh shot each turn). */
+  image?: string
 }
 
 export interface TaskState {
@@ -65,6 +69,7 @@ export type TaskAction =
   | { type: 'toggle-block'; ids: string[]; additive: boolean }
   | { type: 'remove-block'; taskId: number; blockId: string }
   | { type: 'update-instruction'; taskId: number; instruction: string }
+  | { type: 'attach-image'; taskId: number; image: string }
   | { type: 'submit'; taskId: number }
   | { type: 'start-whole-doc'; instruction: string }
   | { type: 'op-started'; taskId: number; opId: string }
@@ -79,6 +84,7 @@ export type TaskAction =
   | { type: 'set-adding'; adding: boolean }
   | { type: 'set-view'; view: PaneView }
   | { type: 'toggle-view' }
+  | { type: 'clear-drafts' }
   // Persistent conversation bubbles ("Keep chat") — see taskStore.threads.ts.
   | { type: 'toggle-persistent'; taskId: number }
   | { type: 'add-user-turn'; taskId: number; turn: ThreadTurn; threadId: string }
@@ -202,6 +208,8 @@ export function taskReducer(s: TaskState, a: TaskAction): TaskState {
     }
     case 'update-instruction':
       return patchTask(s, a.taskId, { instruction: a.instruction })
+    case 'attach-image':
+      return patchTask(s, a.taskId, { image: a.image })
     case 'submit': {
       const t = s.tasks.find((x) => x.id === a.taskId)
       if (!t || t.phase !== 'compose' || !t.instruction.trim()) return s
@@ -291,6 +299,16 @@ export function taskReducer(s: TaskState, a: TaskAction): TaskState {
       return applyView(s, a.view)
     case 'toggle-view':
       return applyView(s, s.view === 'read' ? 'select' : 'read')
+    case 'clear-drafts': {
+      // Esc deselects: drop every compose draft (and its wash); pending
+      // busy/review/noop tasks own a backend op or note and survive. Null the
+      // active pointer only if it referenced a dropped draft.
+      const tasks = s.tasks.filter((t) => t.phase !== 'compose')
+      if (tasks.length === s.tasks.length) return s
+      const active = s.tasks.find((t) => t.id === s.activeTask)
+      const activeTask = active && active.phase === 'compose' ? null : s.activeTask
+      return { ...s, tasks, activeTask, adding: false }
+    }
     case 'toggle-persistent': {
       // Only a compose draft can opt in/out — once it has turns it's committed.
       const t = s.tasks.find((x) => x.id === a.taskId)

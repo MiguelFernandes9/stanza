@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
-import type { JSX } from 'react'
-import { ArrowUp, Check, CircleSlash, FileText, Maximize2, MessagesSquare, Plus, Sparkles, X } from 'lucide-react'
+import type { CSSProperties, JSX } from 'react'
+import { ArrowUp, Camera, Check, CircleSlash, FileText, Maximize2, MessagesSquare, Plus, Sparkles, X } from 'lucide-react'
 import { BlockTag, Button, DiffHunk, IconButton, Kbd } from '@renderer/components'
 import type { BlockTagKind } from '@renderer/components'
 import { combinedSpanLabel, spanLabel } from '../paper/paperModel'
@@ -10,6 +10,23 @@ import { summarizeBlocks } from '@shared/blocks/changes'
 
 export const RAIL = 316
 export const RAIL_GAP = 22
+
+/** Shared style for the compose-row pill buttons ("+ blocks", "snapshot") and the
+ *  thread composer's snapshot pill. `active` is the pill's on-state (adding mode /
+ *  image attached). */
+export const pillStyle = (active: boolean): CSSProperties => ({
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  height: 22,
+  padding: '0 8px',
+  borderRadius: 'var(--radius-pill)',
+  cursor: 'pointer',
+  border: `1px ${active ? 'solid var(--clay-400)' : 'dashed var(--line-ink)'}`,
+  background: active ? 'var(--clay-50)' : 'transparent',
+  color: active ? 'var(--clay-700)' : 'var(--ink-500)',
+  font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-sans)'
+})
 
 interface Props {
   task: EditTask
@@ -35,6 +52,9 @@ interface Props {
   onTogglePersistent: () => void
   onResolve: (accept: boolean) => void
   onOpenReview: () => void
+  /** Capture the block as a PNG and attach it to this task's next Run. Absent for
+   *  whole-document cards (no block to snapshot). */
+  onSnapshot?: () => void
   refCb: (el: HTMLDivElement | null) => void
 }
 
@@ -75,6 +95,7 @@ export function TaskCard({
   onTogglePersistent,
   onResolve,
   onOpenReview,
+  onSnapshot,
   refCb
 }: Props): JSX.Element {
   const taRef = useRef<HTMLTextAreaElement | null>(null)
@@ -250,23 +271,17 @@ export function TaskCard({
             ))
           )}
           {task.phase === 'compose' && (
-            <button
-              onClick={onToggleAdding}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 4,
-                height: 22,
-                padding: '0 8px',
-                borderRadius: 'var(--radius-pill)',
-                cursor: 'pointer',
-                border: `1px ${adding ? 'solid var(--clay-400)' : 'dashed var(--line-ink)'}`,
-                background: adding ? 'var(--clay-50)' : 'transparent',
-                color: adding ? 'var(--clay-700)' : 'var(--ink-500)',
-                font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-sans)'
-              }}
-            >
+            <button onClick={onToggleAdding} style={pillStyle(adding)}>
               <Plus size={11} /> blocks
+            </button>
+          )}
+          {task.phase === 'compose' && onSnapshot && blocks.length > 0 && (
+            <button
+              onClick={onSnapshot}
+              title={task.image ? 'Snapshot attached — click to retake' : "Attach a snapshot of the block's rendered output"}
+              style={pillStyle(!!task.image)}
+            >
+              {task.image ? <Check size={11} /> : <Camera size={11} />} snapshot
             </button>
           )}
         </div>

@@ -525,6 +525,7 @@ async function runClaudeOp(
         instruction: req.instruction,
         note: op.note,
         accepted: null,
+        scope: req.spans.length === 0 ? 'doc' : 'blocks',
       })
       // The proposal travels back on this return — the initiating renderer wires it
       // into the busy task. Do NOT also broadcast review:proposal here: that
@@ -547,7 +548,7 @@ async function runClaudeTurn(
   wc: WebContents,
   req: ClaudeTurnRequest,
 ): Promise<ClaudeTurnResult> {
-  const claudeReq: ClaudeRequest = { instruction: req.instruction, spans: req.spans }
+  const claudeReq: ClaudeRequest = { instruction: req.instruction, spans: req.spans, imageDataUrl: req.imageDataUrl }
   doc.review.assertSpansFree(req.spans)
   doc.beginOp()
   try {

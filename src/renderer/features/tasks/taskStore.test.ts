@@ -186,6 +186,74 @@ describe('taskReducer — toggle-view flips Read ↔ Select', () => {
   })
 })
 
+describe('taskReducer — attach-image (block snapshot, F2)', () => {
+  it('stores the data URL on the task', () => {
+    let s = run(initialTaskState, { type: 'toggle-block', ids: ['p1'], additive: false })
+    s = run(s, { type: 'attach-image', taskId: s.tasks[0].id, image: 'data:image/png;base64,AAA' })
+    expect(s.tasks[0].image).toBe('data:image/png;base64,AAA')
+  })
+
+  it('retake overwrites the previous image', () => {
+    let s = run(initialTaskState, { type: 'toggle-block', ids: ['p1'], additive: false })
+    const id = s.tasks[0].id
+    s = run(
+      s,
+      { type: 'attach-image', taskId: id, image: 'one' },
+      { type: 'attach-image', taskId: id, image: 'two' }
+    )
+    expect(s.tasks[0].image).toBe('two')
+  })
+})
+
+describe('taskReducer — clear-drafts (Esc deselects)', () => {
+  it('drops every compose draft and nulls activeTask', () => {
+    let s = run(
+      initialTaskState,
+      { type: 'toggle-block', ids: ['A'], additive: false },
+      { type: 'update-instruction', taskId: 1, instruction: 'one' },
+      { type: 'toggle-block', ids: ['B'], additive: false }
+    )
+    expect(s.tasks).toHaveLength(2) // two parallel compose drafts
+    s = run(s, { type: 'clear-drafts' })
+    expect(s.tasks).toHaveLength(0)
+    expect(s.activeTask).toBeNull()
+    expect(s.adding).toBe(false)
+  })
+
+  it('keeps pending busy/review/noop cards, clearing only compose', () => {
+    let s = run(
+      initialTaskState,
+      { type: 'toggle-block', ids: ['A'], additive: false },
+      { type: 'update-instruction', taskId: 1, instruction: 'x' },
+      { type: 'submit', taskId: 1 }, // task 1 → busy
+      { type: 'toggle-block', ids: ['B'], additive: false } // task 2 → compose, active
+    )
+    s = run(s, { type: 'clear-drafts' })
+    expect(s.tasks.map((t) => t.phase)).toEqual(['busy'])
+    // active pointed at the dropped compose draft → nulled
+    expect(s.activeTask).toBeNull()
+  })
+
+  it('keeps activeTask when it points at a surviving (non-compose) task', () => {
+    let s = run(
+      initialTaskState,
+      { type: 'toggle-block', ids: ['A'], additive: false },
+      { type: 'update-instruction', taskId: 1, instruction: 'x' },
+      { type: 'submit', taskId: 1 },
+      { type: 'proposal', taskId: 1, proposal, note: 'n' } // review, re-activated as 1
+    )
+    expect(s.activeTask).toBe(1)
+    s = run(s, { type: 'clear-drafts' })
+    expect(s.activeTask).toBe(1)
+    expect(s.tasks).toHaveLength(1)
+  })
+
+  it('is a no-op (same ref) when there are no compose drafts', () => {
+    const s = run(initialTaskState, { type: 'set-view', view: 'read' })
+    expect(taskReducer(s, { type: 'clear-drafts' })).toBe(s)
+  })
+})
+
 describe('taskReducer — lifecycle', () => {
   const composed = (): TaskState =>
     run(

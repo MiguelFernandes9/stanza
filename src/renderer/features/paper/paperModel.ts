@@ -388,7 +388,13 @@ export function binContentToBlocks(
   rectsById: Map<string, PdfRect[]>,
   rowsByPage: Map<number, TextRow[]>,
   graphicsByPage: Map<number, GraphicBox[]> = new Map(),
-  forcedOwners?: Map<string, string>
+  forcedOwners?: Map<string, string>,
+  // Blocks the SOURCE declares full-width (a `*` float: table*/figure*). Their
+  // synctex emits full-spanning rule rects (→ 'full') AND narrow per-cell rects
+  // (→ 'l'/'r'), which would split one wide float into 3 overlapping boxes. A
+  // full-width block is ONE column ('full') per page — column is a property of the
+  // block-on-page, not of each constituent rect.
+  fullWidthIds: Set<string> = new Set()
 ): BinnedContent {
   const band = contentBand(rowsByPage)
   const inBand = (yTop: number, yBottom: number): boolean =>
@@ -416,9 +422,11 @@ export function binContentToBlocks(
       if (r.width <= 0 || r.height <= 0) continue
       if (!inBand(r.y, r.y + r.height)) continue // header/footer-margin stray (BUG-30)
       const layout = columnsByPage.get(r.page)
-      const col = layout
-        ? columnOf(layout, { yTop: r.y, yBottom: r.y + r.height, xLeft: r.x, xRight: r.x + r.width })
-        : 'full'
+      const col: PdfCol = fullWidthIds.has(id)
+        ? 'full'
+        : layout
+          ? columnOf(layout, { yTop: r.y, yBottom: r.y + r.height, xLeft: r.x, xRight: r.x + r.width })
+          : 'full'
       const key = `${r.page}|${col}`
       const cur = byCell.get(key)
       if (!cur) byCell.set(key, { id, page: r.page, col, top: r.y, bottom: r.y + r.height, xLeft: r.x, xRight: r.x + r.width })
@@ -444,6 +452,13 @@ export function binContentToBlocks(
   // overlap in x — a region never claims ink in another column.
   const candidate = (rg: Region, col: PdfCol, xLeft: number, xRight: number): boolean =>
     (rg.col === col || rg.col === 'full' || col === 'full') && xRight > rg.xLeft && xLeft < rg.xRight
+  // Nesting depth of a block id (`a/b/c#hash` → 2 slashes → depth 2). When two
+  // regions tie on span+bottom (a run-in `\paragraph` heading shares its prose line
+  // with the child paragraph → identical rects), the DEEPER block wins: a descendant's
+  // ink is more specific than its ancestor's, so the prose goes to the paragraph, not
+  // the run-in heading that would otherwise starve it. Tie on depth → id (deterministic).
+  const depth = (id: string): number => (id.split('#', 1)[0].match(/\//g)?.length ?? 0)
+  const deeper = (a: Region, b: Region): boolean => (depth(a.id) !== depth(b.id) ? depth(a.id) > depth(b.id) : a.id < b.id)
   // Every rendered unit on a page in sweep order (baseline / graphic-top), so the
   // contiguity frontier grows as ink is added. Header/footer-margin rows dropped.
   const unitsForPage = (page: number): { key: number; xLeft: number; yTop: number; xRight: number; yBottom: number }[] => {
@@ -487,7 +502,7 @@ export function binContentToBlocks(
         // Same tightest pick as ownerOf: smallest span, tie → lower bottom, then id.
         if (!tightest || spanOf(rg) < spanOf(tightest) ||
             (spanOf(rg) === spanOf(tightest) && (rg.bottom < tightest.bottom ||
-              (rg.bottom === tightest.bottom && rg.id < tightest.id)))) tightest = rg
+              (rg.bottom === tightest.bottom && deeper(rg, tightest))))) tightest = rg
       }
       if (ids.size < 2 || !tightest) continue
       const key = unitKey(page, u.key, u.xLeft)
@@ -565,7 +580,7 @@ export function binContentToBlocks(
           // bottom (equal span + equal bottom ⟹ equal top), then id (deterministic).
           if (!inside || span(rg) < span(inside) ||
               (span(rg) === span(inside) && (rg.bottom < inside.bottom ||
-                (rg.bottom === inside.bottom && rg.id < inside.id)))) inside = rg
+                (rg.bottom === inside.bottom && deeper(rg, inside))))) inside = rg
         }
         if (inside) return inside
         // No region contains the unit (a wrapped line synctex dropped): the nearest
@@ -602,27 +617,34 @@ export function binContentToBlocks(
   // each page → all kept. This dissolves the float-only cleanRects + floatRenderPage.
   const { won, boxAcc: provisional } = assign(regionsByPage)
 
-  // Per-page rendered content edges (first-line top / last-line bottom of each page,
-  // from the in-band rows) — the reference for "this cell sits at a page edge". The
-  // global content band and the post-filter contentTopByPage can't give it.
-  const pageTop = new Map<number, number>()
-  const pageBottom = new Map<number, number>()
-  for (const [page, rows] of rowsByPage) for (const r of rows) {
-    if (!inBand(r.baseline, r.baseline)) continue
-    const t = pageTop.get(page); if (t === undefined || r.yTop < t) pageTop.set(page, r.yTop)
-    const b = pageBottom.get(page); if (b === undefined || r.yBottom > b) pageBottom.set(page, r.yBottom)
+  // Per-(page, COLUMN) rendered content edges — the reference for "this cell sits at a
+  // COLUMN edge". Column-aware, not page-global: a left column can end above the right
+  // one, and on a multi-block page a mid-page cell must not look like it reaches the
+  // column bottom. Keyed `page|col` from the in-band rows tagged by their column.
+  const colTop = new Map<string, number>()
+  const colBottom = new Map<string, number>()
+  for (const [page, rows] of rowsByPage) {
+    const layout = columnsByPage.get(page)
+    for (const r of rows) {
+      if (!inBand(r.baseline, r.baseline)) continue
+      const k = `${page}|${colOf(layout, { yTop: r.yTop, yBottom: r.yBottom, xLeft: r.xLeft, xRight: r.xRight })}`
+      const t = colTop.get(k); if (t === undefined || r.yTop < t) colTop.set(k, r.yTop)
+      const b = colBottom.get(k); if (b === undefined || r.yBottom > b) colBottom.set(k, r.yBottom)
+    }
   }
-  // A small cell is a genuine CROSS-PAGE CONTINUATION (not a galley) when it forms an
-  // edge-to-edge pair with a sibling cell of the same block/column on the ADJACENT
-  // page — the upper cell reaches its page's content bottom and the lower cell starts
-  // at the next page's content top — and it won ≥ a line of real ink. Positions come
-  // from the assigned (rendered-row) box, not the coarse synctex region. A galley sits
-  // mid-page and/or wins ~0, so it fails this and is still dropped.
+  // A small cell is a genuine CONTINUATION (not a galley) when it forms an edge-to-edge
+  // pair with the sibling cell IMMEDIATELY BEFORE/AFTER it in reading order — the upper
+  // cell reaches its column bottom and the lower cell starts at its column top — and it
+  // won ≥ a line of real ink. Two-column reading order changes column at every break:
+  // left→right within a page, and last-col→first-col across a page break. (A same-column
+  // test missed both, dropping every paragraph tail that wrapped to the next column.)
+  // Positions come from the assigned (rendered-row) box, not the coarse synctex region;
+  // a galley sits mid-column and/or wins ~0, so it still fails and is dropped.
   const accOf = (rg: Region): Acc | undefined => provisional.get(rg.id)?.get(`${rg.page}|${rg.col}`)
-  const atTop = (rg: Region): boolean => { const a = accOf(rg), t = pageTop.get(rg.page); return !!a && t !== undefined && a.y <= t + BAND_EPS }
-  const atBottom = (rg: Region): boolean => { const a = accOf(rg), b = pageBottom.get(rg.page); return !!a && b !== undefined && a.bottom >= b - BAND_EPS }
+  const atTop = (rg: Region): boolean => { const a = accOf(rg), t = colTop.get(`${rg.page}|${rg.col}`); return !!a && t !== undefined && a.y <= t + BAND_EPS }
+  const atBottom = (rg: Region): boolean => { const a = accOf(rg), b = colBottom.get(`${rg.page}|${rg.col}`); return !!a && b !== undefined && a.bottom >= b - BAND_EPS }
   const sameCol = (a: Region, b: Region): boolean => a.col === b.col || a.col === 'full' || b.col === 'full'
-  // A continuation tail sits ALONE at the page edge; a float's source-galley overlaps
+  // A continuation tail sits ALONE at the column edge; a float's source-galley overlaps
   // the sibling block it landed on (it won that block's rows). So a cell whose region
   // overlaps ANOTHER block's region (same page/col) is a galley, not a continuation.
   const overlapsOther = (r: Region): boolean => {
@@ -632,12 +654,19 @@ export function binContentToBlocks(
     }
     return false
   }
+  // s immediately precedes r in reading order: left→right within a page, or
+  // last-column→first-column across a page break (r↔l in two-column; full↔full single).
+  const precedes = (s: Region, r: Region): boolean => {
+    if (s.page === r.page) return s.col === 'l' && r.col === 'r'
+    if (s.page !== r.page - 1) return false
+    return (s.col === 'r' || s.col === 'full') && (r.col === 'l' || r.col === 'full')
+  }
   const isContinuation = (r: Region, rgs: Region[]): boolean => {
     if ((won.get(r) ?? 0) < MIN_CONTINUATION_INK || overlapsOther(r)) return false
     for (const s of rgs) {
-      if (s === r || !sameCol(s, r)) continue
-      if (s.page === r.page - 1 && atBottom(s) && atTop(r)) return true // r continues from s (above)
-      if (s.page === r.page + 1 && atTop(s) && atBottom(r)) return true // r flows down into s (below)
+      if (s === r) continue
+      if (precedes(s, r) && atBottom(s) && atTop(r)) return true // r continues from s (before)
+      if (precedes(r, s) && atTop(s) && atBottom(r)) return true // r flows on into s (after)
     }
     return false
   }

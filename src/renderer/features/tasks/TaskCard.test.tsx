@@ -33,7 +33,7 @@ const proposal: ReviewProposal = {
   files: ['main.tex'],
   outsideSpan: [],
   diff: '',
-  blocks: []
+  blocks: [] // required since per-block changes landed; TaskCard summarizes it
 }
 
 const handlers = () => ({

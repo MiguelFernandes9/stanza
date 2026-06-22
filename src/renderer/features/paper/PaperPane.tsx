@@ -73,6 +73,10 @@ interface Props {
   onTogglePersistent: (taskId: number) => void
   onSubmitThreadTurn: (taskId: number, text: string) => void
   onDeleteThread: (taskId: number) => void
+  /** Snapshot the task's first block from the rendered canvas → attach the PNG. */
+  onAttachImage: (taskId: number, image: string) => void
+  /** Snapshot couldn't be captured (block off-screen / canvas error) — surface it. */
+  onSnapshotError?: () => void
   onView: (view: PaneView) => void
 }
 
@@ -122,6 +126,46 @@ export function PaperPane(props: Props): JSX.Element {
   const byId = new Map(pageBlocks.map((b) => [b.id, b]))
   const blocksOf = (blockIds: string[]): PageBlock[] =>
     blockIds.map((id) => byId.get(id)).filter((b): b is PageBlock => b != null)
+
+  // F2: crop the task's first block out of its rendered page canvas → PNG data
+  // URL. Block rects are PDF pt; the overlay scales them by zoom, and the canvas
+  // backing store is `k`× the CSS size (DPR, capped at 2) — so backing px =
+  // pt·zoom·k. Returns null when it can't capture: geometry not ready, or the
+  // page isn't currently rasterized (scrolled off-screen → PdfPageStack evicts
+  // the canvas). captureBlock turns a null/throw into user feedback (BUG review C1/C2).
+  const cropBlockImage = (taskId: number): string | null => {
+    const task = state.tasks.find((t) => t.id === taskId)
+    const rect = task?.blockIds[0] ? blockRects.get(task.blockIds[0])?.[0] : undefined
+    if (!rect) return null
+    const canvas = scrollRef.current?.querySelector<HTMLCanvasElement>(`[data-page="${rect.page}"] canvas`)
+    const cssW = canvas ? parseFloat(canvas.style.width) || canvas.clientWidth : 0
+    if (!canvas || !cssW) return null
+    const k = canvas.width / cssW
+    const pad = 6
+    const sx = Math.max(0, (rect.x * zoom - pad) * k)
+    const sy = Math.max(0, (rect.y * zoom - pad) * k)
+    const sw = Math.min(canvas.width - sx, (rect.width * zoom + pad * 2) * k)
+    const sh = Math.min(canvas.height - sy, (rect.height * zoom + pad * 2) * k)
+    if (sw <= 0 || sh <= 0) return null
+    const crop = document.createElement('canvas')
+    crop.width = Math.round(sw)
+    crop.height = Math.round(sh)
+    const ctx = crop.getContext('2d')
+    if (!ctx) return null
+    ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, crop.width, crop.height)
+    return crop.toDataURL('image/png')
+  }
+
+  const captureBlock = (taskId: number): void => {
+    let image: string | null = null
+    try {
+      image = cropBlockImage(taskId)
+    } catch {
+      image = null // toDataURL/drawImage can throw (e.g. OOM on a huge crop) — treat as a failed capture
+    }
+    if (image) props.onAttachImage(taskId, image)
+    else props.onSnapshotError?.()
+  }
 
   const marks: Record<string, BlockMark> = {}
   for (const t of state.tasks)
@@ -209,7 +253,10 @@ export function PaperPane(props: Props): JSX.Element {
       // first (M2-6, BUG-30); a region's box runs to the next region's top, so a
       // dropped last line is included and a figure covers its image + caption.
       const rectsById = new Map(perBlock.map(({ b, rects }) => [b.id, rects]))
-      const bin = binContentToBlocks(rectsById, rowsByPage, graphicsByPage)
+      // `*` floats (table*/figure*) are full-width — one 'full' box, never split into
+      // per-cell l/r boxes by their narrow constituent synctex rects.
+      const fullWidthIds = new Set(pageBlocks.filter((b) => b.envName?.endsWith('*')).map((b) => b.id))
+      const bin = binContentToBlocks(rectsById, rowsByPage, graphicsByPage, undefined, fullWidthIds)
       // Galley collision: a unit inside ≥2 blocks' regions (a list's \begin maps onto
       // a figure's caption) can't be attributed by tightest-span geometry. Resolve
       // each authoritatively via the synctex BACKWARD map — the rendered point → its
@@ -245,7 +292,7 @@ export function PaperPane(props: Props): JSX.Element {
           })
         )
         if (!alive) return
-        if (forced.size) result = binContentToBlocks(rectsById, rowsByPage, graphicsByPage, forced)
+        if (forced.size) result = binContentToBlocks(rectsById, rowsByPage, graphicsByPage, forced, fullWidthIds)
       }
       // One box per block from its rendered ink; a section's box is its heading
       // line, selection expands to its members via expandIds (selection layer).
@@ -331,6 +378,27 @@ export function PaperPane(props: Props): JSX.Element {
     )
     setTops((prev) => (JSON.stringify(prev) === JSON.stringify(stacked) ? prev : stacked))
   })
+
+  // F5: when a bubble opens, scroll it fully into horizontal view. The rail hangs
+  // off the page's right edge and is otherwise reachable only by manual scroll
+  // (BUG-46). Horizontal ONLY — the flash/outline effects own scrollTop; nudging
+  // it here reintroduced the slide jitter (M3-2). Each id is revealed once per
+  // open session (pruned on close, so reopening re-reveals); wait for tops[id] so
+  // the bubble is positioned before we measure it.
+  const revealedRef = useRef<Set<number>>(new Set())
+  useEffect(() => {
+    for (const id of [...revealedRef.current]) if (!openIds.includes(id)) revealedRef.current.delete(id)
+    const el = scrollRef.current
+    if (!el) return
+    for (const id of openIds) {
+      if (revealedRef.current.has(id) || tops[id] == null) continue
+      const bubble = cardEls.current[id]?.closest('[data-testid="rail-bubble"]') as HTMLElement | null
+      if (!bubble) continue
+      revealedRef.current.add(id)
+      const overflow = bubble.getBoundingClientRect().right - el.getBoundingClientRect().right
+      if (overflow > 0) el.scrollBy({ left: overflow + RAIL_GUTTER, behavior: 'smooth' })
+    }
+  }, [openIds, tops])
 
   const pageWidth = geo?.width ?? FALLBACK_PAGE_WIDTH
   const { pageRightX, railLeft, cW } = paneLayout(pageWidth)
@@ -662,6 +730,7 @@ export function PaperPane(props: Props): JSX.Element {
                             setOpenIds((s) => s.filter((x) => x !== t.id))
                           }}
                           onOpenReview={() => setReviewId(t.id)}
+                          onSnapshot={() => captureBlock(t.id)}
                         />
                       ) : (
                         <TaskCard
@@ -686,6 +755,7 @@ export function PaperPane(props: Props): JSX.Element {
                           onTogglePersistent={() => props.onTogglePersistent(t.id)}
                           onResolve={(accept) => props.onResolveTask(t.id, accept)}
                           onOpenReview={() => setReviewId(t.id)}
+                          onSnapshot={() => captureBlock(t.id)}
                         />
                       )}
                     </div>

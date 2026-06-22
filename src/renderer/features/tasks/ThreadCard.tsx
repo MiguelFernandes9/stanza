@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import type { JSX } from 'react'
-import { ArrowUp, MessagesSquare, Trash2, X } from 'lucide-react'
+import { ArrowUp, Camera, Check, MessagesSquare, Trash2, X } from 'lucide-react'
 import { BlockTag, Button, IconButton } from '@renderer/components'
 import { combinedSpanLabel, spanLabel } from '../paper/paperModel'
 import type { PageBlock } from '../paper/paperModel'
 import type { EditTask } from './taskStore'
-import { blockLabel, tagKind } from './TaskCard'
+import { blockLabel, pillStyle, tagKind } from './TaskCard'
 import { ThreadTranscript } from './ThreadTranscript'
 
 const VIOLET = '#6d5bd0'
@@ -17,6 +17,8 @@ interface Props {
   side?: 'left' | 'right'
   onSubmitTurn: (text: string) => void
   onResolve: (accept: boolean) => void
+  /** Stage a PNG snapshot of the anchor block to send with the next turn. */
+  onSnapshot?: () => void
   /** Fold the bubble back to its badge (the thread stays alive + persisted). */
   onCollapse: () => void
   /** Remove the thread entirely (deletes the persisted record). */
@@ -36,6 +38,7 @@ export function ThreadCard({
   side,
   onSubmitTurn,
   onResolve,
+  onSnapshot,
   onCollapse,
   onDelete,
   onOpenReview,
@@ -150,6 +153,22 @@ export function ThreadCard({
               padding: '3px 0'
             }}
           />
+          {onSnapshot && (
+            <button
+              type="button"
+              onClick={onSnapshot}
+              disabled={locked}
+              title={
+                task.image
+                  ? 'Snapshot attached — sent with your next message'
+                  : 'Attach a snapshot of this block to send to Claude'
+              }
+              aria-label={task.image ? 'Snapshot attached' : 'Attach block snapshot'}
+              style={{ ...pillStyle(!!task.image), height: 30, cursor: locked ? 'default' : 'pointer' }}
+            >
+              {task.image ? <Check size={12} /> : <Camera size={12} />}
+            </button>
+          )}
           <Button size="sm" variant="primary" disabled={locked || !draft.trim()} onClick={send} iconLeft={<ArrowUp size={13} />}>
             Send
           </Button>
