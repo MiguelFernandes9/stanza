@@ -574,9 +574,15 @@ export function binContentToBlocks(
         boxAcc.get(rg.id)?.get(`${page}|${rg.col}`)?.bottom ?? -Infinity
       const span = (rg: Region): number => rg.bottom - rg.top
       const ownerOf = (key: number, col: PdfCol, xLeft: number, xRight: number): Region | null => {
-        // A backward-mapped (authoritative) owner overrides geometry at a galley
-        // collision: route the unit to that block's region here — one that contains
-        // it, else the nearest — since the synctex edit map says this block drew it.
+        // A backward-mapped owner overrides geometry at a galley collision: route the
+        // unit to that block's region when one CONTAINS it. synctex's backward map is
+        // only coarse, though — it sometimes maps a paragraph's lower lines onto a
+        // NEIGHBOUR paragraph's source line — so the override is honoured only when the
+        // forced owner actually renders AT the unit: a containing region, or a nearest
+        // region within MAX_LINE_GAP (a wrapped tail just below it). A forced owner
+        // whose only region is FAR from the unit is a wrong map; distrust it and fall
+        // through to geometry, else that block's box stretches across the page to
+        // swallow the unit (a first paragraph swallowing the model section below it).
         const forcedId = forcedOwners?.get(unitKey(page, key, xLeft))
         if (forcedId) {
           let pick: Region | null = null
@@ -585,8 +591,11 @@ export function binContentToBlocks(
             if (key >= rg.top - BAND_EPS && key <= rg.bottom + BAND_EPS) return rg
             if (!pick || Math.abs(rg.top - key) < Math.abs(pick.top - key)) pick = rg
           }
-          if (pick) return pick
-          // forced block has no region on this page/col (forward missed) → geometry.
+          if (pick) {
+            const gap = key < pick.top ? pick.top - key : key > pick.bottom ? key - pick.bottom : 0
+            if (gap <= MAX_LINE_GAP) return pick
+          }
+          // forced owner has no region here, or only a FAR one (coarse map) → geometry.
         }
         let inside: Region | null = null
         for (const rg of regions) {

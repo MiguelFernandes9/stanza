@@ -743,6 +743,36 @@ describe('binContentToBlocks — galley collision resolved by forced owners (bac
     expect(it.length).toBeGreaterThanOrEqual(1)
     expect(it.every((b) => b.page === 2)).toBe(true)
   })
+
+  it('a forced owner whose only region is FAR from the unit is distrusted (coarse backward map)', () => {
+    // synctex's backward map can be coarse: it sometimes maps a paragraph's lower
+    // lines onto a DIFFERENT (earlier) paragraph's source line. Blindly honouring that
+    // routed the far rows onto the first paragraph, whose region is far above — its box
+    // then stretched down across the page, swallowing the section below it (the real
+    // IEEEtran "first Methodology paragraph covers the model section" bug). The forced
+    // override is honoured only when the owner renders AT the unit (contains it, or a
+    // nearest region within MAX_LINE_GAP); a far forced owner falls through to geometry.
+    const rectsById = new Map<string, PdfRect[]>([
+      ['par#1', [prect(1, 72, 100, 200, 14), prect(1, 72, 116, 200, 14), prect(1, 72, 132, 200, 14)]], // region 100–146
+      ['real#1', [prect(1, 72, 200, 200, 14), prect(1, 72, 240, 200, 14), prect(1, 72, 264, 200, 14)]] // region 200–278
+    ])
+    const rowsByPage = new Map<number, TextRow[]>([
+      [
+        1,
+        [
+          trow(100, 112, 72, 272), trow(116, 128, 72, 272), trow(132, 144, 72, 272),
+          trow(200, 212, 72, 272), trow(240, 252, 72, 272), trow(252, 264, 72, 272)
+        ]
+      ]
+    ])
+    // The wrong backward map: the far unit (baseline 264, deep in real#1) is forced onto par#1.
+    const forced = new Map([['1|264|72', 'par#1']])
+    const { boxesById } = binContentToBlocks(rectsById, rowsByPage, new Map<number, GraphicBox[]>(), forced)
+    // par#1 keeps its own short box — it does NOT stretch down to the far forced unit.
+    expect(boxBottom(boxesById.get('par#1')![0]!)).toBeLessThan(160)
+    // the far unit fell through to geometry → the block that truly contains it.
+    expect(boxBottom(boxesById.get('real#1')![0]!)).toBeGreaterThanOrEqual(264)
+  })
 })
 
 describe('binContentToBlocks — single-region owner is NOT overridden (Bug A guard)', () => {
