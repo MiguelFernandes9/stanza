@@ -10,12 +10,14 @@ import type { GraphicBox } from '../src/renderer/features/paper/pdfGraphics'
  *  rendered signal + synctex rects captured from a real conference paper by
  *  geometry-realdoc.capture.test.ts (GEOM_CAPTURE=1 GEOM_DOC=… GEOM_OUT=geometry-ieeetran.json).
  *  Runs the pure binner against true positions — no pdf.js/synctex in CI — and
- *  asserts the three real-doc bugs found while dogfooding:
+ *  asserts the real-doc bugs found while dogfooding:
  *    B1 a paragraph spanning a column/page break keeps BOTH fragments (the tail
  *       that wraps to the next column was dropped — reading-order continuation).
- *    B2 a run-in \paragraph's prose child is not starved by its heading (they
- *       share the line; the deeper block wins the shared ink).
- *    B3 a full-width table* is ONE box, not split per cell into l/r/full. */
+ *    B2 every real-ink prose paragraph gets a box — none starved. (A run-in
+ *       \paragraph is now a plain paragraph block — its title folds into its prose,
+ *       not a separate heading — so this invariant holds for the binner regardless.)
+ *    B3 a full-width table* is ONE box, not split per cell into l/r/full.
+ *    B4 a whole-column galley synctex rect does not make a giant misplaced box. */
 
 interface FxBlock { id: string; envName: string | null; parentId: string | null; isFloat: boolean; isSection: boolean; kind: string; file: string; startLine: number; endLine: number; rects: PdfRect[] }
 interface Fx { blocks: FxBlock[]; rowsByPage: Record<string, TextRow[]>; graphicsByPage: Record<string, GraphicBox[]> }
@@ -39,10 +41,10 @@ describe('real-doc IEEEtran two-column geometry', () => {
     expect(new Set(boxes.map((b) => b.page)).size).toBe(2) // one fragment per page
   })
 
-  it('B2: no prose paragraph is starved (run-in \\paragraph headings share the line)', () => {
-    // \paragraph{Overview.} etc.: the run-in heading and its prose forward-map to the
-    // SAME rects; the deeper block (the paragraph) must win the shared line so the
-    // prose gets a box. Before, the shallower heading id won and the prose had none.
+  it('B2: every real-ink prose paragraph gets a box — none starved', () => {
+    // A run-in \paragraph (\paragraph{Overview.} etc.) is a plain paragraph block now
+    // (its title folds into its prose, not a separate section heading), so it carries
+    // a box like any other paragraph. Guards that no real-ink prose block is boxless.
     const starved = fx.blocks.filter((b) => b.kind === 'paragraph' && hasRealInk(b) && (boxesById.get(b.id) ?? []).length === 0)
     expect(starved.map((b) => `${b.file.split('/').pop()}:${b.startLine}`)).toEqual([])
   })
