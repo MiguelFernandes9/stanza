@@ -58,6 +58,33 @@ describe('parseBlocks', () => {
     })
   })
 
+  test('run-in \\paragraph is a plain block, not a section — a following float is a SIBLING', () => {
+    // \paragraph/\subparagraph are run-in headings, NOT structural divisions. As
+    // sections they parented the following content, so a figure after \paragraph{X.}
+    // nested as its child and selecting the heading pulled in the diagram. Demoted,
+    // the run-in title + its prose fold into ONE paragraph block and the float is a
+    // SIBLING under the real enclosing section (not a child of the paragraph).
+    const src = [
+      '\\subsection{Model}', //                1
+      '\\paragraph{Overview.} The model has', // 2
+      'two parts.', //                         3
+      '', //                                   4
+      '\\begin{figure}', //                    5
+      '  \\includegraphics{x}', //             6
+      '  \\caption{A diagram.}', //            7
+      '\\end{figure}', //                      8
+      '', //                                   9
+      '\\paragraph{Backbone.} A stack of blocks.' // 10
+    ].join('\n')
+    const model = parseBlocks(FILE, src)[0]!
+    expect(model.kind).toBe('section')
+    // Overview(title+prose) | figure | Backbone — three SIBLINGS, no section from \paragraph.
+    expect(model.children.map((b) => b.kind)).toEqual(['paragraph', 'environment', 'paragraph'])
+    expect(model.children[0]!.span).toMatchObject({ startLine: 2, endLine: 3 })
+    expect(model.children[1]!).toMatchObject({ name: 'figure' })
+    expect(model.children[0]!.children).toHaveLength(0) // the figure did NOT nest under Overview
+  })
+
   test('a chapter file without preamble parses to body blocks only', () => {
     const roots = parseBlocks('chapters/ch1.tex', 'Opening text.\n\n\\section{One}\nBody.')
     expect(roots.map((b) => b.kind)).toEqual(['paragraph', 'section'])
@@ -221,15 +248,16 @@ describe('comment lines as soft paragraph delimiters (M2-3)', () => {
     expect(roots[0]!.span).toMatchObject({ startLine: 1, endLine: 2 })
   })
 
-  test('\\paragraph and \\subparagraph become section blocks, not prose', () => {
-    // Secondary M2-3: without these in SECTION_LEVELS a \paragraph subheading
-    // fuses into the body and inherits the enclosing chapter's title.
+  test('\\paragraph and \\subparagraph are run-in PROSE blocks, not sections', () => {
+    // Demoted from SECTION_LEVELS: a run-in \paragraph/\subparagraph is a heading that
+    // renders INLINE with its following prose, not a structural division. Its title
+    // folds into ONE paragraph block with that prose, so a later float becomes a
+    // sibling under the real enclosing section instead of nesting under the heading.
     const para = parseBlocks('x.tex', '\\paragraph{Note}\nBody.')
-    expect(para.map((b) => b.kind)).toEqual(['section'])
-    expect(para[0]!.name).toBe('Note')
+    expect(para.map((b) => b.kind)).toEqual(['paragraph'])
+    expect(para[0]!.span).toMatchObject({ startLine: 1, endLine: 2 })
     const sub = parseBlocks('x.tex', '\\subparagraph{Sub}\nBody.')
-    expect(sub.map((b) => b.kind)).toEqual(['section'])
-    expect(sub[0]!.name).toBe('Sub')
+    expect(sub.map((b) => b.kind)).toEqual(['paragraph'])
   })
 })
 

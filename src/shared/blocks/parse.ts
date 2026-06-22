@@ -2,13 +2,19 @@ import { parse } from '@unified-latex/unified-latex-util-parse'
 import type * as Ast from '@unified-latex/unified-latex-types'
 import type { BlockNode } from './types'
 
+// Display sectioning commands only. `\paragraph`/`\subparagraph` are deliberately
+// EXCLUDED: they are run-in headings (the title renders inline with the following
+// prose), not structural divisions. Treated as sections they parented the following
+// content — a `figure*` after `\paragraph{Overview.}` nested as its CHILD, so
+// selecting the heading (expandIds → whole subtree) pulled in the diagram. Left out
+// of this map, a `\paragraph` macro falls through to joinParagraph: its title + run-in
+// prose fold into ONE paragraph block, and a following float flushes that paragraph
+// and attaches to the real enclosing section as a SIBLING.
 const SECTION_LEVELS: Record<string, number> = {
   chapter: 1,
   section: 2,
   subsection: 3,
   subsubsection: 4,
-  paragraph: 5,
-  subparagraph: 6,
 }
 
 /** AST node types that form their own block: `\begin{...}` environments
