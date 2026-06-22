@@ -669,6 +669,19 @@ describe('blockForSourceLine — tightest block covering a source line (backward
     expect(blockForSourceLine(blocks, 'main.tex', 999)).toBeNull()
     expect(blockForSourceLine(blocks, 'other.tex', 216)).toBeNull()
   })
+  it('run-in \\paragraph: the prose child wins the shared line over its collapsed heading (BUG-5)', () => {
+    // A run-in \paragraph heading ("a) Overview.") and its prose share the source
+    // line. The heading's span is collapsed to its single start line (size 0), so
+    // smallest-span would hand it the prose's rendered rows — an oversized heading
+    // box, the prose split/starved. Depth picks the deeper prose child, matching the
+    // binner's own `deeper()` tie-break (the forced re-bin then agrees with it).
+    const runIn = [
+      { id: 's#1', span: { file: 'main.tex', startLine: 80, endLine: 200 } }, // section
+      { id: 's/h#1', span: { file: 'main.tex', startLine: 90, endLine: 90 } }, // run-in heading (collapsed)
+      { id: 's/h/p#1', span: { file: 'main.tex', startLine: 90, endLine: 120 } } // its prose child
+    ]
+    expect(blockForSourceLine(runIn, 'main.tex', 90)).toBe('s/h/p#1')
+  })
 })
 
 describe('binContentToBlocks — galley collision resolved by forced owners (backward map)', () => {

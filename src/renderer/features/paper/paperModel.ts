@@ -764,22 +764,32 @@ export async function blockGeometryRects(
   return forward(block.span)
 }
 
-/** The block whose source span TIGHTEST contains (file, line) — the authoritative
- *  owner of a rendered unit, from the synctex BACKWARD map (`synctex edit`). Used to
- *  resolve a galley collision: a contested unit (in ≥2 blocks' regions) backward-maps
- *  to one source line, and the smallest-span block covering it truly drew it. A
- *  section's span dwarfs the leaf inside it, so the leaf (figure, list, paragraph)
- *  wins naturally — no kind gate. Returns the block id, or null if none covers it. */
+/** The block that most specifically contains (file, line) — the authoritative owner
+ *  of a rendered unit, from the synctex BACKWARD map (`synctex edit`). Used to resolve
+ *  a galley collision: a contested unit (in ≥2 blocks' regions) backward-maps to one
+ *  source line, and the block that truly drew it is the DEEPEST one covering it.
+ *
+ *  Resolves by nesting depth, NOT span — mirroring the binner's coincident-rect
+ *  tie-break (`deeper()`). A run-in `\paragraph` heading's span is collapsed to its
+ *  single start line (size 0, BUG-5), so by span it out-ranks the deeper prose child
+ *  that shares that line, handing the heading its prose's rows (an oversized heading
+ *  box, the prose split/starved). Depth is the reliable specificity axis: a child's
+ *  span ⊆ its parent's, so depth and smallest-span agree EXCEPT for that collapse, so
+ *  the leaf (figure, list, paragraph) still wins naturally — no kind gate. Tie on
+ *  depth → smaller span, then id (deterministic). Null if none covers (file, line). */
 export function blockForSourceLine(
   blocks: { id: string; span: BlockSpan }[],
   file: string,
   line: number
 ): string | null {
-  let best: { id: string; size: number } | null = null
+  const depth = (id: string): number => (id.split('#', 1)[0].match(/\//g)?.length ?? 0)
+  let best: { id: string; depth: number; size: number } | null = null
   for (const b of blocks) {
     if (b.span.file !== file || line < b.span.startLine || line > b.span.endLine) continue
-    const size = b.span.endLine - b.span.startLine
-    if (!best || size < best.size) best = { id: b.id, size }
+    const cand = { id: b.id, depth: depth(b.id), size: b.span.endLine - b.span.startLine }
+    if (!best || cand.depth > best.depth ||
+        (cand.depth === best.depth && (cand.size < best.size ||
+          (cand.size === best.size && cand.id < best.id)))) best = cand
   }
   return best?.id ?? null
 }
