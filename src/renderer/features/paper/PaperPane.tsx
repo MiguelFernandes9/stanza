@@ -157,6 +157,12 @@ export function PaperPane(props: Props): JSX.Element {
   }
 
   const captureBlock = (taskId: number): void => {
+    // The snapshot button toggles: a second press on an attached shot removes it
+    // (empty string clears in the reducer) rather than re-capturing.
+    if (state.tasks.find((t) => t.id === taskId)?.image) {
+      props.onAttachImage(taskId, '')
+      return
+    }
     let image: string | null = null
     try {
       image = cropBlockImage(taskId)
