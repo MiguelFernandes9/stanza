@@ -1,5 +1,4 @@
 import type { TaskPhase } from '../tasks/taskStore'
-import type { CompileState } from '@renderer/components'
 
 /** v0.3 pane geometry (pure). CSS centres the PAGE in the scroll container; the
  *  right rail hangs off the page's right edge as an absolute overlay (every task
@@ -20,17 +19,6 @@ export const RAIL_GUTTER = 24
 export const CARD_GAP = 14
 /** Badge diameter; its left edge sits at pageRightX − BADGE/2. */
 export const BADGE = 28
-
-/** The page is "busy" — block overlays would be stale — when a compile is
- *  running OR its output is still rendering (`blocksRendering`: the freshly
- *  compiled PDF is loading or its block geometry is mid-recompute). One signal
- *  drives BOTH the dim scrim and the toolbar pill, so "compiling" spans the LaTeX
- *  compile and the block render as a single state (no green "Compiled" while the
- *  page is still dim). A failed compile keeps the last good page: not running and
- *  nothing re-rendered → not busy. */
-export function pageBusy(compileState: CompileState, blocksRendering: boolean): boolean {
-  return compileState === 'running' || blocksRendering
-}
 
 export interface PaneLayout {
   /** Page's right edge, measured from the page's own left (x = 0). The page is

@@ -86,8 +86,15 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
   const [compile, setCompile] = useState<CompileInfo>({ state: 'idle', errors: 0, warnings: 0 })
   // After LaTeX reports ok the pane still reloads the PDF and re-bins block
   // geometry; PaperPane reports that window so the pill stays "Compiling…" until
-  // the page un-dims (compile = LaTeX + block render, one status).
+  // the new page swaps in (compile = LaTeX + block render, one status).
   const [blocksRendering, setBlocksRendering] = useState(false)
+  // The block tree is being reparsed after a compile (loadBlocks in flight). The
+  // paper pane gates its geometry recompute on this so it never bins fresh spans
+  // against the previous PDF (or stale spans against the fresh PDF) — see loadBlocks.
+  const [blocksReloading, setBlocksReloading] = useState(false)
+  // In-flight loadBlocks count, so `blocksReloading` stays true until the LAST
+  // overlapping reload settles (not cleared by the first of two).
+  const blockLoads = useRef(0)
   const [toast, setToast] = useState<{ title: string; message: string; tone: 'danger' | 'success' } | null>(null)
   const [state, dispatch] = useReducer(taskReducer, initialTaskState)
   // Latest tree + tasks, read inside loadBlocks' async resolve without making
@@ -229,6 +236,14 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
   // instead of the pre-edit ones (BUG-15). Every compile trigger (⌘S, ⌘R,
   // accept) surfaces through onCompileStatus('ok').
   const loadBlocks = useCallback(() => {
+    // Mark the block tree as reloading until the fresh parse lands. The paper
+    // pane gates its geometry recompute on this (plus the PDF's own load): a
+    // recompile updates the PDF and the block tree through two independent async
+    // pipelines, and the on-disk synctex is always the latest — so computing
+    // geometry while EITHER input is stale maps mismatched spans/pages and yields
+    // wrong boxes. Holding both until fresh lets the pane swap atomically.
+    blockLoads.current += 1
+    setBlocksReloading(true)
     void client.documentProjectBlocks().then((fresh) => {
       // A reparse can renumber a pending block's positional id while its hash
       // holds; re-anchor busy/review tasks to the new ids before swapping the
@@ -250,7 +265,15 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
         dispatch({ type: 'dismiss', taskId })
       }
       setBlocks(fresh)
-    }, () => setBlocks([]))
+    }, () => {
+      setBlocks([])
+    }).finally(() => {
+      // Stay "reloading" until the LAST in-flight load settles, so overlapping
+      // reloads (rapid recompiles) don't clear it early and unblock geometry
+      // against a half-updated tree.
+      blockLoads.current -= 1
+      if (blockLoads.current === 0) setBlocksReloading(false)
+    })
   }, [])
 
   const loadFiles = useCallback(() => {
@@ -337,8 +360,9 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
         setCompile((c) => ({ ...c, state: s === 'running' ? 'running' : s === 'ok' ? 'ok' : 'failed' }))
         if (s === 'ok') {
           // The block render starts now (PDF reload + re-bin) — mark it busy up
-          // front so the pill never flips to green "Compiled" over the dim page
-          // for a frame before PaperPane reports back (it clears this on settle).
+          // front so the pill never flips to green "Compiled" before PaperPane
+          // reports back. The page still shows the PREVIOUS PDF until the new one
+          // and its boxes swap in together, so green would be a lie until then.
           setBlocksRendering(true)
           // Bump the cache-busting nonce on EVERY successful compile, not only
           // the runCompile promise path — a compile triggered elsewhere must
@@ -934,6 +958,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           blocks={blocks}
           state={state}
           compile={compile}
+          blocksReloading={blocksReloading}
           onRenderingChange={setBlocksRendering}
           pdfUrl={pdfUrl}
           onInverseSearch={inverseSearch}

@@ -27,7 +27,7 @@ import { pageTextRows } from './pdfTextRows'
 import type { TextRow } from './pdfTextRows'
 import { pageGraphics } from './pdfGraphics'
 import type { GraphicBox } from './pdfGraphics'
-import { BADGE, PAD, RAIL, RAIL_GUTTER, connectorPath, pageBusy, paneLayout, pdfScrollTop, phaseTone, railBubbleTop, stackTops } from './paperPaneLayout'
+import { BADGE, PAD, RAIL, RAIL_GUTTER, connectorPath, paneLayout, pdfScrollTop, phaseTone, railBubbleTop, stackTops } from './paperPaneLayout'
 
 const FALLBACK_PAGE_WIDTH = 564
 
@@ -79,9 +79,15 @@ interface Props {
   /** Snapshot couldn't be captured (block off-screen / canvas error) — surface it. */
   onSnapshotError?: () => void
   onView: (view: PaneView) => void
+  /** The block tree is being reparsed after a compile (Workspace.loadBlocks in
+   *  flight). Gates the geometry recompute: with the PDF and the block tree
+   *  arriving on separate async pipelines, binning fresh spans against the old
+   *  PDF (or stale spans against the fresh PDF) produces wrong boxes — so hold
+   *  until both are fresh, then recompute + swap once. */
+  blocksReloading?: boolean
   /** Block overlays are (re)rendering for a freshly compiled PDF — lets the
-   *  toolbar pill stay "Compiling…" until the page un-dims (compile = LaTeX +
-   *  block render as one state). */
+   *  toolbar pill stay "Compiling…" until the new page swaps in (compile =
+   *  LaTeX + block render as one state). */
   onRenderingChange?: (rendering: boolean) => void
 }
 
@@ -127,15 +133,17 @@ export function PaperPane(props: Props): JSX.Element {
   const autoOpened = useRef<Set<number>>(new Set())
   // Identity of the (pdf, blocksSig) that `blockRects` was last computed for, so a
   // render can tell — synchronously, no extra state — whether the geometry on
-  // screen is fresh for the current PDF or mid-recompute (drives the dim scrim).
+  // screen is fresh for the current PDF or still mid-recompute (gates the swap).
   const geomForPdf = useRef<unknown>(null)
   const geomForSig = useRef<string>('')
 
   const { pdf, loading } = usePdfDocument(pdfUrl)
-  // The PDF actually shown. It lags `pdf` (the freshly loaded doc): we keep
-  // displaying the previous page until the new doc's block geometry is computed,
-  // then swap the page AND its overlays in together — so a recompile never flashes
-  // the new PDF before its boxes. The dim's fade-out masks the new doc's raster.
+  // The PDF actually shown. It lags `pdf` (the freshly loaded doc): we keep the
+  // previous page AND its block overlays on screen, unchanged, through the whole
+  // recompile, then swap the new page and its boxes in together in a single render
+  // (committed with `blockRects` below). So a recompile shows the previous version
+  // intact until everything is ready — never the new PDF before its boxes, never
+  // stale boxes over the new PDF.
   const [displayPdf, setDisplayPdf] = useState<PDFDocumentProxy | null>(null)
 
   const byId = new Map(pageBlocks.map((b) => [b.id, b]))
@@ -237,15 +245,16 @@ export function PaperPane(props: Props): JSX.Element {
 
   // Geometry is fresh only when the last commit was for THIS pdf + these spans.
   const geometryFresh = pdf != null && geomForPdf.current === pdf && geomForSig.current === blocksSig
-  // Rendering = a freshly compiled PDF is still loading, or its block geometry is
-  // mid-recompute. The page is "busy" while compiling OR rendering: dim it and
-  // skip the (mispositioned) overlays. Reported up so the toolbar pill treats the
-  // block render as part of "compiling" (no green "Compiled" over a dim page).
-  const blocksRendering = pdfUrl != null && (loading || (pdf != null && !geometryFresh))
-  const blocksBusy = pageBusy(props.compile.state, blocksRendering)
+  // Rendering = a freshly compiled PDF is still loading, the block tree is still
+  // reparsing, or the geometry is mid-recompute — so the held `displayPdf` + its
+  // overlays are still the previous version. Reported up so the toolbar pill stays
+  // "Compiling…" until the swap — the on-screen page is the OLD one until then, so
+  // green "Compiled" would lie.
+  const blocksRendering =
+    pdfUrl != null && (loading || props.blocksReloading === true || (pdf != null && !geometryFresh))
 
   // Surface the block-render state to the workspace so the compile pill stays
-  // "Compiling…" until the page un-dims, not just until LaTeX finishes.
+  // "Compiling…" until the new page swaps in, not just until LaTeX finishes.
   const onRenderingChange = props.onRenderingChange
   useEffect(() => {
     onRenderingChange?.(blocksRendering)
@@ -254,7 +263,17 @@ export function PaperPane(props: Props): JSX.Element {
   // Block geometry: one synctex:forward per block, per-page boxes of its rects.
   // Assumes top-left-origin y from the backend — verify against the fixture.
   useEffect(() => {
-    if (!pdf) return
+    // Recompute only when the PDF, the on-disk synctex, and the spans are all from
+    // the SAME compile. `synctexForward` reads the on-disk synctex (always the
+    // LATEST compile); the text/graphics layers come from the React `pdf`; the
+    // spans come from `pageBlocks`. The PDF and the block tree arrive on separate
+    // async pipelines after a compile, so either can lag — binning fresh spans
+    // against the old PDF, or stale spans against the fresh PDF, both map mismatched
+    // regions onto the wrong page → garbage boxes (visible after an accept). Hold
+    // the OLD blockRects + displayPdf until BOTH are fresh (`!loading` =
+    // latest-compile PDF loaded; `!blocksReloading` = latest-compile spans parsed),
+    // then recompute once and swap atomically.
+    if (!pdf || loading || props.blocksReloading) return
     let alive = true
     const forward = (span: BlockSpan) => client.synctexForward(span).catch((): PdfRect[] => [])
     void Promise.all(
@@ -343,12 +362,24 @@ export function PaperPane(props: Props): JSX.Element {
       // Reveal the new PDF now that its boxes are ready — page + overlays swap in
       // together, never the page first.
       setDisplayPdf(pdf)
+    }).catch(() => {
+      // Every async step above is individually catch-guarded, so this only fires
+      // on an unexpected throw. Still complete the swap rather than freeze on the
+      // previous page forever (a stuck "Compiling…" pill): reveal the new PDF with
+      // no overlays (drop the now-mismatched boxes) and mark geometry fresh so the
+      // pill releases. The next compile recomputes the boxes.
+      if (!alive) return
+      setBlockRects(new Map())
+      setContentTops(new Map())
+      geomForPdf.current = pdf
+      geomForSig.current = blocksSig
+      setDisplayPdf(pdf)
     })
     return () => {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pdf, blocksSig])
+  }, [pdf, blocksSig, loading, props.blocksReloading])
 
   // A fresh compose task opens its bubble once (so it's editable); afterwards
   // the user may collapse it freely and it won't re-open.
@@ -461,10 +492,10 @@ export function PaperPane(props: Props): JSX.Element {
   }
 
   const overlaysFor = (pageNo: number): JSX.Element[] => {
-    // Compiling / recomputing → block boxes are stale. Drop every overlay (hit-
-    // areas, hover preview, washes, flash); the dim scrim covers the page and the
-    // active-task badges/bubbles (rail overlay) stay visible above it.
-    if (blocksBusy) return []
+    // Overlays always render: `blockRects` holds the geometry of the currently
+    // shown `displayPdf` and both swap together (the geometry effect's commit), so
+    // the boxes are never stale for the page beneath them — through a recompile the
+    // previous page keeps its previous boxes until the atomic swap.
     const out: JSX.Element[] = []
     for (const b of pageBlocks) {
       const boxes = blockRects.get(b.id)
@@ -628,24 +659,6 @@ export function PaperPane(props: Props): JSX.Element {
                 />
               </div>
             </div>
-
-            {/* Dim over the page while it compiles / recomputes block geometry.
-                Sits above the page (a sibling after it) but before the rail
-                overlay in DOM order, so badges/bubbles/connectors stay readable
-                above the dim. pointer-events block selecting stale boxes. The
-                spinner/wheel stays reserved for the Claude-is-thinking state. */}
-            <div
-              data-testid="recompute-dim"
-              aria-hidden
-              style={{
-                position: 'absolute',
-                inset: 0,
-                background: 'var(--scrim)',
-                opacity: blocksBusy ? 1 : 0,
-                pointerEvents: blocksBusy ? 'auto' : 'none',
-                transition: 'opacity var(--dur-base) var(--ease-out)'
-              }}
-            />
 
             {/* Rail + connector OVERLAY — absolute and clipped to the PANE (not
                 the page). The badges/bubbles/svg hang off the page's right edge
