@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { CSSProperties, JSX } from 'react'
 import { ArrowUp, Camera, Check, CircleSlash, FileText, Maximize2, Pin, Plus, Sparkles, X } from 'lucide-react'
-import { BlockTag, Button, DiffHunk, IconButton, Kbd } from '@renderer/components'
+import { BlockTag, Button, DiffHunk, IconButton, Kbd, Tooltip } from '@renderer/components'
 import type { BlockTagKind } from '@renderer/components'
 import { combinedSpanLabel, spanLabel } from '../paper/paperModel'
 import type { PageBlock } from '../paper/paperModel'
@@ -236,27 +236,35 @@ export function TaskCard({
               compose draft into a persistent conversation bubble. Compose-only:
               once persistent it renders as a ThreadCard. */}
           {task.phase === 'compose' && blocks.length > 0 && (
-            <IconButton
-              size="sm"
-              label="Keep chat — pin as a persistent conversation"
-              active={!!task.persistent}
-              onClick={onTogglePersistent}
-              style={task.persistent ? { background: 'rgba(109,91,208,0.14)', color: VIOLET } : {}}
-            >
-              <Pin size={13} />
-            </IconButton>
+            <Tooltip label="Keep chat" side="bottom">
+              <IconButton
+                size="sm"
+                label="Keep chat"
+                active={!!task.persistent}
+                onClick={onTogglePersistent}
+                style={task.persistent ? { background: 'rgba(109,91,208,0.14)', color: VIOLET } : {}}
+              >
+                <Pin size={13} />
+              </IconButton>
+            </Tooltip>
           )}
           {/* Edit (compose) X discards the draft — closes everything. Every other
               phase's X only collapses the bubble to its badge; the task lives on
               (busy keeps editing, review keeps its proposal, noop keeps its note).
               Removal for those stays on the explicit Reject/Dismiss buttons. */}
-          <IconButton
-            size="sm"
+          <Tooltip
             label={task.phase === 'compose' ? 'Dismiss' : 'Collapse'}
-            onClick={task.phase === 'compose' ? onDismiss : onCollapse}
+            hint={task.phase === 'compose' ? 'esc' : undefined}
+            side="bottom"
           >
-            <X size={13} />
-          </IconButton>
+            <IconButton
+              size="sm"
+              label={task.phase === 'compose' ? 'Dismiss' : 'Collapse'}
+              onClick={task.phase === 'compose' ? onDismiss : onCollapse}
+            >
+              <X size={13} />
+            </IconButton>
+          </Tooltip>
         </div>
 
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 5, marginBottom: 8 }}>
@@ -348,19 +356,16 @@ export function TaskCard({
                 }}
               />
               {onSnapshot && blocks.length > 0 && (
-                <button
-                  type="button"
-                  onClick={onSnapshot}
-                  title={
-                    task.image
-                      ? 'Snapshot attached (sent with Run) — click to remove'
-                      : "Attach a snapshot of the block's rendered output"
-                  }
-                  aria-label={task.image ? 'Snapshot attached' : 'Attach block snapshot'}
-                  style={{ ...pillStyle(!!task.image), height: 30 }}
-                >
-                  {task.image ? <Check size={12} /> : <Camera size={12} />}
-                </button>
+                <Tooltip label={task.image ? 'Remove snapshot' : 'Attach snapshot'} side="top">
+                  <button
+                    type="button"
+                    onClick={onSnapshot}
+                    aria-label={task.image ? 'Remove snapshot' : 'Attach snapshot'}
+                    style={{ ...pillStyle(!!task.image), height: 30 }}
+                  >
+                    {task.image ? <Check size={12} /> : <Camera size={12} />}
+                  </button>
+                </Tooltip>
               )}
               <Button size="sm" variant="primary" disabled={!task.instruction.trim()} onClick={onSubmit} iconLeft={<ArrowUp size={13} />}>
                 Run

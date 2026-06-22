@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { JSX } from 'react'
 import { ArrowUp, Camera, Check, MessagesSquare, Trash2, X } from 'lucide-react'
-import { BlockTag, Button, IconButton } from '@renderer/components'
+import { BlockTag, Button, IconButton, Tooltip } from '@renderer/components'
 import { combinedSpanLabel, spanLabel } from '../paper/paperModel'
 import type { PageBlock } from '../paper/paperModel'
 import type { EditTask } from './taskStore'
@@ -90,12 +90,16 @@ export function ThreadCard({
             Conversation
           </span>
           <div style={{ flex: 1 }} />
-          <IconButton size="sm" label="Delete conversation" onClick={onDelete} disabled={busy}>
-            <Trash2 size={13} />
-          </IconButton>
-          <IconButton size="sm" label="Collapse" onClick={onCollapse}>
-            <X size={13} />
-          </IconButton>
+          <Tooltip label="Delete chat" side="bottom">
+            <IconButton size="sm" label="Delete chat" onClick={onDelete} disabled={busy}>
+              <Trash2 size={13} />
+            </IconButton>
+          </Tooltip>
+          <Tooltip label="Collapse" side="bottom">
+            <IconButton size="sm" label="Collapse" onClick={onCollapse}>
+              <X size={13} />
+            </IconButton>
+          </Tooltip>
         </div>
 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 8 }}>
@@ -154,20 +158,17 @@ export function ThreadCard({
             }}
           />
           {onSnapshot && (
-            <button
-              type="button"
-              onClick={onSnapshot}
-              disabled={locked}
-              title={
-                task.image
-                  ? 'Snapshot attached (sent with your next message) — click to remove'
-                  : 'Attach a snapshot of this block to send to Claude'
-              }
-              aria-label={task.image ? 'Snapshot attached' : 'Attach block snapshot'}
-              style={{ ...pillStyle(!!task.image), height: 30, cursor: locked ? 'default' : 'pointer' }}
-            >
-              {task.image ? <Check size={12} /> : <Camera size={12} />}
-            </button>
+            <Tooltip label={task.image ? 'Remove snapshot' : 'Attach snapshot'} side="top">
+              <button
+                type="button"
+                onClick={onSnapshot}
+                disabled={locked}
+                aria-label={task.image ? 'Remove snapshot' : 'Attach snapshot'}
+                style={{ ...pillStyle(!!task.image), height: 30, cursor: locked ? 'default' : 'pointer' }}
+              >
+                {task.image ? <Check size={12} /> : <Camera size={12} />}
+              </button>
+            </Tooltip>
           )}
           <Button size="sm" variant="primary" disabled={locked || !draft.trim()} onClick={send} iconLeft={<ArrowUp size={13} />}>
             Send
