@@ -83,6 +83,10 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
   const panes = usePaneWidths()
   const [unreadNotes, setUnreadNotes] = useState(0)
   const [compile, setCompile] = useState<CompileInfo>({ state: 'idle', errors: 0, warnings: 0 })
+  // After LaTeX reports ok the pane still reloads the PDF and re-bins block
+  // geometry; PaperPane reports that window so the pill stays "Compiling…" until
+  // the page un-dims (compile = LaTeX + block render, one status).
+  const [blocksRendering, setBlocksRendering] = useState(false)
   const [toast, setToast] = useState<{ title: string; message: string; tone: 'danger' | 'success' } | null>(null)
   const [state, dispatch] = useReducer(taskReducer, initialTaskState)
   // Latest tree + tasks, read inside loadBlocks' async resolve without making
@@ -285,6 +289,10 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
       client.onCompileStatus((s) => {
         setCompile((c) => ({ ...c, state: s === 'running' ? 'running' : s === 'ok' ? 'ok' : 'failed' }))
         if (s === 'ok') {
+          // The block render starts now (PDF reload + re-bin) — mark it busy up
+          // front so the pill never flips to green "Compiled" over the dim page
+          // for a frame before PaperPane reports back (it clears this on settle).
+          setBlocksRendering(true)
           // Bump the cache-busting nonce on EVERY successful compile, not only
           // the runCompile promise path — a compile triggered elsewhere must
           // still refresh the pane (L5). Reuses the known PDF name.
@@ -712,12 +720,18 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
     if (owner) resolveTask(owner.id, accept)
   }
 
+  // LaTeX finished but the blocks are still rendering → keep the pill in its
+  // "Compiling…" state so the toolbar matches the dim page; otherwise the real
+  // status. (errors stay 0 on a successful compile, so nothing is masked.)
+  const compileView: CompileInfo =
+    blocksRendering && compile.state === 'ok' ? { ...compile, state: 'running' } : compile
+
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--surface-canvas)' }}>
       <TitleBar
         title={projectName}
         mainFile={doc.mainFile}
-        compile={compile}
+        compile={compileView}
         onCompile={saveAndCompile}
         sourceOpen={sourceOpen}
         onToggleSource={toggleSource}
@@ -804,6 +818,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           blocks={blocks}
           state={state}
           compile={compile}
+          onRenderingChange={setBlocksRendering}
           pdfUrl={pdfUrl}
           onInverseSearch={inverseSearch}
           flash={pdfFlash}

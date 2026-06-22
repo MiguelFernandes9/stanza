@@ -62,8 +62,13 @@ test('the page dims while compiling and clears once geometry settles', async () 
   await page.keyboard.press('Meta+r')
   await expect.poll(dimOpacity, { timeout: 15_000 }).toBeGreaterThan(0.5)
 
+  // The pill spans LaTeX + block render as one status: while the page is dim it
+  // reads "Compiling…", never green "Compiled" over a dim page.
+  await expect(page.getByText('Compiling…')).toBeVisible()
+
   // …and clears again after the recompute settles — proves blocksBusy releases
-  // (geometryFresh flips true), so block overlays would re-show.
+  // (geometryFresh flips true): block overlays re-show AND the pill goes green
+  // together.
   await expect(page.getByText('Compiled')).toBeVisible()
   await expect.poll(dimOpacity, { timeout: 15_000 }).toBeLessThan(0.05)
 })

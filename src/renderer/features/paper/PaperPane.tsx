@@ -72,6 +72,10 @@ interface Props {
   /** Snapshot couldn't be captured (block off-screen / canvas error) — surface it. */
   onSnapshotError?: () => void
   onView: (view: PaneView) => void
+  /** Block overlays are (re)rendering for a freshly compiled PDF — lets the
+   *  toolbar pill stay "Compiling…" until the page un-dims (compile = LaTeX +
+   *  block render as one state). */
+  onRenderingChange?: (rendering: boolean) => void
 }
 
 /** Preview pane (v0.3 model): the compiled page is centered in the scroll
@@ -214,10 +218,20 @@ export function PaperPane(props: Props): JSX.Element {
     .join('|')
 
   // Geometry is fresh only when the last commit was for THIS pdf + these spans.
-  // While compiling, the next PDF is loading, or this is stale, the page is
-  // "busy": dim it and skip the (mispositioned) overlays until geometry settles.
   const geometryFresh = pdf != null && geomForPdf.current === pdf && geomForSig.current === blocksSig
-  const blocksBusy = pageBusy(props.compile.state, loading, geometryFresh)
+  // Rendering = a freshly compiled PDF is still loading, or its block geometry is
+  // mid-recompute. The page is "busy" while compiling OR rendering: dim it and
+  // skip the (mispositioned) overlays. Reported up so the toolbar pill treats the
+  // block render as part of "compiling" (no green "Compiled" over a dim page).
+  const blocksRendering = pdfUrl != null && (loading || (pdf != null && !geometryFresh))
+  const blocksBusy = pageBusy(props.compile.state, blocksRendering)
+
+  // Surface the block-render state to the workspace so the compile pill stays
+  // "Compiling…" until the page un-dims, not just until LaTeX finishes.
+  const onRenderingChange = props.onRenderingChange
+  useEffect(() => {
+    onRenderingChange?.(blocksRendering)
+  }, [blocksRendering, onRenderingChange])
 
   // Block geometry: one synctex:forward per block, per-page boxes of its rects.
   // Assumes top-left-origin y from the backend — verify against the fixture.

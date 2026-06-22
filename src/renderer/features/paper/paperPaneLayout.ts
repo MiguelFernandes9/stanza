@@ -22,13 +22,14 @@ export const CARD_GAP = 14
 export const BADGE = 28
 
 /** The page is "busy" — block overlays would be stale — when a compile is
- *  running, the next PDF hasn't loaded yet, or block geometry is mid-recompute
- *  (`geometryFresh` false). One signal for every recompute cause (⌘R/⌘S/accept/
- *  file-change), so PaperPane dims the page and skips overlays without per-trigger
- *  branching. A finished-but-failed compile keeps the last good page: state isn't
- *  'running', the PDF didn't change, geometry stays fresh → not busy. */
-export function pageBusy(compileState: CompileState, loading: boolean, geometryFresh: boolean): boolean {
-  return compileState === 'running' || loading || !geometryFresh
+ *  running OR its output is still rendering (`blocksRendering`: the freshly
+ *  compiled PDF is loading or its block geometry is mid-recompute). One signal
+ *  drives BOTH the dim scrim and the toolbar pill, so "compiling" spans the LaTeX
+ *  compile and the block render as a single state (no green "Compiled" while the
+ *  page is still dim). A failed compile keeps the last good page: not running and
+ *  nothing re-rendered → not busy. */
+export function pageBusy(compileState: CompileState, blocksRendering: boolean): boolean {
+  return compileState === 'running' || blocksRendering
 }
 
 export interface PaneLayout {

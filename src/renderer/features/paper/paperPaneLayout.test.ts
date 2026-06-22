@@ -12,29 +12,25 @@ import {
   stackTops
 } from './paperPaneLayout'
 
-describe('pageBusy — when block overlays are stale (dim the page)', () => {
+describe('pageBusy — compiling OR rendering blocks (dim the page, hold the pill)', () => {
   it('is busy while a compile is running', () => {
-    expect(pageBusy('running', false, true)).toBe(true)
+    expect(pageBusy('running', false)).toBe(true)
   })
 
-  it('is busy while the next PDF is still loading, even after compile reports ok', () => {
-    expect(pageBusy('ok', true, true)).toBe(true)
+  it('stays busy after LaTeX reports ok while the blocks are still rendering', () => {
+    expect(pageBusy('ok', true)).toBe(true)
   })
 
-  it('is busy while geometry is mid-recompute (loaded PDF, stale boxes)', () => {
-    expect(pageBusy('ok', false, false)).toBe(true)
+  it('is idle once compile is ok and the blocks have rendered', () => {
+    expect(pageBusy('ok', false)).toBe(false)
   })
 
-  it('is idle once compile is ok, the PDF is loaded, and geometry is fresh', () => {
-    expect(pageBusy('ok', false, true)).toBe(false)
+  it('keeps the last good page on a failed compile (not running, nothing rendering)', () => {
+    expect(pageBusy('failed', false)).toBe(false)
   })
 
-  it('keeps the last good page on a failed compile (not running, geometry fresh)', () => {
-    expect(pageBusy('failed', false, true)).toBe(false)
-  })
-
-  it('is idle at rest before any compile (geometry fresh)', () => {
-    expect(pageBusy('idle', false, true)).toBe(false)
+  it('is idle at rest before any compile', () => {
+    expect(pageBusy('idle', false)).toBe(false)
   })
 })
 
