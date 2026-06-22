@@ -286,6 +286,12 @@ const INK_KEEP_FRAC = 0.2
  *  coincidence at a page edge isn't mistaken for a block flowing across the break. */
 const MIN_CONTINUATION_INK = 6
 
+/** Min x-inset (pt) past a region's left edge for an orphan row to read as that block's
+ *  indented FIRST line rather than the trailing tail of the block above it — the one
+ *  signal that tells a LEADING dropped line from a trailing one when both are equally
+ *  contiguous. A `\parindent` is ~15pt; 6pt clears sub-pt column-edge drift. */
+const PARA_INDENT_MIN = 6
+
 /** The document's body text-area vertical band `{top, bottom}` (PDF pt),
  *  inferred from the pdf.js text rows of EVERY page overlaid: the body is the
  *  single contiguous baseline cluster, while running heads and page-number
@@ -610,21 +616,40 @@ export function binContentToBlocks(
                 (rg.bottom === inside.bottom && deeper(rg, inside))))) inside = rg
         }
         if (inside) return inside
-        // No region contains the unit (a wrapped line synctex dropped): the nearest
-        // region above whose ink FRONTIER is within MAX_LINE_GAP claims it. Rank by
-        // frontier, tie by id (deterministic — not iteration order).
+        // No region CONTAINS the unit (a wrapped line synctex dropped). DEFAULT: bind it
+        // to the nearest region ABOVE whose ink FRONTIER is within MAX_LINE_GAP — synctex
+        // almost always drops a block's TRAILING wrapped line, so it re-homes up to that
+        // block. Rank by frontier, tie by id (deterministic — not iteration order).
+        //
+        // EXCEPTION — a LEADING dropped line: a run-in `\paragraph` after a float has its
+        // first rendered line covered ONLY by a whole-column galley rect; once that rect
+        // is dropped the first line is orphaned just ABOVE its block's remaining rects.
+        // Upward-only then mis-files it onto the block above, whose box swallows the next
+        // paragraph's first line. Such a line is recognisable: it sits just above a
+        // region's TOP and is INDENTED into it (a paragraph first-line indent), so it
+        // binds DOWN to its own paragraph. Proximity can't tell a leading line from a
+        // trailing tail — both are equally contiguous — but the indent does. A leading
+        // bind takes precedence over the trailing default.
         let above: Region | null = null
         let aboveFrontier = -Infinity
+        let below: Region | null = null
+        let belowTop = Infinity
         for (const rg of regions) {
           if (!candidate(rg, col, xLeft, xRight)) continue
           const frontier = Math.max(rg.bottom, runningBottom(rg))
-          if (frontier > key + BAND_EPS || key - frontier > MAX_LINE_GAP) continue
-          if (!above || frontier > aboveFrontier || (frontier === aboveFrontier && rg.id < above.id)) {
-            above = rg
-            aboveFrontier = frontier
+          if (frontier <= key + BAND_EPS && key - frontier <= MAX_LINE_GAP) {
+            if (!above || frontier > aboveFrontier || (frontier === aboveFrontier && rg.id < above.id)) {
+              above = rg
+              aboveFrontier = frontier
+            }
+          } else if (key < rg.top - BAND_EPS && rg.top - key <= MAX_LINE_GAP && xLeft > rg.xLeft + PARA_INDENT_MIN) {
+            if (!below || rg.top < belowTop || (rg.top === belowTop && rg.id < below.id)) {
+              below = rg
+              belowTop = rg.top
+            }
           }
         }
-        return above
+        return below ?? above
       }
       // Sweep `units` (already in baseline / graphic-top order) so the contiguity
       // frontier grows as ink is added.
