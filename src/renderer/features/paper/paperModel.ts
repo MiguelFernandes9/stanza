@@ -4,7 +4,7 @@ import type { TaskPhase } from '../tasks/taskStore'
 import type { TextRow } from './pdfTextRows'
 import type { GraphicBox } from './pdfGraphics'
 import type { ColumnLayout } from './columnLayout'
-import { columnLayoutByPage, columnOf } from './columnLayout'
+import { columnLayoutByPage, columnOf, dominantGutter } from './columnLayout'
 import { isMathEnvName } from '../../../shared/blocks/container'
 
 /** Selection state a task stamps on a block — drives the edge bar, the
@@ -357,9 +357,113 @@ export interface BinnedContent {
   /** Per-page column geometry (gutter + bands) the boxes were binned against —
    *  Phase 2's two-rail layout reads this to place bubbles per column. */
   columnsByPage: Map<number, ColumnLayout>
-  /** Units inside ≥2 blocks' regions — the galley collisions the caller resolves
-   *  authoritatively via the synctex backward map (empty in the common case). */
+  /** Units inside ≥2 blocks' regions — the galley collisions the legacy forward-rect
+   *  binner reports for backward-map resolution. Always `[]` from `binBlocks` (the
+   *  backward map IS the attribution there). */
   contested: ContestedUnit[]
+}
+
+/** A rendered unit (a text row or a graphic) the caller has already attributed to its
+ *  block via the synctex BACKWARD map: `synctex edit` on the unit's point → source line
+ *  → `blockForSourceLine`. `blockId` is null when unmapped (furniture / a gap). */
+export interface AttributedUnit {
+  page: number
+  xLeft: number
+  yTop: number
+  xRight: number
+  yBottom: number
+  blockId: string | null
+}
+
+/** Build every block's box from its attributed units: the bbox per (page, column).
+ *  Forward-rect EXTENT is never consulted, so galley/vbox rects, cross-page spill and
+ *  tikz/math noise cannot inflate a box — no regions / tightest-span / isTallRect /
+ *  contested / continuation / per-kind gate. Units are pre-attributed by INDEX (not a
+ *  positional key), so dense graphics never collide with a row. A `fullWidthIds` block
+ *  (a `*` float) is one `full` box per page, never column-split. `rowsByPage` is used
+ *  only to detect the column layout. Pure. */
+export function binBlocks(
+  units: AttributedUnit[],
+  rowsByPage: Map<number, TextRow[]>,
+  fullWidthIds: Set<string> = new Set()
+): BinnedContent {
+  const columnsByPage = columnLayoutByPage(rowsByPage)
+  const band = contentBand(rowsByPage)
+  const inBand = (yTop: number, yBottom: number): boolean =>
+    !band || (yBottom >= band.top - BAND_EPS && yTop <= band.bottom + BAND_EPS)
+
+  // A unit's column: a `*` float is always `full`; a non-float TEXT block on a
+  // two-column page is l/r (columnOf's `full` for a gutter-spanning line or a single
+  // band beside a float is snapped by centre — column is a block-on-page property, not
+  // a per-line one); a single-column page is `full`.
+  const colOfUnit = (u: AttributedUnit): PdfCol => {
+    if (fullWidthIds.has(u.blockId!)) return 'full'
+    const layout = columnsByPage.get(u.page)
+    const c = layout ? columnOf(layout, u) : 'full'
+    if (c !== 'full') return c
+    const g = layout ? dominantGutter(layout) : null
+    return g ? ((u.xLeft + u.xRight) / 2 <= g.gx ? 'l' : 'r') : 'full'
+  }
+
+  // Bin each block's in-band units into CONTIGUOUS vertical RUNS per page (a gap >
+  // MAX_LINE_GAP starts a new run). One run = one box, in the run's DOMINANT column (so
+  // a paragraph never splits across l/r, and a cross-page/column continuation is its own
+  // run). A run far smaller than the block's richest is a phantom — a stray synctex rect
+  // rendered off in another block's area — and is dropped. This restores the old binner's
+  // region + phantom-drop + continuation robustness without forward-rect regions.
+  interface Run { page: number; units: AttributedUnit[]; bottom: number; ink: number }
+  const byBlock = new Map<string, AttributedUnit[]>()
+  for (const u of units) {
+    if (!u.blockId || !inBand(u.yTop, u.yBottom)) continue
+    const a = byBlock.get(u.blockId)
+    if (a) a.push(u); else byBlock.set(u.blockId, [u])
+  }
+  const boxesById = new Map<string, PdfRect[]>()
+  for (const [id, us] of byBlock) {
+    const byPage = new Map<number, AttributedUnit[]>()
+    for (const u of us) { const a = byPage.get(u.page); if (a) a.push(u); else byPage.set(u.page, [u]) }
+    const runs: Run[] = []
+    for (const [page, pu] of byPage) {
+      pu.sort((a, b) => (a.yTop + a.yBottom) / 2 - (b.yTop + b.yBottom) / 2)
+      let cur: Run | null = null
+      for (const u of pu) {
+        if (!cur || (u.yTop + u.yBottom) / 2 - cur.bottom > MAX_LINE_GAP) { cur = { page, units: [], bottom: u.yBottom, ink: 0 }; runs.push(cur) }
+        cur.units.push(u); cur.bottom = Math.max(cur.bottom, u.yBottom); cur.ink += Math.max(1, u.yBottom - u.yTop)
+      }
+    }
+    const maxInk = Math.max(...runs.map((r) => r.ink))
+    const boxes: PdfRect[] = []
+    for (const r of runs) {
+      if (r.ink < INK_KEEP_FRAC * maxInk) continue // phantom run (stray off-block unit)
+      // Dominant column by ink; the box spans only THAT column's units, so a few
+      // cross-column stray units don't widen the box into a neighbour's column.
+      const colInk = new Map<PdfCol, number>()
+      for (const u of r.units) { const c = colOfUnit(u); colInk.set(c, (colInk.get(c) ?? 0) + Math.max(1, u.yBottom - u.yTop)) }
+      let col: PdfCol = 'full'; let best = -1
+      for (const [c, ink] of colInk) if (ink > best) { best = ink; col = c }
+      let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity
+      for (const u of r.units) {
+        if (colOfUnit(u) !== col) continue
+        x = Math.min(x, u.xLeft); y = Math.min(y, u.yTop); right = Math.max(right, u.xRight); bottom = Math.max(bottom, u.yBottom)
+      }
+      // Clip a column box to its column's x-bounds: a mis-measured full-width row must
+      // not widen an l/r box across the gutter into the other column's blocks.
+      const g = dominantGutter(columnsByPage.get(r.page) ?? { bands: [] })
+      if (g && col === 'l') right = Math.min(right, g.right)
+      else if (g && col === 'r') x = Math.max(x, g.left)
+      boxes.push({ page: r.page, x, y, width: right - x, height: bottom - y, col })
+    }
+    boxes.sort((a, b) => a.page - b.page || a.x - b.x)
+    if (boxes.length) boxesById.set(id, boxes)
+  }
+
+  const contentTopByPage = new Map<number, number>()
+  for (const arr of boxesById.values())
+    for (const b of arr) {
+      const cur = contentTopByPage.get(b.page)
+      if (cur === undefined || b.y < cur) contentTopByPage.set(b.page, b.y)
+    }
+  return { boxesById, contentTopByPage, columnsByPage, contested: [] }
 }
 
 /** Build every block's box from what it RENDERED (glyph rows + graphic bboxes).

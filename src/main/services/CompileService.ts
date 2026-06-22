@@ -16,6 +16,10 @@ import { parseEditOutput, parseViewOutput } from '../../shared/latex/synctex'
 
 const TECTONIC_HINT = 'tectonic not found — install with: brew install tectonic'
 
+/** Max concurrent `synctex edit` processes for inverseBatch — caps the spawn burst
+ *  while keeping a dense page (~450 rows) under ~0.5s. */
+const SYNCTEX_BATCH_CONCURRENCY = 12
+
 /** Build the tectonic argv: the MANDATORY `-X compile --synctex --keep-logs`
  *  (SyncTeX is never optional — the PDF↔source model needs it), then the user's
  *  CompileOptions appended, then the target file last (tectonic's positional
@@ -155,11 +159,27 @@ export class CompileService {
   }
 
   async inverse(p: InversePoint): Promise<SourceLocation | null> {
-    const proc = await this.synctex(['edit', '-o', `${p.page}:${p.x}:${p.y}:${this.pdfPath}`])
+    // synctex's `edit` parser mis-reads a FRACTIONAL coordinate (a float x collapses the
+    // whole column onto one line), so round to integer PDF pt before the query.
+    const proc = await this.synctex(['edit', '-o', `${p.page}:${Math.round(p.x)}:${Math.round(p.y)}:${this.pdfPath}`])
     if (!proc || proc.code !== 0) return null
     const loc = parseEditOutput(proc.stdout)
     if (!loc) return null
     return { ...loc, file: this.toRelative(loc.file) }
+  }
+
+  /** Backward-map many points in one call — the geometry binner attributes every
+   *  rendered row to its source block, so it needs the whole page's worth at once.
+   *  Each `synctex edit` is ~6ms; run with a concurrency cap so a dense page is a
+   *  fraction of a second, not a serial stall, without spawning hundreds at once. */
+  async inverseBatch(points: InversePoint[]): Promise<(SourceLocation | null)[]> {
+    const out: (SourceLocation | null)[] = new Array(points.length).fill(null)
+    let next = 0
+    const worker = async (): Promise<void> => {
+      for (let i = next++; i < points.length; i = next++) out[i] = await this.inverse(points[i]!)
+    }
+    await Promise.all(Array.from({ length: Math.min(SYNCTEX_BATCH_CONCURRENCY, points.length) }, worker))
+    return out
   }
 
   async forward(span: BlockSpan): Promise<PdfRect[]> {

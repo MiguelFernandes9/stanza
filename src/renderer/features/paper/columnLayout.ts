@@ -179,7 +179,7 @@ function bandAt(layout: ColumnLayout, cy: number): ColumnBand | null {
  *  null if the page has no two-column band. Lets `columnOf` classify an item that
  *  falls in a SINGLE band — a figure-internal thin band, or a graphic between
  *  two-column bands — by the page column instead of blanket `full`. */
-function dominantGutter(layout: ColumnLayout): { left: number; right: number; gx: number } | null {
+export function dominantGutter(layout: ColumnLayout): { left: number; right: number; gx: number } | null {
   const two = layout.bands.filter((b) => b.kind === 'two')
   if (!two.length) return null
   const mid = (xs: number[]): number => xs.slice().sort((a, b) => a - b)[Math.floor(xs.length / 2)]!

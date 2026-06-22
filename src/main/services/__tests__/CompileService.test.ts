@@ -307,9 +307,11 @@ describe('CompileService synctex queries', () => {
 
     const loc = await service.inverse({ page: 2, x: 100.5, y: 200.25 })
 
+    // Coordinates are ROUNDED to integers — synctex's `edit` parser mis-reads a
+    // fractional coordinate (a float x collapses the whole column onto one line).
     expect(runner.calls[0]).toMatchObject({
       cmd: 'synctex',
-      args: ['edit', '-o', '2:100.5:200.25:/proj/main.pdf'],
+      args: ['edit', '-o', '2:101:200:/proj/main.pdf'],
       cwd: '/proj',
     })
     expect(loc).toEqual({ file: 'chapters/ch1.tex', line: 12 })

@@ -3,7 +3,7 @@ import type { JSX } from 'react'
 import { Check, CircleSlash, PenLine, Sparkles } from 'lucide-react'
 import { client } from '@renderer/lib/client'
 import type { CompileState } from '@renderer/components'
-import type { BlockSpan, PdfRect } from '@shared/ipc'
+import type { PdfRect, InversePoint, SourceLocation } from '@shared/ipc'
 import type { BlockNode } from '@shared/blocks/types'
 import { usePdfDocument } from '../pdf/usePdfDocument'
 import { PdfPageStack } from '../pdf/PdfPageStack'
@@ -17,7 +17,8 @@ import { WholeDocRail } from './WholeDocRail'
 import { FillerPage } from './FillerPage'
 import { PaperToolbar } from './PaperToolbar'
 import { useMarqueeSelect } from './useMarqueeSelect'
-import { binContentToBlocks, blockForSourceLine, blockGeometryRects, cardAnchorTops, combinedSpanLabel, expandIds, isMathEnvName, isTightAbove, spanLabel, washBoxes } from './paperModel'
+import { binBlocks, blockForSourceLine, cardAnchorTops, combinedSpanLabel, expandIds, isMathEnvName, isTightAbove, spanLabel, washBoxes } from './paperModel'
+import type { AttributedUnit } from './paperModel'
 import { resolveToKnownFile } from '@renderer/lib/paths'
 import type { BlockMark, PageBlock } from './paperModel'
 import type { ColumnLayout } from './columnLayout'
@@ -208,25 +209,16 @@ export function PaperPane(props: Props): JSX.Element {
     .map((b) => `${b.id}:${b.span.file}:${b.span.startLine}:${b.span.endLine}`)
     .join('|')
 
-  // Block geometry: one synctex:forward per block, per-page boxes of its rects.
-  // Assumes top-left-origin y from the backend — verify against the fixture.
+  // Block geometry: attribute every rendered unit (text row, graphic) to its source
+  // block via the synctex BACKWARD map; a block's box is the bbox of its units per
+  // (page, column). Forward-rect EXTENT is never consulted, so a galley/vbox rect
+  // can't inflate a box. One batched `synctex edit` per render.
   useEffect(() => {
     if (!pdf) return
     let alive = true
-    const forward = (span: BlockSpan) => client.synctexForward(span).catch((): PdfRect[] => [])
-    void Promise.all(
-      // Environment blocks query their INTERIOR span — \begin/\end delimiter
-      // lines carry no content and forward-map to stray galley rects (\end
-      // lands on the paragraph below, BUG-21). Falls back to the full span.
-      pageBlocks.map(async (b) => ({ b, rects: await blockGeometryRects(b, forward) }))
-    ).then(async (perBlock) => {
-      if (!alive) return
-      // The rendered page is the source of truth for box EXTENT — a block's box
-      // is the union of its glyph rows AND its graphic/image bboxes — so fetch
-      // both the text rows and the op-list graphics for every page any block's
-      // synctex rects touch BEFORE building boxes. synctex only locates each
-      // block's region (which page, x-band, top).
-      const pages = [...new Set(perBlock.flatMap(({ rects }) => rects.map((r) => r.page)))]
+    void (async () => {
+      // Text rows + graphics for EVERY page — attribution scans the whole render.
+      const pages = Array.from({ length: pdf.numPages }, (_, i) => i + 1)
       const rowsByPage = new Map<number, TextRow[]>()
       const graphicsByPage = new Map<number, GraphicBox[]>()
       await Promise.all(
@@ -240,60 +232,31 @@ export function PaperPane(props: Props): JSX.Element {
         )
       )
       if (!alive) return
-      // EVERY block — paragraph, heading, math, list, figure, table — takes its
-      // box from the union of everything it rendered (glyph rows ∪ graphic
-      // bboxes) in its synctex region. One rule, no per-kind builder. The content
-      // band drops running heads / folios / footers and header-margin stray rects
-      // first (M2-6, BUG-30); a region's box runs to the next region's top, so a
-      // dropped last line is included and a figure covers its image + caption.
-      const rectsById = new Map(perBlock.map(({ b, rects }) => [b.id, rects]))
-      // `*` floats (table*/figure*) are full-width — one 'full' box, never split into
-      // per-cell l/r boxes by their narrow constituent synctex rects.
+      // One backward-map point per unit (a row at its left/baseline, a graphic at its
+      // centre), batched into a single IPC, attributed BY INDEX (a positional key would
+      // collide a row with a dense graphic). Each result → source line → the block that
+      // drew it; null leaves the unit unattributed (furniture / a gap).
+      const units: { page: number; xLeft: number; yTop: number; xRight: number; yBottom: number; point: InversePoint }[] = []
+      for (const [page, rows] of rowsByPage)
+        for (const r of rows) units.push({ page, xLeft: r.xLeft, yTop: r.yTop, xRight: r.xRight, yBottom: r.yBottom, point: { page, x: r.xLeft, y: r.baseline } })
+      for (const [page, graphics] of graphicsByPage)
+        for (const g of graphics)
+          units.push({ page, xLeft: g.xLeft, yTop: g.yTop, xRight: g.xRight, yBottom: g.yBottom, point: { page, x: (g.xLeft + g.xRight) / 2, y: (g.yTop + g.yBottom) / 2 } })
+      const locs = await client.synctexInverseBatch(units.map((u) => u.point)).catch((): (SourceLocation | null)[] => [])
+      if (!alive) return
+      const knownFiles = [...new Set(pageBlocks.map((b) => b.span.file))]
       const fullWidthIds = new Set(pageBlocks.filter((b) => b.envName?.endsWith('*')).map((b) => b.id))
-      const bin = binContentToBlocks(rectsById, rowsByPage, graphicsByPage, undefined, fullWidthIds)
-      // Galley collision: a unit inside ≥2 blocks' regions (a list's \begin maps onto
-      // a figure's caption) can't be attributed by tightest-span geometry. Resolve
-      // each authoritatively via the synctex BACKWARD map — the rendered point → its
-      // true source line → the block that drew it — then re-bin with those forced
-      // owners. Only fires when a collision exists (empty in the common case).
-      let result = bin
-      // Override ONLY contested units whose tightest-span owner has ≥2 regions (a
-      // possible galley that renders elsewhere). A single-region owner genuinely
-      // renders at the unit, so its disagreeing backward map is a synctex error (a
-      // float's bbox overlapping the neighbour above it) — trust tightest-span there.
-      const toForce = bin.contested.filter((c) => c.tightestOwnerMultiRegion)
-      if (toForce.length) {
-        const knownFiles = [...new Set(pageBlocks.map((b) => b.span.file))]
-        // Units on ONE rendered line share a source line, so backward-map a single
-        // representative per (page, baseline, column-ish x) band and apply the owner
-        // to the whole band — a dense colliding page (figure + table + list) costs ~a
-        // dozen synctex edits, not one per glyph row.
-        const bands = new Map<string, typeof bin.contested>()
-        for (const c of toForce) {
-          const k = `${c.page}|${Math.round(c.y)}|${Math.round(c.x / 180)}`
-          const g = bands.get(k)
-          if (g) g.push(c)
-          else bands.set(k, [c])
-        }
-        const forced = new Map<string, string>()
-        await Promise.all(
-          [...bands.values()].map(async (group) => {
-            const c = group[0]!
-            const loc = await client.synctexInverse({ page: c.page, x: c.x, y: c.y }).catch(() => null)
-            if (!loc) return
-            const owner = blockForSourceLine(pageBlocks, resolveToKnownFile(loc.file, knownFiles), loc.line)
-            if (owner) for (const u of group) forced.set(u.key, owner)
-          })
-        )
-        if (!alive) return
-        if (forced.size) result = binContentToBlocks(rectsById, rowsByPage, graphicsByPage, forced, fullWidthIds)
-      }
+      const attributed = units.map((u, i): AttributedUnit => {
+        const loc = locs[i]
+        return { page: u.page, xLeft: u.xLeft, yTop: u.yTop, xRight: u.xRight, yBottom: u.yBottom, blockId: loc ? blockForSourceLine(pageBlocks, resolveToKnownFile(loc.file, knownFiles), loc.line) : null }
+      })
+      const result = binBlocks(attributed, rowsByPage, fullWidthIds)
       // One box per block from its rendered ink; a section's box is its heading
       // line, selection expands to its members via expandIds (selection layer).
       setBlockRects(result.boxesById)
       setContentTops(result.contentTopByPage)
       columnsByPage.current = result.columnsByPage // Phase 2 (two-rail bubbles) will consume this
-    })
+    })()
     return () => {
       alive = false
     }
