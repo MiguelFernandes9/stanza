@@ -400,7 +400,9 @@ export function binBlocks(
   const inRegion = (u: AttributedUnit): boolean => {
     const rects = regionsById.get(u.blockId!)
     if (!rects || !rects.length) return true
-    for (const r of rects) if (r.page === u.page && r.x < u.xRight && u.xLeft < r.x + r.width) return true
+    for (const r of rects)
+      if (r.page === u.page && r.x < u.xRight && u.xLeft < r.x + r.width &&
+          r.y - MAX_LINE_GAP < u.yBottom && u.yTop < r.y + r.height + MAX_LINE_GAP) return true
     return false
   }
 
@@ -417,53 +419,47 @@ export function binBlocks(
     return g ? ((u.xLeft + u.xRight) / 2 <= g.gx ? 'l' : 'r') : 'full'
   }
 
-  // Bin each block's in-band units into CONTIGUOUS vertical RUNS per page (a gap >
-  // MAX_LINE_GAP starts a new run). One run = one box, in the run's DOMINANT column (so
-  // a paragraph never splits across l/r, and a cross-page/column continuation is its own
-  // run). A run far smaller than the block's richest is a phantom — a stray synctex rect
-  // rendered off in another block's area — and is dropped. This restores the old binner's
-  // region + phantom-drop + continuation robustness without forward-rect regions.
-  interface Run { page: number; units: AttributedUnit[]; bottom: number; ink: number }
+  // A block's box per (page, column) is the UNION of its attributed units — NOT split by
+  // vertical gaps, because pdf.js drops rows mid-paragraph (a 70pt gap of missing rows is
+  // not a real discontinuity) and a figure's image+caption sit a gap apart yet are one
+  // box. The forward-region gate already excludes off-block strays, so the union is tight.
   const byBlock = new Map<string, AttributedUnit[]>()
   for (const u of units) {
     if (!u.blockId || !inBand(u.yTop, u.yBottom) || !inRegion(u)) continue
     const a = byBlock.get(u.blockId)
     if (a) a.push(u); else byBlock.set(u.blockId, [u])
   }
+  const ink = (arr: AttributedUnit[]): number => arr.reduce((s, u) => s + Math.max(1, u.yBottom - u.yTop), 0)
   const boxesById = new Map<string, PdfRect[]>()
   for (const [id, us] of byBlock) {
     const byPage = new Map<number, AttributedUnit[]>()
     for (const u of us) { const a = byPage.get(u.page); if (a) a.push(u); else byPage.set(u.page, [u]) }
-    const runs: Run[] = []
-    for (const [page, pu] of byPage) {
-      pu.sort((a, b) => (a.yTop + a.yBottom) / 2 - (b.yTop + b.yBottom) / 2)
-      let cur: Run | null = null
-      for (const u of pu) {
-        if (!cur || (u.yTop + u.yBottom) / 2 - cur.bottom > MAX_LINE_GAP) { cur = { page, units: [], bottom: u.yBottom, ink: 0 }; runs.push(cur) }
-        cur.units.push(u); cur.bottom = Math.max(cur.bottom, u.yBottom); cur.ink += Math.max(1, u.yBottom - u.yTop)
-      }
-    }
-    const maxInk = Math.max(...runs.map((r) => r.ink))
     const boxes: PdfRect[] = []
-    for (const r of runs) {
-      if (r.ink < INK_KEEP_FRAC * maxInk) continue // phantom run (stray off-block unit)
-      // Dominant column by ink; the box spans only THAT column's units, so a few
-      // cross-column stray units don't widen the box into a neighbour's column.
-      const colInk = new Map<PdfCol, number>()
-      for (const u of r.units) { const c = colOfUnit(u); colInk.set(c, (colInk.get(c) ?? 0) + Math.max(1, u.yBottom - u.yTop)) }
-      let col: PdfCol = 'full'; let best = -1
-      for (const [c, ink] of colInk) if (ink > best) { best = ink; col = c }
-      let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity
-      for (const u of r.units) {
-        if (colOfUnit(u) !== col) continue
-        x = Math.min(x, u.xLeft); y = Math.min(y, u.yTop); right = Math.max(right, u.xRight); bottom = Math.max(bottom, u.yBottom)
+    for (const [page, pu] of byPage) {
+      const byCol = new Map<PdfCol, AttributedUnit[]>()
+      for (const u of pu) { const c = colOfUnit(u); const a = byCol.get(c); if (a) a.push(u); else byCol.set(c, [u]) }
+      // l AND r units that OVERLAP vertically are a per-unit mis-classification (a wide
+      // row straddling the gutter), not an l→r continuation — fold into the dominant
+      // column. A genuine continuation (left-bottom → right-top) is vertically disjoint.
+      const L = byCol.get('l'); const R = byCol.get('r')
+      if (L && R) {
+        const lY0 = Math.min(...L.map((u) => u.yTop)), lY1 = Math.max(...L.map((u) => u.yBottom))
+        const rY0 = Math.min(...R.map((u) => u.yTop)), rY1 = Math.max(...R.map((u) => u.yBottom))
+        if (lY0 < rY1 && rY0 < lY1) {
+          const keep = ink(L) >= ink(R) ? 'l' : 'r'
+          byCol.delete('l'); byCol.delete('r'); byCol.set(keep, [...L, ...R])
+        }
       }
-      // Clip a column box to its column's x-bounds: a mis-measured full-width row must
-      // not widen an l/r box across the gutter into the other column's blocks.
-      const g = dominantGutter(columnsByPage.get(r.page) ?? { bands: [] })
-      if (g && col === 'l') right = Math.min(right, g.right)
-      else if (g && col === 'r') x = Math.max(x, g.left)
-      boxes.push({ page: r.page, x, y, width: right - x, height: bottom - y, col })
+      const g = dominantGutter(columnsByPage.get(page) ?? { bands: [] })
+      for (const [col, cu] of byCol) {
+        let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity
+        for (const u of cu) { x = Math.min(x, u.xLeft); y = Math.min(y, u.yTop); right = Math.max(right, u.xRight); bottom = Math.max(bottom, u.yBottom) }
+        // Clip a column box to its column so a mis-measured full-width row can't widen it
+        // across the gutter into the other column's blocks.
+        if (g && col === 'l') right = Math.min(right, g.right)
+        else if (g && col === 'r') x = Math.max(x, g.left)
+        boxes.push({ page, x, y, width: right - x, height: bottom - y, col })
+      }
     }
     boxes.sort((a, b) => a.page - b.page || a.x - b.x)
     if (boxes.length) boxesById.set(id, boxes)
