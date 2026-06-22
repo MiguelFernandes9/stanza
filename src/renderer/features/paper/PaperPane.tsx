@@ -255,7 +255,15 @@ export function PaperPane(props: Props): JSX.Element {
   // Block geometry: one synctex:forward per block, per-page boxes of its rects.
   // Assumes top-left-origin y from the backend — verify against the fixture.
   useEffect(() => {
-    if (!pdf) return
+    // Wait until the freshly compiled PDF has loaded. `synctexForward` reads the
+    // on-disk synctex (always the LATEST compile), while the text/graphics layers
+    // come from the React `pdf`. While `loading`, `pdf` is still the previous doc,
+    // so computing now would map new-synctex regions onto the old page's glyphs —
+    // garbage boxes (visible after an accept, which changes the spans and fires
+    // this effect via `blocksSig` before the new PDF resolves). Skipping holds the
+    // OLD blockRects + displayPdf until the new PDF lands, then we recompute once
+    // against a consistent (pdf, synctex, spans) trio and swap atomically.
+    if (!pdf || loading) return
     let alive = true
     const forward = (span: BlockSpan) => client.synctexForward(span).catch((): PdfRect[] => [])
     void Promise.all(
@@ -361,7 +369,7 @@ export function PaperPane(props: Props): JSX.Element {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pdf, blocksSig])
+  }, [pdf, blocksSig, loading])
 
   // A fresh compose task opens its bubble once (so it's editable); afterwards
   // the user may collapse it freely and it won't re-open.
