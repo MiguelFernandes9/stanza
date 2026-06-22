@@ -71,4 +71,8 @@ test('the page dims while compiling and clears once geometry settles', async () 
   // together.
   await expect(page.getByText('Compiled')).toBeVisible()
   await expect.poll(dimOpacity, { timeout: 15_000 }).toBeLessThan(0.05)
+
+  // The page reveals WITH its boxes: block overlays are back once geometry is
+  // fresh (the new PDF + overlays swap in together, never the page first).
+  await expect.poll(() => page.locator('[data-block-id]').count()).toBeGreaterThan(0)
 })

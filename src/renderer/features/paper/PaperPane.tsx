@@ -8,6 +8,7 @@ import type { BlockNode } from '@shared/blocks/types'
 import { usePdfDocument } from '../pdf/usePdfDocument'
 import { PdfPageStack } from '../pdf/PdfPageStack'
 import type { PageGeometry } from '../pdf/PdfPageStack'
+import type { PDFDocumentProxy } from '../pdf/pdfjsSetup'
 import { ReviewOverlay } from '../review/ReviewOverlay'
 import { blockLabel, TaskCard, tagKind } from '../tasks/TaskCard'
 import { isWholeDocTask } from '../tasks/taskStore'
@@ -125,6 +126,11 @@ export function PaperPane(props: Props): JSX.Element {
   const geomForSig = useRef<string>('')
 
   const { pdf, loading } = usePdfDocument(pdfUrl)
+  // The PDF actually shown. It lags `pdf` (the freshly loaded doc): we keep
+  // displaying the previous page until the new doc's block geometry is computed,
+  // then swap the page AND its overlays in together — so a recompile never flashes
+  // the new PDF before its boxes. The dim's fade-out masks the new doc's raster.
+  const [displayPdf, setDisplayPdf] = useState<PDFDocumentProxy | null>(null)
 
   const byId = new Map(pageBlocks.map((b) => [b.id, b]))
   const blocksOf = (blockIds: string[]): PageBlock[] =>
@@ -322,6 +328,9 @@ export function PaperPane(props: Props): JSX.Element {
       // before React re-renders, so geometryFresh reads true without a flicker).
       geomForPdf.current = pdf
       geomForSig.current = blocksSig
+      // Reveal the new PDF now that its boxes are ready — page + overlays swap in
+      // together, never the page first.
+      setDisplayPdf(pdf)
     })
     return () => {
       alive = false
@@ -567,7 +576,7 @@ export function PaperPane(props: Props): JSX.Element {
         onPointerDown={onMarqueeDown}
         style={{ flex: 1, overflow: 'auto', scrollbarGutter: 'stable', background: 'var(--surface-canvas)' }}
       >
-        {pdf ? (
+        {displayPdf ? (
           // Centre the PAGE, not the page+rail track. A flex row (justify-content:
           // safe center) holds one item whose width is EXACTLY the page; the rail,
           // badges and connector svg are absolute children that hang off the page's
@@ -585,7 +594,7 @@ export function PaperPane(props: Props): JSX.Element {
             <div data-testid="paper-page" style={{ position: 'relative', width: pageWidth, height: contentH, flex: '0 0 auto' }}>
               <div style={{ position: 'absolute', left: 0, top: PAD, width: pageWidth }}>
                 <PdfPageStack
-                  pdf={pdf}
+                  pdf={displayPdf}
                   scale={zoom}
                   scrollRef={scrollRef}
                   onGeometry={(g, n) => {
