@@ -3,7 +3,7 @@ import type { JSX } from 'react'
 import { Check, CircleSlash, PenLine, Sparkles } from 'lucide-react'
 import { client } from '@renderer/lib/client'
 import type { CompileState } from '@renderer/components'
-import type { PdfRect, InversePoint, SourceLocation } from '@shared/ipc'
+import type { PdfRect, InversePoint, SourceLocation, BlockSpan } from '@shared/ipc'
 import type { BlockNode } from '@shared/blocks/types'
 import { usePdfDocument } from '../pdf/usePdfDocument'
 import { PdfPageStack } from '../pdf/PdfPageStack'
@@ -17,7 +17,7 @@ import { WholeDocRail } from './WholeDocRail'
 import { FillerPage } from './FillerPage'
 import { PaperToolbar } from './PaperToolbar'
 import { useMarqueeSelect } from './useMarqueeSelect'
-import { binBlocks, blockForSourceLine, cardAnchorTops, combinedSpanLabel, expandIds, isMathEnvName, isTightAbove, spanLabel, washBoxes } from './paperModel'
+import { binBlocks, blockForSourceLine, blockGeometryRects, cardAnchorTops, combinedSpanLabel, expandIds, isMathEnvName, isTightAbove, spanLabel, washBoxes } from './paperModel'
 import type { AttributedUnit } from './paperModel'
 import { resolveToKnownFile } from '@renderer/lib/paths'
 import type { BlockMark, PageBlock } from './paperModel'
@@ -244,13 +244,22 @@ export function PaperPane(props: Props): JSX.Element {
           units.push({ page, xLeft: g.xLeft, yTop: g.yTop, xRight: g.xRight, yBottom: g.yBottom, point: { page, x: (g.xLeft + g.xRight) / 2, y: (g.yTop + g.yBottom) / 2 } })
       const locs = await client.synctexInverseBatch(units.map((u) => u.point)).catch((): (SourceLocation | null)[] => [])
       if (!alive) return
+      // Forward synctex per block: its coarse REGION (which pages/x-bands it occupies),
+      // used only to GATE attribution — backward-map ownership, forward-region gate, so a
+      // running header / repeated content whose source line maps into a block but renders
+      // elsewhere is rejected. The forward EXTENT never sizes a box.
+      const forward = (span: BlockSpan): Promise<PdfRect[]> => client.synctexForward(span).catch((): PdfRect[] => [])
+      const regionsById = new Map(
+        await Promise.all(pageBlocks.map(async (b) => [b.id, await blockGeometryRects(b, forward)] as const))
+      )
+      if (!alive) return
       const knownFiles = [...new Set(pageBlocks.map((b) => b.span.file))]
       const fullWidthIds = new Set(pageBlocks.filter((b) => b.envName?.endsWith('*')).map((b) => b.id))
       const attributed = units.map((u, i): AttributedUnit => {
         const loc = locs[i]
         return { page: u.page, xLeft: u.xLeft, yTop: u.yTop, xRight: u.xRight, yBottom: u.yBottom, blockId: loc ? blockForSourceLine(pageBlocks, resolveToKnownFile(loc.file, knownFiles), loc.line) : null }
       })
-      const result = binBlocks(attributed, rowsByPage, fullWidthIds)
+      const result = binBlocks(attributed, rowsByPage, fullWidthIds, regionsById)
       // One box per block from its rendered ink; a section's box is its heading
       // line, selection expands to its members via expandIds (selection layer).
       setBlockRects(result.boxesById)

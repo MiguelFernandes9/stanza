@@ -385,12 +385,24 @@ export interface AttributedUnit {
 export function binBlocks(
   units: AttributedUnit[],
   rowsByPage: Map<number, TextRow[]>,
-  fullWidthIds: Set<string> = new Set()
+  fullWidthIds: Set<string> = new Set(),
+  // Forward synctex rects per block (its coarse REGION). Backward-map ownership, gated
+  // by forward region: a unit is attributed only if it lands on a page+x-band the block
+  // actually occupies — rejecting a running header or repeated content whose source line
+  // maps into the block but renders where the block doesn't. A block with no forward
+  // rects (forward missed) is not gated.
+  regionsById: Map<string, PdfRect[]> = new Map()
 ): BinnedContent {
   const columnsByPage = columnLayoutByPage(rowsByPage)
   const band = contentBand(rowsByPage)
   const inBand = (yTop: number, yBottom: number): boolean =>
     !band || (yBottom >= band.top - BAND_EPS && yTop <= band.bottom + BAND_EPS)
+  const inRegion = (u: AttributedUnit): boolean => {
+    const rects = regionsById.get(u.blockId!)
+    if (!rects || !rects.length) return true
+    for (const r of rects) if (r.page === u.page && r.x < u.xRight && u.xLeft < r.x + r.width) return true
+    return false
+  }
 
   // A unit's column: a `*` float is always `full`; a non-float TEXT block on a
   // two-column page is l/r (columnOf's `full` for a gutter-spanning line or a single
@@ -414,7 +426,7 @@ export function binBlocks(
   interface Run { page: number; units: AttributedUnit[]; bottom: number; ink: number }
   const byBlock = new Map<string, AttributedUnit[]>()
   for (const u of units) {
-    if (!u.blockId || !inBand(u.yTop, u.yBottom)) continue
+    if (!u.blockId || !inBand(u.yTop, u.yBottom) || !inRegion(u)) continue
     const a = byBlock.get(u.blockId)
     if (a) a.push(u); else byBlock.set(u.blockId, [u])
   }
