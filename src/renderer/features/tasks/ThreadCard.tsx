@@ -160,7 +160,7 @@ export function ThreadCard({
               disabled={locked}
               title={
                 task.image
-                  ? 'Snapshot attached — sent with your next message'
+                  ? 'Snapshot attached (sent with your next message) — click to remove'
                   : 'Attach a snapshot of this block to send to Claude'
               }
               aria-label={task.image ? 'Snapshot attached' : 'Attach block snapshot'}

@@ -203,6 +203,15 @@ describe('taskReducer — attach-image (block snapshot, F2)', () => {
     )
     expect(s.tasks[0].image).toBe('two')
   })
+
+  it('an empty image clears the staged shot (the snapshot un-press)', () => {
+    let s = run(initialTaskState, { type: 'toggle-block', ids: ['p1'], additive: false })
+    const id = s.tasks[0].id
+    s = run(s, { type: 'attach-image', taskId: id, image: 'data:image/png;base64,AAA' })
+    expect(s.tasks[0].image).toBe('data:image/png;base64,AAA')
+    s = run(s, { type: 'attach-image', taskId: id, image: '' })
+    expect(s.tasks[0].image).toBeUndefined()
+  })
 })
 
 describe('taskReducer — clear-drafts (Esc deselects)', () => {

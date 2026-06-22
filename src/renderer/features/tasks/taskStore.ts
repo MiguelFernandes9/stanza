@@ -209,7 +209,8 @@ export function taskReducer(s: TaskState, a: TaskAction): TaskState {
     case 'update-instruction':
       return patchTask(s, a.taskId, { instruction: a.instruction })
     case 'attach-image':
-      return patchTask(s, a.taskId, { image: a.image })
+      // Empty string clears the staged shot (the snapshot button toggles off).
+      return patchTask(s, a.taskId, { image: a.image || undefined })
     case 'submit': {
       const t = s.tasks.find((x) => x.id === a.taskId)
       if (!t || t.phase !== 'compose' || !t.instruction.trim()) return s
