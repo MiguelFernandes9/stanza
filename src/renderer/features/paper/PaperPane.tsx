@@ -79,9 +79,15 @@ interface Props {
   /** Snapshot couldn't be captured (block off-screen / canvas error) — surface it. */
   onSnapshotError?: () => void
   onView: (view: PaneView) => void
+  /** The block tree is being reparsed after a compile (Workspace.loadBlocks in
+   *  flight). Gates the geometry recompute: with the PDF and the block tree
+   *  arriving on separate async pipelines, binning fresh spans against the old
+   *  PDF (or stale spans against the fresh PDF) produces wrong boxes — so hold
+   *  until both are fresh, then recompute + swap once. */
+  blocksReloading?: boolean
   /** Block overlays are (re)rendering for a freshly compiled PDF — lets the
-   *  toolbar pill stay "Compiling…" until the page un-dims (compile = LaTeX +
-   *  block render as one state). */
+   *  toolbar pill stay "Compiling…" until the new page swaps in (compile =
+   *  LaTeX + block render as one state). */
   onRenderingChange?: (rendering: boolean) => void
 }
 
@@ -239,11 +245,13 @@ export function PaperPane(props: Props): JSX.Element {
 
   // Geometry is fresh only when the last commit was for THIS pdf + these spans.
   const geometryFresh = pdf != null && geomForPdf.current === pdf && geomForSig.current === blocksSig
-  // Rendering = a freshly compiled PDF is still loading, or its block geometry is
-  // mid-recompute, so the held `displayPdf` + its overlays are still the previous
-  // version. Reported up so the toolbar pill stays "Compiling…" until the swap —
-  // the on-screen page is the OLD one until then, so green "Compiled" would lie.
-  const blocksRendering = pdfUrl != null && (loading || (pdf != null && !geometryFresh))
+  // Rendering = a freshly compiled PDF is still loading, the block tree is still
+  // reparsing, or the geometry is mid-recompute — so the held `displayPdf` + its
+  // overlays are still the previous version. Reported up so the toolbar pill stays
+  // "Compiling…" until the swap — the on-screen page is the OLD one until then, so
+  // green "Compiled" would lie.
+  const blocksRendering =
+    pdfUrl != null && (loading || props.blocksReloading === true || (pdf != null && !geometryFresh))
 
   // Surface the block-render state to the workspace so the compile pill stays
   // "Compiling…" until the new page swaps in, not just until LaTeX finishes.
@@ -255,15 +263,17 @@ export function PaperPane(props: Props): JSX.Element {
   // Block geometry: one synctex:forward per block, per-page boxes of its rects.
   // Assumes top-left-origin y from the backend — verify against the fixture.
   useEffect(() => {
-    // Wait until the freshly compiled PDF has loaded. `synctexForward` reads the
-    // on-disk synctex (always the LATEST compile), while the text/graphics layers
-    // come from the React `pdf`. While `loading`, `pdf` is still the previous doc,
-    // so computing now would map new-synctex regions onto the old page's glyphs —
-    // garbage boxes (visible after an accept, which changes the spans and fires
-    // this effect via `blocksSig` before the new PDF resolves). Skipping holds the
-    // OLD blockRects + displayPdf until the new PDF lands, then we recompute once
-    // against a consistent (pdf, synctex, spans) trio and swap atomically.
-    if (!pdf || loading) return
+    // Recompute only when the PDF, the on-disk synctex, and the spans are all from
+    // the SAME compile. `synctexForward` reads the on-disk synctex (always the
+    // LATEST compile); the text/graphics layers come from the React `pdf`; the
+    // spans come from `pageBlocks`. The PDF and the block tree arrive on separate
+    // async pipelines after a compile, so either can lag — binning fresh spans
+    // against the old PDF, or stale spans against the fresh PDF, both map mismatched
+    // regions onto the wrong page → garbage boxes (visible after an accept). Hold
+    // the OLD blockRects + displayPdf until BOTH are fresh (`!loading` =
+    // latest-compile PDF loaded; `!blocksReloading` = latest-compile spans parsed),
+    // then recompute once and swap atomically.
+    if (!pdf || loading || props.blocksReloading) return
     let alive = true
     const forward = (span: BlockSpan) => client.synctexForward(span).catch((): PdfRect[] => [])
     void Promise.all(
@@ -369,7 +379,7 @@ export function PaperPane(props: Props): JSX.Element {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pdf, blocksSig, loading])
+  }, [pdf, blocksSig, loading, props.blocksReloading])
 
   // A fresh compose task opens its bubble once (so it's editable); afterwards
   // the user may collapse it freely and it won't re-open.
