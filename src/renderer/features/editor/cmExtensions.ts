@@ -42,15 +42,11 @@ const stanzaTheme = EditorView.theme({
   '.cm-lint-marker-error': { content: 'none' }
 })
 
-/** Static extension set; per-instance pieces (updateListener, keymaps that
- *  close over component state) are appended by EditorPane.
- *
- *  Completion (Part C): the lib is turned fully on via `latexConfig` (commands,
- *  snippets, env auto-close, hover tooltips) and we add ONE `autocompletion`
- *  with an override that runs the lib's `latexCompletionSource` alongside our
- *  project-aware sources (file paths, `\ref` labels, `\cite` keys). The sources
- *  read the project context from `projectContextField`, which Workspace keeps
- *  fresh. Lint stays off — the compile-error gutter owns diagnostics. */
+/** Static extension set; per-instance pieces (updateListener, state-closing
+ *  keymaps) are appended by EditorPane. Completion: one `autocompletion`
+ *  override runs the lib's `latexCompletionSource` alongside our project-aware
+ *  sources (file paths, `\ref` labels, `\cite` keys), which read
+ *  `projectContextField` (Workspace keeps it fresh). See latexConfig. */
 export function baseExtensions(): Extension[] {
   return [
     lineNumbers(),
