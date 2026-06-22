@@ -101,8 +101,6 @@
   --select-edge: rgba(194, 92, 57, 0.55);
   --hover-fill:  rgba(33, 30, 25, 0.045);
   --hover-edge:  rgba(33, 30, 25, 0.12);
-  /* Dim over the page while it compiles / recomputes block geometry. */
-  --scrim:       rgba(33, 30, 25, 0.12);
 }
 
 /* ============================================================
@@ -139,6 +137,4 @@
   /* Hover wash flips to light ink on dark. */
   --hover-fill: rgba(244, 239, 230, 0.06);
   --hover-edge: rgba(244, 239, 230, 0.14);
-  /* A darker scrim reads as "dim" on the already-dark page. */
-  --scrim: rgba(8, 7, 5, 0.40);
 }

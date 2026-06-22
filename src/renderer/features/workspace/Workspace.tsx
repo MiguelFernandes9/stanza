@@ -337,8 +337,9 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
         setCompile((c) => ({ ...c, state: s === 'running' ? 'running' : s === 'ok' ? 'ok' : 'failed' }))
         if (s === 'ok') {
           // The block render starts now (PDF reload + re-bin) — mark it busy up
-          // front so the pill never flips to green "Compiled" over the dim page
-          // for a frame before PaperPane reports back (it clears this on settle).
+          // front so the pill never flips to green "Compiled" before PaperPane
+          // reports back. The page still shows the PREVIOUS PDF until the new one
+          // and its boxes swap in together, so green would be a lie until then.
           setBlocksRendering(true)
           // Bump the cache-busting nonce on EVERY successful compile, not only
           // the runCompile promise path — a compile triggered elsewhere must
