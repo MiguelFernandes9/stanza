@@ -94,6 +94,9 @@ describe('ClaudeService.runOp', () => {
       const addDir = call.args.indexOf('--add-dir')
       expect(call.args[addDir + 1]).toBe('/tmp/stanza-wt/abc')
     }
+    // The prime prompt must root Claude at the worktree (the only granted dir),
+    // not the user checkout — else span paths resolve outside the grant (denied).
+    expect(runner.calls[0]!.args.at(-1)).toContain('Project root: /tmp/stanza-wt/abc')
     // session recorded as primed in the worktree (so resume only happens there)
     expect(store.getProject('/proj').primedWorkdir).toBe('/tmp/stanza-wt/abc')
   })
@@ -302,5 +305,104 @@ describe('ClaudeService.runOp', () => {
     await service.runOp({ instruction: 'x', spans: [] }, () => {})
 
     expect(runner.calls[0]!.cmd).toBe('/mocks/claude-mock.sh')
+  })
+})
+
+describe('ClaudeService.runThreadTurn (persistent bubble)', () => {
+  test('first turn primes a FRESH session and returns its id; doc session untouched', async () => {
+    const runner = new MockRunner(() => claudeJson('hi'))
+    const service = new ClaudeService(runner, store, doc)
+
+    const res = await service.runThreadTurn(null, { instruction: 'make it formal', spans: [] }, () => {})
+
+    expect(runner.calls).toHaveLength(2)
+    const prime = runner.calls[0]!
+    expect(prime.args.slice(0, 2)).toEqual(['-p', '--session-id'])
+    expect(prime.args[2]).toMatch(UUID_RE)
+    expect(prime.args[7]).toContain('You are the editing engine inside Stanza')
+
+    const op = runner.calls[1]!
+    expect(op.args.slice(0, 3)).toEqual(['-p', '--resume', prime.args[2]])
+    expect(op.args.at(-1)).toContain('Instruction: make it formal')
+
+    expect(res.sessionId).toBe(prime.args[2]) // the thread's own session id
+    expect(res.note).toBe('hi')
+    // The thread session lives in the thread record, NOT ProjectRecord.sessionId.
+    expect(store.getProject('/proj').sessionId).toBeUndefined()
+  })
+
+  test('a given session id resumes only (no prime) — restart / later turns', async () => {
+    const runner = new MockRunner(() => claudeJson('again'))
+    const service = new ClaudeService(runner, store, doc)
+
+    const res = await service.runThreadTurn(
+      'tttttttt-tttt-tttt-tttt-tttttttttttt',
+      { instruction: 'shorter', spans: [] },
+      () => {},
+    )
+
+    expect(runner.calls).toHaveLength(1)
+    expect(runner.calls[0]!.args.slice(0, 3)).toEqual([
+      '-p',
+      '--resume',
+      'tttttttt-tttt-tttt-tttt-tttttttttttt',
+    ])
+    expect(res.sessionId).toBe('tttttttt-tttt-tttt-tttt-tttttttttttt')
+  })
+
+  test('a thread turn carries an attached snapshot (shot dir granted + referenced, then cleaned)', async () => {
+    let opArgs: string[] = []
+    const runner = new MockRunner((spec) => {
+      opArgs = spec.args
+      return claudeJson('ok')
+    })
+    const service = new ClaudeService(runner, store, doc)
+
+    await service.runThreadTurn(
+      'tttttttt-tttt-tttt-tttt-tttttttttttt',
+      { instruction: 'why is this off?', spans: [], imageDataUrl: 'data:image/png;base64,iVBORw0KGgo=' },
+      () => {},
+    )
+
+    // Same shot path as a doc op — proves the logic lives in the shared runResume,
+    // so a persistent bubble's snapshot button reaches Claude too.
+    const addDirs = opArgs.filter((_a, i) => opArgs[i - 1] === '--add-dir')
+    expect(addDirs).toHaveLength(2)
+    expect(addDirs[1]).toContain('stanza-shots')
+    const prompt = opArgs[opArgs.length - 1]!
+    const match = prompt.match(/(\S*stanza-shots\S*\.png)/)
+    expect(match).not.toBeNull()
+    expect(prompt).toContain('Read it')
+    expect(existsSync(match![1]!)).toBe(false) // cleaned up after the turn
+  })
+
+  test('emits priming → running → done', async () => {
+    const runner = new MockRunner(() => claudeJson('ok'))
+    const service = new ClaudeService(runner, store, doc)
+    const states: ClaudeStatus['state'][] = []
+
+    await service.runThreadTurn('s-s-s', { instruction: 'x', spans: [] }, (s) => states.push(s.state))
+
+    expect(states).toEqual(['priming', 'running', 'done'])
+  })
+
+  test('thread turns share the queue with doc ops (serialize on one tree)', async () => {
+    store.setProject('/proj', { sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', primedWorkdir: '/proj' })
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const runner = new MockRunner(async (_spec, call) => {
+      if (call === 0) await gate
+      return claudeJson(`r${call}`)
+    })
+    const service = new ClaudeService(runner, store, doc)
+
+    const op = service.runOp({ instruction: 'doc', spans: [] }, () => {})
+    const turn = service.runThreadTurn('s-s-s', { instruction: 'thread', spans: [] }, () => {})
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(runner.calls).toHaveLength(1) // thread turn waits behind the doc op
+
+    release()
+    await Promise.all([op, turn])
+    expect(runner.calls).toHaveLength(2)
   })
 })

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { CSSProperties, JSX } from 'react'
-import { ArrowUp, Camera, Check, CircleSlash, FileText, Maximize2, Plus, Sparkles, X } from 'lucide-react'
+import { ArrowUp, Camera, Check, CircleSlash, FileText, Maximize2, MessagesSquare, Plus, Sparkles, X } from 'lucide-react'
 import { BlockTag, Button, DiffHunk, IconButton, Kbd } from '@renderer/components'
 import type { BlockTagKind } from '@renderer/components'
 import { combinedSpanLabel, spanLabel } from '../paper/paperModel'
@@ -11,9 +11,10 @@ import { summarizeBlocks } from '@shared/blocks/changes'
 export const RAIL = 316
 export const RAIL_GAP = 22
 
-/** Shared style for the compose-row pill buttons ("+ blocks", "snapshot").
- *  `active` is the pill's on-state (adding mode / image attached). */
-const pillStyle = (active: boolean): CSSProperties => ({
+/** Shared style for the compose-row pill buttons ("+ blocks", "snapshot") and the
+ *  thread composer's snapshot pill. `active` is the pill's on-state (adding mode /
+ *  image attached). */
+export const pillStyle = (active: boolean): CSSProperties => ({
   display: 'inline-flex',
   alignItems: 'center',
   gap: 4,
@@ -47,6 +48,8 @@ interface Props {
   /** Non-destructive: fold the bubble back to its badge, leaving the task alive.
    *  The header X uses this for busy/review/noop. */
   onCollapse: () => void
+  /** "Keep chat": flip this compose draft into a persistent conversation bubble. */
+  onTogglePersistent: () => void
   onResolve: (accept: boolean) => void
   onOpenReview: () => void
   /** Capture the block as a PNG and attach it to this task's next Run. Absent for
@@ -89,6 +92,7 @@ export function TaskCard({
   onSubmit,
   onDismiss,
   onCollapse,
+  onTogglePersistent,
   onResolve,
   onOpenReview,
   onSnapshot,
@@ -330,6 +334,30 @@ export function TaskCard({
               </Button>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 6, paddingLeft: 1, flexWrap: 'wrap' }}>
+              {blocks.length > 0 && (
+              <button
+                type="button"
+                onClick={onTogglePersistent}
+                aria-pressed={task.persistent ? 'true' : 'false'}
+                title="Keep chat — make this block a persistent conversation that stays open"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  height: 20,
+                  padding: '0 8px',
+                  borderRadius: 'var(--radius-pill)',
+                  cursor: 'pointer',
+                  border: `1px ${task.persistent ? 'solid #6d5bd0' : 'dashed var(--line-ink)'}`,
+                  background: task.persistent ? 'rgba(109,91,208,0.12)' : 'transparent',
+                  color: task.persistent ? '#5a49b0' : 'var(--ink-500)',
+                  font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-sans)'
+                }}
+              >
+                <MessagesSquare size={11} /> Keep chat
+              </button>
+              )}
+              <span style={{ flexBasis: '100%', height: 0 }} />
               {adding ? (
                 <span style={{ font: 'var(--weight-medium) var(--text-2xs)/1.4 var(--font-sans)', color: 'var(--clay-600)' }}>
                   Click blocks in the page to add them ·

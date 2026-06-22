@@ -4,6 +4,8 @@ import type {
   ClaudeRequest,
   ClaudeResult,
   ClaudeStatus,
+  ClaudeTurnRequest,
+  ClaudeTurnResult,
   CommitInfo,
   CompileRequest,
   CompileResult,
@@ -27,7 +29,8 @@ import type {
   ReviewProposal,
   ReviewResolution,
   SettingsChanged,
-  SourceLocation
+  SourceLocation,
+  ThreadRecord
 } from '@shared/ipc'
 import type { BlockNode } from '@shared/blocks/types'
 
@@ -89,7 +92,14 @@ export const api = {
     invoke<SourceLocation | null>(IpcChannels.synctexInverse, p),
   synctexForward: (span: BlockSpan) => invoke<PdfRect[]>(IpcChannels.synctexForward, span),
   claudeRun: (req: ClaudeRequest) => invoke<ClaudeResult>(IpcChannels.claudeRun, req),
+  /** One turn of a persistent conversation bubble (its own session). */
+  claudeRunTurn: (req: ClaudeTurnRequest) =>
+    invoke<ClaudeTurnResult>(IpcChannels.claudeRunTurn, req),
   claudeHistory: () => invoke<OpRecord[]>(IpcChannels.claudeHistory),
+  /** Persistent bubbles for the open project, restored on workspace open. */
+  threadsList: () => invoke<ThreadRecord[]>(IpcChannels.threadsList),
+  /** Drop a persistent bubble's record (deleted, or its anchor block vanished). */
+  threadsDelete: (threadId: string) => invoke<void>(IpcChannels.threadsDelete, threadId),
   reviewResolve: (d: ReviewDecision) => invoke<ReviewResolution>(IpcChannels.reviewResolve, d),
   reviewList: () => invoke<ReviewProposal[]>(IpcChannels.reviewList),
   /** The marked (latexdiff) render of the complete edit — one item per changed

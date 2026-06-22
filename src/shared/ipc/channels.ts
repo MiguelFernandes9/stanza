@@ -17,8 +17,11 @@ export const IpcChannels = {
   synctexInverse: 'synctex:inverse',  // invoke InversePoint → SourceLocation | null
   synctexForward: 'synctex:forward',  // invoke BlockSpan → PdfRect[]
   claudeRun: 'claude:run',            // invoke ClaudeRequest → ClaudeResult
+  claudeRunTurn: 'claude:runTurn',    // invoke ClaudeTurnRequest → ClaudeTurnResult (persistent thread bubble)
   claudeStatus: 'claude:status',      // main→renderer event: ClaudeStatus
   claudeHistory: 'claude:history',    // invoke → OpRecord[] (chat pane, F9)
+  threadsList: 'threads:list',        // invoke → ThreadRecord[] (persistent bubbles, restored on open)
+  threadsDelete: 'threads:delete',    // invoke threadId → void (drop a persistent bubble's record)
   reviewProposal: 'review:proposal',  // main→renderer event: ReviewProposal
   reviewResolve: 'review:resolve',    // invoke ReviewDecision → ReviewResolution
   reviewList: 'review:list',          // invoke → ReviewProposal[] (pending op branches)

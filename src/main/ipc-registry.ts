@@ -7,6 +7,8 @@ import type {
   BlockSpan,
   ClaudeRequest,
   ClaudeResult,
+  ClaudeTurnRequest,
+  ClaudeTurnResult,
   CompileRequest,
   CompileStatus,
   DocumentInfo,
@@ -18,6 +20,9 @@ import type {
   PreviewRequest,
   RecentProject,
   ReviewDecision,
+  ReviewProposal,
+  ThreadRecord,
+  ThreadTurn,
   GlobalSettings,
   DocumentSettings,
   DocumentSettingsResult,
@@ -29,6 +34,7 @@ import { armSettleWatcher, watchSettled } from './infra/FileWatcher'
 import { DefaultProcessRunner } from './infra/ProcessRunner'
 import { GitClient } from './infra/GitClient'
 import { Store, GlobalSettingsStore } from './infra/Store'
+import { appendTurns, patchTurnByOpId, removeThread, upsertThread } from './threadStore'
 import { changedFilesInDiff } from './services/diffSpans'
 import { DocumentService } from './services/DocumentService'
 import { DocumentSession } from './session'
@@ -215,10 +221,25 @@ export function registerIpcHandlers(): void {
     return runClaudeOp(doc, event.sender, req)
   })
 
+  ipcMain.handle(IpcChannels.claudeRunTurn, (event, req: ClaudeTurnRequest) =>
+    runClaudeTurn(sessionFor(event), event.sender, req),
+  )
+
   ipcMain.handle(
     IpcChannels.claudeHistory,
     (event): OpRecord[] => store.getProject(sessionFor(event).info.root).ops ?? [],
   )
+
+  ipcMain.handle(
+    IpcChannels.threadsList,
+    (event): ThreadRecord[] => store.getProject(sessionFor(event).info.root).threads ?? [],
+  )
+
+  ipcMain.handle(IpcChannels.threadsDelete, (event, threadId: string) => {
+    const root = sessionFor(event).info.root
+    const threads = store.getProject(root).threads
+    if (threads) store.setProject(root, { threads: removeThread(threads, threadId) })
+  })
 
   ipcMain.handle(IpcChannels.reviewResolve, async (event, decision: ReviewDecision) => {
     const doc = sessionFor(event)
@@ -228,7 +249,10 @@ export function registerIpcHandlers(): void {
     const resolution = await doc.runMainTreeExclusive(() => doc.review.resolve(decision))
     doc.diffPreview.invalidate(decision.opId) // free the op's cached block previews
     if (resolution.committed || !decision.accept) {
+      // An op belongs to EITHER the doc history (ops) or a persistent thread —
+      // patch both; the non-owner is a no-op.
       patchOpRecord(doc.info.root, decision.opId, { accepted: decision.accept })
+      patchThreadTurnAccepted(doc.info.root, decision.opId, decision.accept)
     }
     // A committed accept merges Claude's branch into the user's tree — Claude may
     // have added sections/*.tex, dirs, or renamed files. Re-derive THIS window's
@@ -416,9 +440,10 @@ function bindSession(wc: WebContents, info: DocumentInfo): void {
       info.root,
       FILE_WATCH_SETTLE_MS,
       () => {
-        // Skip the app's OWN op-driven churn (the capture branch-dance rewrites
-        // then reverts the edited .tex) — firing here would loadBlocks and blink
-        // the proposal bubble. Genuine external edits (no op in flight) refresh.
+        // Skip the app's OWN op-driven churn (worktree edits + accept/wip-commit)
+        // — firing here would loadBlocks and blink the proposal bubble. Genuine
+        // external edits (no op in flight) refresh. (opActive covers thread turns
+        // too — they run through the same beginOp/endOp.)
         if (!wc.isDestroyed() && !sessions.get(wc.id)?.opActive) wc.send(IpcChannels.documentFilesChanged)
       },
       sidebarWatchIgnore(outputPdfRel(info)),
@@ -514,6 +539,97 @@ async function runClaudeOp(
   }
 }
 
+/** A turn of a persistent conversation bubble — the SAME worktree pipeline as
+ *  runClaudeOp, but on the THREAD's isolated session and persisted to `threads`
+ *  (not `ops`), so threads stay out of the ⌘J doc history and their empty-span
+ *  turns never lock the doc session. */
+async function runClaudeTurn(
+  doc: DocumentSession,
+  wc: WebContents,
+  req: ClaudeTurnRequest,
+): Promise<ClaudeTurnResult> {
+  const claudeReq: ClaudeRequest = { instruction: req.instruction, spans: req.spans, imageDataUrl: req.imageDataUrl }
+  doc.review.assertSpansFree(req.spans)
+  doc.beginOp()
+  try {
+    return await doc.runOpExclusive(async () => {
+      await doc.runMainTreeExclusive(() => doc.review.prepare())
+      await doc.ensureWorktree()
+      await doc.review.syncWorktree(doc.worktreeDir)
+
+      // Resume the thread's session only if it was primed in THIS worktree.
+      // Otherwise re-prime a fresh one: a session's sandbox + baked root are
+      // pinned to its prime dir, so a relocated worktree — or a pre-fix session
+      // primed at the user checkout (no primedWorkdir) — can't be resumed and
+      // would fail "Permission denied on read". Mirrors ClaudeService's doc-session
+      // self-heal (ensureSession re-primes on primedWorkdir mismatch).
+      // The Store record is the authority for the resume id (not the renderer's
+      // req.sessionId, which may be stale after a heal).
+      const rec = (store.getProject(doc.info.root).threads ?? []).find((t) => t.threadId === req.threadId)
+      const resumeId = rec?.primedWorkdir === doc.worktreeDir ? (rec.sessionId ?? null) : null
+
+      const watcher = armSettleWatcher(doc.worktreeDir, { quietMs: 400, capMs: 3000 })
+      let turn: { opId: string; note: string; sessionId: string }
+      try {
+        turn = await doc.claude.runThreadTurn(resumeId, claudeReq, (status) =>
+          sendTo(wc, IpcChannels.claudeStatus, status),
+        )
+        await watcher.settled()
+      } finally {
+        watcher.dispose()
+      }
+
+      // A fresh prime (first turn OR self-heal) yields a new session id — persist
+      // it AND the worktree it was primed in BEFORE capture, so a capture failure
+      // can't orphan it (the next turn must resume the same one). A resumed turn
+      // already has both persisted, so skip.
+      if (resumeId == null) {
+        const ts = new Date().toISOString()
+        const threads = store.getProject(doc.info.root).threads ?? []
+        store.setProject(doc.info.root, {
+          threads: upsertThread(threads, {
+            threadId: req.threadId,
+            sessionId: turn.sessionId,
+            primedWorkdir: doc.worktreeDir,
+            blockIds: req.blockIds,
+            ts,
+          }),
+        })
+      }
+      const proposal = await doc.review.captureWorktree(doc.worktreeDir, turn.opId, req.instruction, req.spans)
+      if (proposal) doc.diffPreview.prime(proposal.opId, proposal.branch, proposal.blocks)
+      persistThreadTurn(doc.info.root, req, turn, proposal)
+      return { opId: turn.opId, note: turn.note, sessionId: turn.sessionId, proposal }
+    })
+  } finally {
+    setTimeout(() => doc.endOp(), FILE_WATCH_SETTLE_MS + 300)
+  }
+}
+
+/** Append a user+agent turn to a thread record, refreshing its session id and
+ *  block anchor. An edit turn (proposal present) tags the agent turn with its
+ *  opId so accept/reject can find it later. */
+function persistThreadTurn(
+  root: string,
+  req: ClaudeTurnRequest,
+  result: { opId: string; note: string; sessionId: string },
+  proposal: ReviewProposal | null,
+): void {
+  const ts = new Date().toISOString()
+  const turns: ThreadTurn[] = [
+    { role: 'user', text: req.instruction, ts },
+    { role: 'agent', text: result.note, ts, ...(proposal ? { opId: result.opId, accepted: null } : {}) },
+  ]
+  const existing = store.getProject(root).threads ?? []
+  const withMeta = upsertThread(existing, {
+    threadId: req.threadId,
+    sessionId: result.sessionId,
+    blockIds: req.blockIds,
+    ts,
+  })
+  store.setProject(root, { threads: appendTurns(withMeta, req.threadId, turns) })
+}
+
 /** Run the priming pipeline with prime:status events and prime:cancel
  *  support. Null when cancelled — callers treat it as "not opened". Events go
  *  to `emitTo` only (per-document), or nowhere for a silent spawn. */
@@ -564,6 +680,14 @@ function patchOpRecord(root: string, opId: string, patch: Partial<OpRecord>): vo
     op.opId === opId ? { ...op, ...patch } : op,
   )
   store.setProject(root, { ops })
+}
+
+/** Record a thread edit turn's accept/reject. No-op when the op isn't a thread
+ *  turn (it's a doc op instead) — patchTurnByOpId leaves non-owners untouched. */
+function patchThreadTurnAccepted(root: string, opId: string, accepted: boolean): void {
+  const threads = store.getProject(root).threads
+  if (!threads) return
+  store.setProject(root, { threads: patchTurnByOpId(threads, opId, { accepted }) })
 }
 
 /** Post-op result: fresh listing + a new DocumentInfo only when the op
