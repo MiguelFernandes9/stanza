@@ -8,6 +8,7 @@ import type { BlockNode } from '@shared/blocks/types'
 import { usePdfDocument } from '../pdf/usePdfDocument'
 import { PdfPageStack } from '../pdf/PdfPageStack'
 import type { PageGeometry } from '../pdf/PdfPageStack'
+import type { PDFDocumentProxy } from '../pdf/pdfjsSetup'
 import { ReviewOverlay } from '../review/ReviewOverlay'
 import { blockLabel, TaskCard, tagKind } from '../tasks/TaskCard'
 import { ThreadCard } from '../tasks/ThreadCard'
@@ -26,7 +27,7 @@ import { pageTextRows } from './pdfTextRows'
 import type { TextRow } from './pdfTextRows'
 import { pageGraphics } from './pdfGraphics'
 import type { GraphicBox } from './pdfGraphics'
-import { BADGE, PAD, RAIL, RAIL_GUTTER, connectorPath, paneLayout, pdfScrollTop, phaseTone, railBubbleTop, stackTops } from './paperPaneLayout'
+import { BADGE, PAD, RAIL, RAIL_GUTTER, connectorPath, pageBusy, paneLayout, pdfScrollTop, phaseTone, railBubbleTop, stackTops } from './paperPaneLayout'
 
 const FALLBACK_PAGE_WIDTH = 564
 
@@ -78,6 +79,10 @@ interface Props {
   /** Snapshot couldn't be captured (block off-screen / canvas error) — surface it. */
   onSnapshotError?: () => void
   onView: (view: PaneView) => void
+  /** Block overlays are (re)rendering for a freshly compiled PDF — lets the
+   *  toolbar pill stay "Compiling…" until the page un-dims (compile = LaTeX +
+   *  block render as one state). */
+  onRenderingChange?: (rendering: boolean) => void
 }
 
 /** Preview pane (v0.3 model): the compiled page is centered in the scroll
@@ -120,8 +125,18 @@ export function PaperPane(props: Props): JSX.Element {
   // Bubbles open on demand; a fresh compose task auto-opens exactly once.
   const [openIds, setOpenIds] = useState<number[]>([])
   const autoOpened = useRef<Set<number>>(new Set())
+  // Identity of the (pdf, blocksSig) that `blockRects` was last computed for, so a
+  // render can tell — synchronously, no extra state — whether the geometry on
+  // screen is fresh for the current PDF or mid-recompute (drives the dim scrim).
+  const geomForPdf = useRef<unknown>(null)
+  const geomForSig = useRef<string>('')
 
-  const { pdf } = usePdfDocument(pdfUrl)
+  const { pdf, loading } = usePdfDocument(pdfUrl)
+  // The PDF actually shown. It lags `pdf` (the freshly loaded doc): we keep
+  // displaying the previous page until the new doc's block geometry is computed,
+  // then swap the page AND its overlays in together — so a recompile never flashes
+  // the new PDF before its boxes. The dim's fade-out masks the new doc's raster.
+  const [displayPdf, setDisplayPdf] = useState<PDFDocumentProxy | null>(null)
 
   const byId = new Map(pageBlocks.map((b) => [b.id, b]))
   const blocksOf = (blockIds: string[]): PageBlock[] =>
@@ -214,6 +229,22 @@ export function PaperPane(props: Props): JSX.Element {
     .map((b) => `${b.id}:${b.span.file}:${b.span.startLine}:${b.span.endLine}`)
     .join('|')
 
+  // Geometry is fresh only when the last commit was for THIS pdf + these spans.
+  const geometryFresh = pdf != null && geomForPdf.current === pdf && geomForSig.current === blocksSig
+  // Rendering = a freshly compiled PDF is still loading, or its block geometry is
+  // mid-recompute. The page is "busy" while compiling OR rendering: dim it and
+  // skip the (mispositioned) overlays. Reported up so the toolbar pill treats the
+  // block render as part of "compiling" (no green "Compiled" over a dim page).
+  const blocksRendering = pdfUrl != null && (loading || (pdf != null && !geometryFresh))
+  const blocksBusy = pageBusy(props.compile.state, blocksRendering)
+
+  // Surface the block-render state to the workspace so the compile pill stays
+  // "Compiling…" until the page un-dims, not just until LaTeX finishes.
+  const onRenderingChange = props.onRenderingChange
+  useEffect(() => {
+    onRenderingChange?.(blocksRendering)
+  }, [blocksRendering, onRenderingChange])
+
   // Block geometry: one synctex:forward per block, per-page boxes of its rects.
   // Assumes top-left-origin y from the backend — verify against the fixture.
   useEffect(() => {
@@ -299,6 +330,13 @@ export function PaperPane(props: Props): JSX.Element {
       setBlockRects(result.boxesById)
       setContentTops(result.contentTopByPage)
       columnsByPage.current = result.columnsByPage // Phase 2 (two-rail bubbles) will consume this
+      // Mark the geometry now on screen as fresh for this pdf + these spans (set
+      // before React re-renders, so geometryFresh reads true without a flicker).
+      geomForPdf.current = pdf
+      geomForSig.current = blocksSig
+      // Reveal the new PDF now that its boxes are ready — page + overlays swap in
+      // together, never the page first.
+      setDisplayPdf(pdf)
     })
     return () => {
       alive = false
@@ -417,6 +455,10 @@ export function PaperPane(props: Props): JSX.Element {
   }
 
   const overlaysFor = (pageNo: number): JSX.Element[] => {
+    // Compiling / recomputing → block boxes are stale. Drop every overlay (hit-
+    // areas, hover preview, washes, flash); the dim scrim covers the page and the
+    // active-task badges/bubbles (rail overlay) stay visible above it.
+    if (blocksBusy) return []
     const out: JSX.Element[] = []
     for (const b of pageBlocks) {
       const boxes = blockRects.get(b.id)
@@ -548,7 +590,7 @@ export function PaperPane(props: Props): JSX.Element {
         onPointerDown={onMarqueeDown}
         style={{ flex: 1, overflow: 'auto', scrollbarGutter: 'stable', background: 'var(--surface-canvas)' }}
       >
-        {pdf ? (
+        {displayPdf ? (
           // Centre the PAGE, not the page+rail track. A flex row (justify-content:
           // safe center) holds one item whose width is EXACTLY the page; the rail,
           // badges and connector svg are absolute children that hang off the page's
@@ -566,7 +608,7 @@ export function PaperPane(props: Props): JSX.Element {
             <div data-testid="paper-page" style={{ position: 'relative', width: pageWidth, height: contentH, flex: '0 0 auto' }}>
               <div style={{ position: 'absolute', left: 0, top: PAD, width: pageWidth }}>
                 <PdfPageStack
-                  pdf={pdf}
+                  pdf={displayPdf}
                   scale={zoom}
                   scrollRef={scrollRef}
                   onGeometry={(g, n) => {
@@ -580,6 +622,24 @@ export function PaperPane(props: Props): JSX.Element {
                 />
               </div>
             </div>
+
+            {/* Dim over the page while it compiles / recomputes block geometry.
+                Sits above the page (a sibling after it) but before the rail
+                overlay in DOM order, so badges/bubbles/connectors stay readable
+                above the dim. pointer-events block selecting stale boxes. The
+                spinner/wheel stays reserved for the Claude-is-thinking state. */}
+            <div
+              data-testid="recompute-dim"
+              aria-hidden
+              style={{
+                position: 'absolute',
+                inset: 0,
+                background: 'var(--scrim)',
+                opacity: blocksBusy ? 1 : 0,
+                pointerEvents: blocksBusy ? 'auto' : 'none',
+                transition: 'opacity var(--dur-base) var(--ease-out)'
+              }}
+            />
 
             {/* Rail + connector OVERLAY — absolute and clipped to the PANE (not
                 the page). The badges/bubbles/svg hang off the page's right edge

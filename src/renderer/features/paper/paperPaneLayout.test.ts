@@ -3,6 +3,7 @@ import {
   connectorPath,
   GAPX,
   PAD,
+  pageBusy,
   paneLayout,
   pdfScrollTop,
   phaseTone,
@@ -10,6 +11,28 @@ import {
   railBubbleTop,
   stackTops
 } from './paperPaneLayout'
+
+describe('pageBusy — compiling OR rendering blocks (dim the page, hold the pill)', () => {
+  it('is busy while a compile is running', () => {
+    expect(pageBusy('running', false)).toBe(true)
+  })
+
+  it('stays busy after LaTeX reports ok while the blocks are still rendering', () => {
+    expect(pageBusy('ok', true)).toBe(true)
+  })
+
+  it('is idle once compile is ok and the blocks have rendered', () => {
+    expect(pageBusy('ok', false)).toBe(false)
+  })
+
+  it('keeps the last good page on a failed compile (not running, nothing rendering)', () => {
+    expect(pageBusy('failed', false)).toBe(false)
+  })
+
+  it('is idle at rest before any compile', () => {
+    expect(pageBusy('idle', false)).toBe(false)
+  })
+})
 
 describe('pdfScrollTop — scroll offset that lands a box ~a third down the pane', () => {
   const geo = { width: 500, height: 800, gap: 20 } // slot = 820
