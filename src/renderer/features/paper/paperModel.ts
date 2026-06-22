@@ -165,17 +165,25 @@ function gapBelow(box: PdfRect, neighbors: PdfRect[]): number {
   return gap
 }
 
+/** Hairline gap (PDF pt) left between a padded box and its nearest neighbour so two
+ *  adjacent selected blocks render as DISTINCT units. A whole-section selection draws
+ *  one wash box per member (heading + each paragraph); contiguous members are only a
+ *  few pt apart, so without this gap their same-tone fills tile into one continuous
+ *  mass that reads as a single giant block (a section's heading + first paragraph). */
+const SELECT_BOX_GAP = 3
+
 /** Grow a box by `pad` on every side (PDF pt, scaled with the page at render)
  *  so the bounds frame the text instead of cutting into glyphs (BUG-13) — but
  *  never let the VERTICAL pad cross into a neighbouring block: each side is
- *  capped at half the gap to the nearest neighbour above/below, so two
- *  adjacent padded boxes meet without overlapping (a float placed flush under
- *  a paragraph no longer covers its last line, BUG-19). Horizontal pad is
- *  always full. The origin is clamped to 0 so a block near the page edge
- *  doesn't pad off-canvas. Pass `[]` for the original symmetric pad. */
+ *  capped so a SELECT_BOX_GAP hairline remains to the nearest neighbour
+ *  above/below, so two adjacent padded boxes stay visually distinct and never
+ *  overlap (a float flush under a paragraph no longer covers its last line, and a
+ *  section's member wash boxes don't merge into one mass — BUG-19). Horizontal pad
+ *  is always full. The origin is clamped to 0 so a block near the page edge doesn't
+ *  pad off-canvas. Pass `[]` for the original symmetric pad. */
 export function padBoxClamped(box: PdfRect, pad: number, neighbors: PdfRect[]): PdfRect {
-  const topPad = Math.min(pad, gapAbove(box, neighbors) / 2)
-  const botPad = Math.min(pad, gapBelow(box, neighbors) / 2)
+  const topPad = Math.min(pad, Math.max(0, (gapAbove(box, neighbors) - SELECT_BOX_GAP) / 2))
+  const botPad = Math.min(pad, Math.max(0, (gapBelow(box, neighbors) - SELECT_BOX_GAP) / 2))
   return {
     page: box.page,
     x: Math.max(0, box.x - pad),

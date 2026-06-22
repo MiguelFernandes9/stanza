@@ -936,16 +936,18 @@ describe('padBoxClamped — breathing room without crossing neighbors (BUG-13/19
     })
   })
 
-  it('clamps vertical pad so adjacent padded boxes meet but never overlap (BUG-19)', () => {
-    // A sits flush above B with only a 4pt gap (< 2·pad=10) — the float case.
+  it('clamps vertical pad so adjacent padded boxes keep a hairline gap, never overlap (BUG-19)', () => {
+    // A sits flush above B with only a 4pt gap (< 2·pad=10) — the float case, and the
+    // section heading-above-first-paragraph case. The pad leaves a SELECT_BOX_GAP (3pt)
+    // hairline between them so a multi-block selection's members don't tile into one mass.
     const A = { page: 1, x: 72, y: 80, width: 100, height: 16 } // bottom 96
     const B = { page: 1, x: 72, y: 100, width: 100, height: 40 } // top 100, gap 4
     const pa = padBoxClamped(A, 5, [B])
     const pb = padBoxClamped(B, 5, [A])
-    // top pad capped at gap/2 = 2; bottom (no neighbor below) keeps full pad
-    expect(pb).toEqual({ page: 1, x: 67, y: 98, width: 110, height: 47 })
-    // the two padded boxes touch at 98, they do not overlap
-    expect(pa.y + pa.height).toBeLessThanOrEqual(pb.y)
+    // top pad capped so a 3pt gap remains; bottom (no neighbor below) keeps full pad
+    expect(pb).toEqual({ page: 1, x: 67, y: 99.5, width: 110, height: 45.5 })
+    // a >=3pt gap remains between them — distinct, never overlapping
+    expect(pb.y - (pa.y + pa.height)).toBeCloseTo(3)
   })
 
   it('keeps full pad against far, off-page, or side-by-side neighbors', () => {
