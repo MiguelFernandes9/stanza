@@ -3,6 +3,7 @@ import {
   connectorPath,
   GAPX,
   PAD,
+  pageBusy,
   paneLayout,
   pdfScrollTop,
   phaseTone,
@@ -10,6 +11,32 @@ import {
   railBubbleTop,
   stackTops
 } from './paperPaneLayout'
+
+describe('pageBusy — when block overlays are stale (dim the page)', () => {
+  it('is busy while a compile is running', () => {
+    expect(pageBusy('running', false, true)).toBe(true)
+  })
+
+  it('is busy while the next PDF is still loading, even after compile reports ok', () => {
+    expect(pageBusy('ok', true, true)).toBe(true)
+  })
+
+  it('is busy while geometry is mid-recompute (loaded PDF, stale boxes)', () => {
+    expect(pageBusy('ok', false, false)).toBe(true)
+  })
+
+  it('is idle once compile is ok, the PDF is loaded, and geometry is fresh', () => {
+    expect(pageBusy('ok', false, true)).toBe(false)
+  })
+
+  it('keeps the last good page on a failed compile (not running, geometry fresh)', () => {
+    expect(pageBusy('failed', false, true)).toBe(false)
+  })
+
+  it('is idle at rest before any compile (geometry fresh)', () => {
+    expect(pageBusy('idle', false, true)).toBe(false)
+  })
+})
 
 describe('pdfScrollTop — scroll offset that lands a box ~a third down the pane', () => {
   const geo = { width: 500, height: 800, gap: 20 } // slot = 820

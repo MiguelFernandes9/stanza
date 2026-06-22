@@ -25,7 +25,7 @@ import { pageTextRows } from './pdfTextRows'
 import type { TextRow } from './pdfTextRows'
 import { pageGraphics } from './pdfGraphics'
 import type { GraphicBox } from './pdfGraphics'
-import { BADGE, PAD, RAIL, RAIL_GUTTER, connectorPath, paneLayout, pdfScrollTop, phaseTone, railBubbleTop, stackTops } from './paperPaneLayout'
+import { BADGE, PAD, RAIL, RAIL_GUTTER, connectorPath, pageBusy, paneLayout, pdfScrollTop, phaseTone, railBubbleTop, stackTops } from './paperPaneLayout'
 
 const FALLBACK_PAGE_WIDTH = 564
 
@@ -114,8 +114,13 @@ export function PaperPane(props: Props): JSX.Element {
   // Bubbles open on demand; a fresh compose task auto-opens exactly once.
   const [openIds, setOpenIds] = useState<number[]>([])
   const autoOpened = useRef<Set<number>>(new Set())
+  // Identity of the (pdf, blocksSig) that `blockRects` was last computed for, so a
+  // render can tell — synchronously, no extra state — whether the geometry on
+  // screen is fresh for the current PDF or mid-recompute (drives the dim scrim).
+  const geomForPdf = useRef<unknown>(null)
+  const geomForSig = useRef<string>('')
 
-  const { pdf } = usePdfDocument(pdfUrl)
+  const { pdf, loading } = usePdfDocument(pdfUrl)
 
   const byId = new Map(pageBlocks.map((b) => [b.id, b]))
   const blocksOf = (blockIds: string[]): PageBlock[] =>
@@ -208,6 +213,12 @@ export function PaperPane(props: Props): JSX.Element {
     .map((b) => `${b.id}:${b.span.file}:${b.span.startLine}:${b.span.endLine}`)
     .join('|')
 
+  // Geometry is fresh only when the last commit was for THIS pdf + these spans.
+  // While compiling, the next PDF is loading, or this is stale, the page is
+  // "busy": dim it and skip the (mispositioned) overlays until geometry settles.
+  const geometryFresh = pdf != null && geomForPdf.current === pdf && geomForSig.current === blocksSig
+  const blocksBusy = pageBusy(props.compile.state, loading, geometryFresh)
+
   // Block geometry: one synctex:forward per block, per-page boxes of its rects.
   // Assumes top-left-origin y from the backend — verify against the fixture.
   useEffect(() => {
@@ -293,6 +304,10 @@ export function PaperPane(props: Props): JSX.Element {
       setBlockRects(result.boxesById)
       setContentTops(result.contentTopByPage)
       columnsByPage.current = result.columnsByPage // Phase 2 (two-rail bubbles) will consume this
+      // Mark the geometry now on screen as fresh for this pdf + these spans (set
+      // before React re-renders, so geometryFresh reads true without a flicker).
+      geomForPdf.current = pdf
+      geomForSig.current = blocksSig
     })
     return () => {
       alive = false
@@ -411,6 +426,10 @@ export function PaperPane(props: Props): JSX.Element {
   }
 
   const overlaysFor = (pageNo: number): JSX.Element[] => {
+    // Compiling / recomputing → block boxes are stale. Drop every overlay (hit-
+    // areas, hover preview, washes, flash); the dim scrim covers the page and the
+    // active-task badges/bubbles (rail overlay) stay visible above it.
+    if (blocksBusy) return []
     const out: JSX.Element[] = []
     for (const b of pageBlocks) {
       const boxes = blockRects.get(b.id)
@@ -566,6 +585,24 @@ export function PaperPane(props: Props): JSX.Element {
                 />
               </div>
             </div>
+
+            {/* Dim over the page while it compiles / recomputes block geometry.
+                Sits above the page (a sibling after it) but before the rail
+                overlay in DOM order, so badges/bubbles/connectors stay readable
+                above the dim. pointer-events block selecting stale boxes. The
+                spinner/wheel stays reserved for the Claude-is-thinking state. */}
+            <div
+              data-testid="recompute-dim"
+              aria-hidden
+              style={{
+                position: 'absolute',
+                inset: 0,
+                background: 'var(--scrim)',
+                opacity: blocksBusy ? 1 : 0,
+                pointerEvents: blocksBusy ? 'auto' : 'none',
+                transition: 'opacity var(--dur-base) var(--ease-out)'
+              }}
+            />
 
             {/* Rail + connector OVERLAY — absolute and clipped to the PANE (not
                 the page). The badges/bubbles/svg hang off the page's right edge

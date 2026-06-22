@@ -1,4 +1,5 @@
 import type { TaskPhase } from '../tasks/taskStore'
+import type { CompileState } from '@renderer/components'
 
 /** v0.3 pane geometry (pure). CSS centres the PAGE in the scroll container; the
  *  right rail hangs off the page's right edge as an absolute overlay (every task
@@ -19,6 +20,16 @@ export const RAIL_GUTTER = 24
 export const CARD_GAP = 14
 /** Badge diameter; its left edge sits at pageRightX − BADGE/2. */
 export const BADGE = 28
+
+/** The page is "busy" — block overlays would be stale — when a compile is
+ *  running, the next PDF hasn't loaded yet, or block geometry is mid-recompute
+ *  (`geometryFresh` false). One signal for every recompute cause (⌘R/⌘S/accept/
+ *  file-change), so PaperPane dims the page and skips overlays without per-trigger
+ *  branching. A finished-but-failed compile keeps the last good page: state isn't
+ *  'running', the PDF didn't change, geometry stays fresh → not busy. */
+export function pageBusy(compileState: CompileState, loading: boolean, geometryFresh: boolean): boolean {
+  return compileState === 'running' || loading || !geometryFresh
+}
 
 export interface PaneLayout {
   /** Page's right edge, measured from the page's own left (x = 0). The page is
