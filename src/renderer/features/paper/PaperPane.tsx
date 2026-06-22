@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { JSX } from 'react'
-import { Check, CircleSlash, PenLine, Sparkles } from 'lucide-react'
+import { Check, CircleSlash, MessagesSquare, PenLine, Sparkles } from 'lucide-react'
 import { client } from '@renderer/lib/client'
 import type { CompileState } from '@renderer/components'
 import type { BlockSpan, PdfRect } from '@shared/ipc'
@@ -10,6 +10,7 @@ import { PdfPageStack } from '../pdf/PdfPageStack'
 import type { PageGeometry } from '../pdf/PdfPageStack'
 import { ReviewOverlay } from '../review/ReviewOverlay'
 import { blockLabel, TaskCard, tagKind } from '../tasks/TaskCard'
+import { ThreadCard } from '../tasks/ThreadCard'
 import { isWholeDocTask } from '../tasks/taskStore'
 import type { PaneView, TaskPhase, TaskState } from '../tasks/taskStore'
 import { BlockOverlay } from './BlockOverlay'
@@ -67,6 +68,15 @@ interface Props {
   onSubmitTask: (taskId: number) => void
   onDismissTask: (taskId: number) => void
   onResolveTask: (taskId: number, accept: boolean) => void
+  /** Persistent bubbles ("Keep chat"): toggle on a draft, send a follow-up
+   *  turn, or delete the whole thread. */
+  onTogglePersistent: (taskId: number) => void
+  onSubmitThreadTurn: (taskId: number, text: string) => void
+  onDeleteThread: (taskId: number) => void
+  /** Snapshot the task's first block from the rendered canvas → attach the PNG. */
+  onAttachImage: (taskId: number, image: string) => void
+  /** Snapshot couldn't be captured (block off-screen / canvas error) — surface it. */
+  onSnapshotError?: () => void
   onView: (view: PaneView) => void
 }
 
@@ -116,6 +126,46 @@ export function PaperPane(props: Props): JSX.Element {
   const byId = new Map(pageBlocks.map((b) => [b.id, b]))
   const blocksOf = (blockIds: string[]): PageBlock[] =>
     blockIds.map((id) => byId.get(id)).filter((b): b is PageBlock => b != null)
+
+  // F2: crop the task's first block out of its rendered page canvas → PNG data
+  // URL. Block rects are PDF pt; the overlay scales them by zoom, and the canvas
+  // backing store is `k`× the CSS size (DPR, capped at 2) — so backing px =
+  // pt·zoom·k. Returns null when it can't capture: geometry not ready, or the
+  // page isn't currently rasterized (scrolled off-screen → PdfPageStack evicts
+  // the canvas). captureBlock turns a null/throw into user feedback (BUG review C1/C2).
+  const cropBlockImage = (taskId: number): string | null => {
+    const task = state.tasks.find((t) => t.id === taskId)
+    const rect = task?.blockIds[0] ? blockRects.get(task.blockIds[0])?.[0] : undefined
+    if (!rect) return null
+    const canvas = scrollRef.current?.querySelector<HTMLCanvasElement>(`[data-page="${rect.page}"] canvas`)
+    const cssW = canvas ? parseFloat(canvas.style.width) || canvas.clientWidth : 0
+    if (!canvas || !cssW) return null
+    const k = canvas.width / cssW
+    const pad = 6
+    const sx = Math.max(0, (rect.x * zoom - pad) * k)
+    const sy = Math.max(0, (rect.y * zoom - pad) * k)
+    const sw = Math.min(canvas.width - sx, (rect.width * zoom + pad * 2) * k)
+    const sh = Math.min(canvas.height - sy, (rect.height * zoom + pad * 2) * k)
+    if (sw <= 0 || sh <= 0) return null
+    const crop = document.createElement('canvas')
+    crop.width = Math.round(sw)
+    crop.height = Math.round(sh)
+    const ctx = crop.getContext('2d')
+    if (!ctx) return null
+    ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, crop.width, crop.height)
+    return crop.toDataURL('image/png')
+  }
+
+  const captureBlock = (taskId: number): void => {
+    let image: string | null = null
+    try {
+      image = cropBlockImage(taskId)
+    } catch {
+      image = null // toDataURL/drawImage can throw (e.g. OOM on a huge crop) — treat as a failed capture
+    }
+    if (image) props.onAttachImage(taskId, image)
+    else props.onSnapshotError?.()
+  }
 
   const marks: Record<string, BlockMark> = {}
   for (const t of state.tasks)
@@ -203,7 +253,10 @@ export function PaperPane(props: Props): JSX.Element {
       // first (M2-6, BUG-30); a region's box runs to the next region's top, so a
       // dropped last line is included and a figure covers its image + caption.
       const rectsById = new Map(perBlock.map(({ b, rects }) => [b.id, rects]))
-      const bin = binContentToBlocks(rectsById, rowsByPage, graphicsByPage)
+      // `*` floats (table*/figure*) are full-width — one 'full' box, never split into
+      // per-cell l/r boxes by their narrow constituent synctex rects.
+      const fullWidthIds = new Set(pageBlocks.filter((b) => b.envName?.endsWith('*')).map((b) => b.id))
+      const bin = binContentToBlocks(rectsById, rowsByPage, graphicsByPage, undefined, fullWidthIds)
       // Galley collision: a unit inside ≥2 blocks' regions (a list's \begin maps onto
       // a figure's caption) can't be attributed by tightest-span geometry. Resolve
       // each authoritatively via the synctex BACKWARD map — the rendered point → its
@@ -239,7 +292,7 @@ export function PaperPane(props: Props): JSX.Element {
           })
         )
         if (!alive) return
-        if (forced.size) result = binContentToBlocks(rectsById, rowsByPage, graphicsByPage, forced)
+        if (forced.size) result = binContentToBlocks(rectsById, rowsByPage, graphicsByPage, forced, fullWidthIds)
       }
       // One box per block from its rendered ink; a section's box is its heading
       // line, selection expands to its members via expandIds (selection layer).
@@ -325,6 +378,27 @@ export function PaperPane(props: Props): JSX.Element {
     )
     setTops((prev) => (JSON.stringify(prev) === JSON.stringify(stacked) ? prev : stacked))
   })
+
+  // F5: when a bubble opens, scroll it fully into horizontal view. The rail hangs
+  // off the page's right edge and is otherwise reachable only by manual scroll
+  // (BUG-46). Horizontal ONLY — the flash/outline effects own scrollTop; nudging
+  // it here reintroduced the slide jitter (M3-2). Each id is revealed once per
+  // open session (pruned on close, so reopening re-reveals); wait for tops[id] so
+  // the bubble is positioned before we measure it.
+  const revealedRef = useRef<Set<number>>(new Set())
+  useEffect(() => {
+    for (const id of [...revealedRef.current]) if (!openIds.includes(id)) revealedRef.current.delete(id)
+    const el = scrollRef.current
+    if (!el) return
+    for (const id of openIds) {
+      if (revealedRef.current.has(id) || tops[id] == null) continue
+      const bubble = cardEls.current[id]?.closest('[data-testid="rail-bubble"]') as HTMLElement | null
+      if (!bubble) continue
+      revealedRef.current.add(id)
+      const overflow = bubble.getBoundingClientRect().right - el.getBoundingClientRect().right
+      if (overflow > 0) el.scrollBy({ left: overflow + RAIL_GUTTER, behavior: 'smooth' })
+    }
+  }, [openIds, tops])
 
   const pageWidth = geo?.width ?? FALLBACK_PAGE_WIDTH
   const { pageRightX, railLeft, cW } = paneLayout(pageWidth)
@@ -444,7 +518,15 @@ export function PaperPane(props: Props): JSX.Element {
   }
 
   const badgeLabel = (phase: TaskPhase): string =>
-    phase === 'review' ? 'Proposal ready' : phase === 'busy' ? 'Editing…' : phase === 'noop' ? 'No changes' : 'Draft edit'
+    phase === 'review'
+      ? 'Proposal ready'
+      : phase === 'busy'
+        ? 'Editing…'
+        : phase === 'noop'
+          ? 'No changes'
+          : phase === 'thread-idle'
+            ? 'Conversation'
+            : 'Draft edit'
 
   return (
     <div style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: 'var(--surface-canvas)' }}>
@@ -556,7 +638,16 @@ export function PaperPane(props: Props): JSX.Element {
                   const anchor = anchorTops[t.id]
                   if (anchor == null) return null // hide until geometry resolves (BUG-32)
                   const tone = phaseTone(t.phase)
-                  const Icon = t.phase === 'review' ? Check : t.phase === 'busy' ? Sparkles : t.phase === 'noop' ? CircleSlash : PenLine
+                  const Icon =
+                    t.phase === 'review'
+                      ? Check
+                      : t.phase === 'busy'
+                        ? Sparkles
+                        : t.phase === 'noop'
+                          ? CircleSlash
+                          : t.phase === 'thread-idle'
+                            ? MessagesSquare
+                            : PenLine
                   const isOpen = openIds.includes(t.id)
                   const label = badgeLabel(t.phase)
                   return (
@@ -609,6 +700,10 @@ export function PaperPane(props: Props): JSX.Element {
                     <div
                       key={t.id}
                       data-testid="rail-bubble"
+                      // A press inside the bubble must not start the pane's marquee
+                      // (it'd suppress text selection mid-drag) — let the user
+                      // select + copy the conversation text instead.
+                      onPointerDown={(e) => e.stopPropagation()}
                       style={{
                         position: 'absolute',
                         left: railLeft,
@@ -619,28 +714,50 @@ export function PaperPane(props: Props): JSX.Element {
                         transition: 'top var(--dur-base, 200ms) var(--ease-out)'
                       }}
                     >
-                      <TaskCard
-                        task={t}
-                        blocks={blocksOf(t.blockIds)}
-                        expanded
-                        side="right"
-                        adding={state.adding}
-                        onToggleAdding={props.onToggleAdding}
-                        onRemoveBlock={(bid) => props.onRemoveBlock(t.id, bid)}
-                        onActivate={() => props.onActivateTask(t.id)}
-                        refCb={(el) => {
-                          cardEls.current[t.id] = el
-                        }}
-                        onUpdate={(instruction) => props.onUpdateInstruction(t.id, instruction)}
-                        onSubmit={() => props.onSubmitTask(t.id)}
-                        onDismiss={() => {
-                          props.onDismissTask(t.id)
-                          setOpenIds((s) => s.filter((x) => x !== t.id))
-                        }}
-                        onCollapse={() => setOpenIds((s) => s.filter((x) => x !== t.id))}
-                        onResolve={(accept) => props.onResolveTask(t.id, accept)}
-                        onOpenReview={() => setReviewId(t.id)}
-                      />
+                      {t.persistent && t.phase !== 'compose' ? (
+                        <ThreadCard
+                          task={t}
+                          blocks={blocksOf(t.blockIds)}
+                          side="right"
+                          refCb={(el) => {
+                            cardEls.current[t.id] = el
+                          }}
+                          onSubmitTurn={(text) => props.onSubmitThreadTurn(t.id, text)}
+                          onResolve={(accept) => props.onResolveTask(t.id, accept)}
+                          onCollapse={() => setOpenIds((s) => s.filter((x) => x !== t.id))}
+                          onDelete={() => {
+                            props.onDeleteThread(t.id)
+                            setOpenIds((s) => s.filter((x) => x !== t.id))
+                          }}
+                          onOpenReview={() => setReviewId(t.id)}
+                          onSnapshot={() => captureBlock(t.id)}
+                        />
+                      ) : (
+                        <TaskCard
+                          task={t}
+                          blocks={blocksOf(t.blockIds)}
+                          expanded
+                          side="right"
+                          adding={state.adding}
+                          onToggleAdding={props.onToggleAdding}
+                          onRemoveBlock={(bid) => props.onRemoveBlock(t.id, bid)}
+                          onActivate={() => props.onActivateTask(t.id)}
+                          refCb={(el) => {
+                            cardEls.current[t.id] = el
+                          }}
+                          onUpdate={(instruction) => props.onUpdateInstruction(t.id, instruction)}
+                          onSubmit={() => props.onSubmitTask(t.id)}
+                          onDismiss={() => {
+                            props.onDismissTask(t.id)
+                            setOpenIds((s) => s.filter((x) => x !== t.id))
+                          }}
+                          onCollapse={() => setOpenIds((s) => s.filter((x) => x !== t.id))}
+                          onTogglePersistent={() => props.onTogglePersistent(t.id)}
+                          onResolve={(accept) => props.onResolveTask(t.id, accept)}
+                          onOpenReview={() => setReviewId(t.id)}
+                          onSnapshot={() => captureBlock(t.id)}
+                        />
+                      )}
                     </div>
                   )
                 })}

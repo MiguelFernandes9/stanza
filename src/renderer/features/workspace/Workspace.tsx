@@ -10,10 +10,12 @@ import type {
   DocumentInfo,
   FileEntry,
   FileMutationResult,
-  OpRecord
+  OpRecord,
+  ThreadTurn
 } from '@shared/ipc'
 import { ChatPane } from '../chat/ChatPane'
-import type { ChatMessage, ComposeChip } from '../chat/ChatPane'
+import type { ComposeChip } from '../chat/ChatPane'
+import { chatMessages } from '../chat/chatModel'
 import { saveActiveAndCompile, saveAllAndCompile } from './compileTriggers'
 import { filesToReloadAfterResolve } from './reviewReload'
 import { EditorPane } from '../editor/EditorPane'
@@ -37,8 +39,8 @@ import type { PdfFlash } from '../paper/PaperPane'
 import { expandIds, flattenBlocks, parentOf, spanLabel, taskSpans } from '../paper/paperModel'
 import { resolveToKnownFile } from '@renderer/lib/paths'
 import { blockLabel, tagKind } from '../tasks/TaskCard'
-import { dismissRoute, initialTaskState, taskReducer } from '../tasks/taskStore'
-import { pendingRemap } from '../tasks/reanchor'
+import { dismissRoute, initialTaskState, isWholeDocTask, taskReducer } from '../tasks/taskStore'
+import { pendingRemap, restoreAnchors, vanishedThreads } from '../tasks/reanchor'
 import { planMove } from './fileDrag'
 import { revealBlock } from './revealBlock'
 import { ResizeHandle } from './ResizeHandle'
@@ -229,6 +231,20 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
       // tree, so their PDF overlays follow instead of vanishing (BUG-33).
       const remap = pendingRemap(blocksRef.current, fresh, tasksRef.current)
       if (Object.keys(remap).length) dispatch({ type: 'reanchor', remap })
+      // A persistent thread whose anchor block was DELETED (no hash/path
+      // successor) loses its home — drop the bubble and its persisted record. If
+      // it still holds a pending proposal, reject it first so its op branch +
+      // span lock are freed (BUG-42), exactly as deleteThread does.
+      for (const taskId of vanishedThreads(blocksRef.current, fresh, tasksRef.current)) {
+        const task = tasksRef.current.find((t) => t.id === taskId)
+        if (!task) continue
+        const opId = task.proposal?.opId ?? task.opId
+        if (task.phase === 'review' && opId) {
+          void client.reviewResolve({ opId, accept: false }).catch(() => undefined)
+        }
+        if (task.threadId) void client.threadsDelete(task.threadId).catch(() => undefined)
+        dispatch({ type: 'dismiss', taskId })
+      }
       setBlocks(fresh)
     }, () => setBlocks([]))
   }, [])
@@ -247,6 +263,37 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
     )
   }, [doc.mainFile])
 
+  // Rehydrate persistent "Keep chat" bubbles from the Store on open. Self-
+  // contained (fetches its own blocks + pending proposals) so it doesn't race
+  // loadBlocks or the reEmitPendingProposals push: anchors are resolved against
+  // the current tree (dropping threads whose block was deleted while closed),
+  // and a thread that closed mid-review restores straight into its proposal.
+  const restoreThreads = useCallback(() => {
+    void Promise.all([client.threadsList(), client.documentProjectBlocks(), client.reviewList()]).then(
+      ([records, blocks, proposals]) => {
+        const pendingByOp = new Map(proposals.map((p) => [p.opId, p]))
+        const threads = []
+        for (const r of records) {
+          const { ids, gone } = restoreAnchors(blocks, r.blockIds)
+          if (gone) {
+            void client.threadsDelete(r.threadId).catch(() => undefined)
+            continue
+          }
+          const pending = r.turns.find((t) => t.opId && t.accepted == null && pendingByOp.has(t.opId))
+          threads.push({
+            threadId: r.threadId,
+            threadSessionId: r.sessionId,
+            blockIds: ids,
+            turns: r.turns,
+            proposal: pending ? pendingByOp.get(pending.opId!) : null,
+          })
+        }
+        if (threads.length) dispatch({ type: 'restore-threads', threads })
+      },
+      () => undefined
+    )
+  }, [])
+
   useEffect(() => {
     loadFiles()
     // Blocks for the whole project (all \include'd files), not just main —
@@ -254,7 +301,8 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
     loadBlocks()
     loadHistory()
     loadOps()
-  }, [doc, loadFiles, loadBlocks, loadHistory, loadOps])
+    restoreThreads()
+  }, [doc, loadFiles, loadBlocks, loadHistory, loadOps, restoreThreads])
 
   // Refresh autocomplete data when the file tree changes (new/renamed/deleted
   // files, and the initial listing).
@@ -375,6 +423,19 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
+      // Esc in Select-blocks mode deselects: drop every compose draft (and its
+      // wash); pending busy/review/noop cards survive (clear-drafts). A foreign
+      // editable (source editor, rename field) keeps its own Esc; the bubble's
+      // own textarea is let through so one Esc clears the whole selection.
+      if (e.key === 'Escape' && state.view === 'select') {
+        const ae = document.activeElement as HTMLElement | null
+        const editable = !!ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)
+        const inBubble = !!ae?.closest('[data-testid="rail-bubble"]')
+        if (editable && !inBubble) return
+        e.preventDefault()
+        dispatch({ type: 'clear-drafts' })
+        return
+      }
       if (!(e.metaKey || e.ctrlKey)) return
       const key = e.key.toLowerCase()
       if (key === 'r' || key === 'enter') {
@@ -433,7 +494,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [saveAndCompile, toggleSource])
+  }, [saveAndCompile, toggleSource, state.view])
 
   const pageBlocks = flattenBlocks(blocks)
 
@@ -451,7 +512,9 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
   const lockedFiles = useMemo(() => {
     const set = new Set<string>()
     for (const t of state.tasks) {
-      if (t.phase === 'busy' || t.phase === 'review') {
+      // Persistent threads own their block in any phase — its file stays locked
+      // so a rename can't move the doc out from under the next turn.
+      if (t.phase === 'busy' || t.phase === 'review' || t.persistent) {
         for (const span of taskSpans(t.blockIds, blocks)) set.add(span.file)
       }
     }
@@ -560,8 +623,8 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
 
   /** Fire claude:run for a task already in busy phase and wire its result
    *  back by taskId (op-started → proposal/noop, or op-failed). */
-  const runOp = (taskId: number, instruction: string, spans: BlockSpan[]): void => {
-    void client.claudeRun({ instruction, spans }).then(
+  const runOp = (taskId: number, instruction: string, spans: BlockSpan[], image?: string): void => {
+    void client.claudeRun({ instruction, spans, imageDataUrl: image }).then(
       (res) => {
         dispatch({ type: 'op-started', taskId, opId: res.opId })
         if (res.proposal) dispatch({ type: 'proposal', taskId, proposal: res.proposal, note: res.note })
@@ -582,9 +645,15 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
     const task = state.tasks.find((t) => t.id === taskId)
     const instruction = (instructionOverride ?? task?.instruction ?? '').trim()
     if (!task || !instruction) return
+    // A "Keep chat" draft starts a conversation, not a one-shot op — its first
+    // Run goes through the thread path (its own session + transcript).
+    if (task.persistent) {
+      submitThreadTurn(taskId, instruction)
+      return
+    }
     if (instructionOverride) dispatch({ type: 'update-instruction', taskId, instruction })
     dispatch({ type: 'submit', taskId })
-    runOp(taskId, instruction, taskSpans(task.blockIds, blocks))
+    runOp(taskId, instruction, taskSpans(task.blockIds, blocks), task.image)
   }
 
   /** No blocks selected → edit the whole project (unscoped op, spans: []).
@@ -623,7 +692,10 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           })
           return
         }
-        dispatch({ type: 'resolve', taskId })
+        // A persistent thread stays open after resolve (keep chatting); a
+        // one-shot task is removed.
+        if (task.persistent) dispatch({ type: 'resolve-thread-turn', taskId, accept })
+        else dispatch({ type: 'resolve', taskId })
         loadOps()
         // Refresh stale editor buffers for the files this accept wrote to disk —
         // blocks/PDF/history already refresh off compile-ok; the open editor
@@ -667,25 +739,77 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
     }
   }
 
+  // ── Persistent conversation bubbles ("Keep chat") ──────────────────────────
+  const toggleTaskPersistent = (taskId: number): void => dispatch({ type: 'toggle-persistent', taskId })
+
+  /** Send one turn of a persistent thread on its OWN session. The thread is born
+   *  (threadId) on its first turn; later turns + restored threads resume by
+   *  threadSessionId. An edit turn comes back with a proposal (review); a
+   *  question turn with just text (thread-idle). */
+  const submitThreadTurn = (taskId: number, text: string): void => {
+    const task = state.tasks.find((t) => t.id === taskId)
+    const instruction = text.trim()
+    if (!task || !instruction) return
+    const threadId = task.threadId ?? crypto.randomUUID()
+    dispatch({
+      type: 'add-user-turn',
+      taskId,
+      turn: { role: 'user', text: instruction, ts: new Date().toISOString() },
+      threadId
+    })
+    void client
+      .claudeRunTurn({
+        threadId,
+        sessionId: task.threadSessionId ?? null,
+        instruction,
+        spans: taskSpans(task.blockIds, blocks),
+        blockIds: task.blockIds,
+        // A staged snapshot rides with this turn (add-user-turn clears it after).
+        imageDataUrl: task.image
+      })
+      .then(
+        (res) => {
+          const agentTurn: ThreadTurn = {
+            role: 'agent',
+            text: res.note,
+            ts: new Date().toISOString(),
+            ...(res.proposal ? { opId: res.opId, accepted: null } : {})
+          }
+          dispatch({ type: 'turn-result', taskId, turn: agentTurn, proposal: res.proposal, sessionId: res.sessionId })
+          if (!chatOpen) setUnreadNotes((n) => n + 1)
+        },
+        (err: unknown) =>
+          dispatch({ type: 'turn-failed', taskId, error: err instanceof Error ? err.message : String(err) })
+      )
+  }
+
+  const deleteThread = (taskId: number): void => {
+    const task = state.tasks.find((t) => t.id === taskId)
+    // Mid-turn (busy) is not deletable: 'dismiss' no-ops on busy AND the in-flight
+    // runClaudeTurn would re-persist the record we just deleted — so the delete
+    // would silently resurrect. Bail; the user deletes once the turn settles.
+    if (!task || task.phase === 'busy') return
+    // A pending proposal owns a backend op branch + lock — reject it so both are
+    // freed (BUG-42) before the bubble goes.
+    const opId = task.proposal?.opId ?? task.opId
+    if (task.phase === 'review' && opId) void client.reviewResolve({ opId, accept: false }).catch(() => undefined)
+    if (task.threadId) void client.threadsDelete(task.threadId).catch(() => undefined)
+    dispatch({ type: 'dismiss', taskId })
+  }
+
   const projectName = doc.root.split('/').pop() ?? doc.root
   const activeTask = state.tasks.find((t) => t.id === state.activeTask)
   const pageById = new Map(pageBlocks.map((b) => [b.id, b]))
 
-  // Chat stream: one user+claude pair per op record; unresolved ops carry
-  // their proposal (from the live task) for inline accept/reject.
-  const messages: ChatMessage[] = opRecords.flatMap((r): ChatMessage[] => {
-    const owner = state.tasks.find((t) => t.opId === r.opId || t.proposal?.opId === r.opId)
-    return [
-      { role: 'user', text: r.instruction },
-      {
-        role: 'claude',
-        text: r.note,
-        proposal: r.accepted === null ? owner?.proposal ?? undefined : undefined,
-        resolved: r.accepted === null ? null : r.accepted ? 'accept' : 'reject'
-      }
-    ]
-  })
+  // Assistant panel = whole-document conversation only (chatModel filters out
+  // block-scoped edits, which live in their rail bubbles).
+  const messages = chatMessages(opRecords, state.tasks)
+  // Any in-flight op (block or whole-doc) — gates the console's Fix-with-Claude.
   const chatBusy = state.tasks.some((t) => t.phase === 'busy')
+  // The assistant panel only shows whole-doc history (chatMessages), so its busy
+  // indicator must track only whole-doc ops — else a block edit shows a thinking
+  // indicator in the panel with no matching message (review C5).
+  const chatPaneBusy = state.tasks.some((t) => t.phase === 'busy' && isWholeDocTask(t))
   const chips: ComposeChip[] = state.tasks
     .filter((t) => t.phase === 'compose')
     .flatMap((t) => t.blockIds)
@@ -834,13 +958,25 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           onSubmitTask={submitTask}
           onDismissTask={dismissTask}
           onResolveTask={resolveTask}
+          onTogglePersistent={toggleTaskPersistent}
+          onSubmitThreadTurn={submitThreadTurn}
+          onDeleteThread={deleteThread}
+          onAttachImage={(taskId, image) => dispatch({ type: 'attach-image', taskId, image })}
+          onSnapshotError={() =>
+            setToast({
+              title: "Couldn't snapshot the block",
+              message: 'Make sure the block is visible in the preview, then try again.',
+              tone: 'danger'
+            })
+          }
           onView={(view) => dispatch({ type: 'set-view', view })}
         />
         {chatOpen && (
           <ChatPane
             messages={messages}
-            busy={chatBusy}
+            busy={chatPaneBusy}
             chips={chips}
+            disabled={state.view === 'select'}
             onRemoveChip={(blockId) => dispatch({ type: 'toggle-block', ids: [blockId], additive: true })}
             onSubmit={chatSubmit}
             onResolveOp={resolveByOp}

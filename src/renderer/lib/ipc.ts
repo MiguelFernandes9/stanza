@@ -98,6 +98,8 @@ export const api = {
   claudeHistory: () => invoke<OpRecord[]>(IpcChannels.claudeHistory),
   /** Persistent bubbles for the open project, restored on workspace open. */
   threadsList: () => invoke<ThreadRecord[]>(IpcChannels.threadsList),
+  /** Drop a persistent bubble's record (deleted, or its anchor block vanished). */
+  threadsDelete: (threadId: string) => invoke<void>(IpcChannels.threadsDelete, threadId),
   reviewResolve: (d: ReviewDecision) => invoke<ReviewResolution>(IpcChannels.reviewResolve, d),
   reviewList: () => invoke<ReviewProposal[]>(IpcChannels.reviewList),
   /** The marked (latexdiff) render of the complete edit — one item per changed

@@ -123,6 +123,11 @@ export function phaseTone(phase: TaskPhase): PhaseTone {
       return { accent: 'var(--clay-400)', tint: 'rgba(194,92,57,0.06)', wash: 'var(--select-fill)', edge: 'var(--select-edge)' }
     case 'noop':
       return { accent: 'var(--ink-400)', tint: 'var(--surface-well)', wash: 'var(--hover-fill)', edge: 'var(--border-default)' }
+    case 'thread-idle':
+      // Persistent conversation bubble at rest — violet, distinct from a
+      // one-shot compose(blue)/busy(clay)/review(green). Self-contained rgba
+      // (no token) like the other washes; readable in light + dark.
+      return { accent: '#6d5bd0', tint: 'rgba(109,91,208,0.06)', wash: 'rgba(109,91,208,0.12)', edge: 'rgba(109,91,208,0.5)' }
     default:
       return { accent: 'var(--blue-500)', tint: 'rgba(61,110,156,0.05)', wash: 'rgba(61,110,156,0.10)', edge: 'rgba(61,110,156,0.45)' }
   }

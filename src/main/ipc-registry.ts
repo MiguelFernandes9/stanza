@@ -34,7 +34,7 @@ import { armSettleWatcher, watchSettled } from './infra/FileWatcher'
 import { DefaultProcessRunner } from './infra/ProcessRunner'
 import { GitClient } from './infra/GitClient'
 import { Store, GlobalSettingsStore } from './infra/Store'
-import { appendTurns, patchTurnByOpId, upsertThread } from './threadStore'
+import { appendTurns, patchTurnByOpId, removeThread, upsertThread } from './threadStore'
 import { changedFilesInDiff } from './services/diffSpans'
 import { DocumentService } from './services/DocumentService'
 import { DocumentSession } from './session'
@@ -235,6 +235,12 @@ export function registerIpcHandlers(): void {
     (event): ThreadRecord[] => store.getProject(sessionFor(event).info.root).threads ?? [],
   )
 
+  ipcMain.handle(IpcChannels.threadsDelete, (event, threadId: string) => {
+    const root = sessionFor(event).info.root
+    const threads = store.getProject(root).threads
+    if (threads) store.setProject(root, { threads: removeThread(threads, threadId) })
+  })
+
   ipcMain.handle(IpcChannels.reviewResolve, async (event, decision: ReviewDecision) => {
     const doc = sessionFor(event)
     // Narrow mutex: the merge mutates the USER's tree, serialised only with
@@ -434,9 +440,10 @@ function bindSession(wc: WebContents, info: DocumentInfo): void {
       info.root,
       FILE_WATCH_SETTLE_MS,
       () => {
-        // Skip the app's OWN op-driven churn (the capture branch-dance rewrites
-        // then reverts the edited .tex) — firing here would loadBlocks and blink
-        // the proposal bubble. Genuine external edits (no op in flight) refresh.
+        // Skip the app's OWN op-driven churn (worktree edits + accept/wip-commit)
+        // — firing here would loadBlocks and blink the proposal bubble. Genuine
+        // external edits (no op in flight) refresh. (opActive covers thread turns
+        // too — they run through the same beginOp/endOp.)
         if (!wc.isDestroyed() && !sessions.get(wc.id)?.opActive) wc.send(IpcChannels.documentFilesChanged)
       },
       sidebarWatchIgnore(outputPdfRel(info)),
@@ -518,6 +525,7 @@ async function runClaudeOp(
         instruction: req.instruction,
         note: op.note,
         accepted: null,
+        scope: req.spans.length === 0 ? 'doc' : 'blocks',
       })
       // The proposal travels back on this return — the initiating renderer wires it
       // into the busy task. Do NOT also broadcast review:proposal here: that
@@ -540,7 +548,7 @@ async function runClaudeTurn(
   wc: WebContents,
   req: ClaudeTurnRequest,
 ): Promise<ClaudeTurnResult> {
-  const claudeReq: ClaudeRequest = { instruction: req.instruction, spans: req.spans }
+  const claudeReq: ClaudeRequest = { instruction: req.instruction, spans: req.spans, imageDataUrl: req.imageDataUrl }
   doc.review.assertSpansFree(req.spans)
   doc.beginOp()
   try {
@@ -549,10 +557,21 @@ async function runClaudeTurn(
       await doc.ensureWorktree()
       await doc.review.syncWorktree(doc.worktreeDir)
 
+      // Resume the thread's session only if it was primed in THIS worktree.
+      // Otherwise re-prime a fresh one: a session's sandbox + baked root are
+      // pinned to its prime dir, so a relocated worktree — or a pre-fix session
+      // primed at the user checkout (no primedWorkdir) — can't be resumed and
+      // would fail "Permission denied on read". Mirrors ClaudeService's doc-session
+      // self-heal (ensureSession re-primes on primedWorkdir mismatch).
+      // The Store record is the authority for the resume id (not the renderer's
+      // req.sessionId, which may be stale after a heal).
+      const rec = (store.getProject(doc.info.root).threads ?? []).find((t) => t.threadId === req.threadId)
+      const resumeId = rec?.primedWorkdir === doc.worktreeDir ? (rec.sessionId ?? null) : null
+
       const watcher = armSettleWatcher(doc.worktreeDir, { quietMs: 400, capMs: 3000 })
       let turn: { opId: string; note: string; sessionId: string }
       try {
-        turn = await doc.claude.runThreadTurn(req.sessionId, claudeReq, (status) =>
+        turn = await doc.claude.runThreadTurn(resumeId, claudeReq, (status) =>
           sendTo(wc, IpcChannels.claudeStatus, status),
         )
         await watcher.settled()
@@ -560,6 +579,23 @@ async function runClaudeTurn(
         watcher.dispose()
       }
 
+      // A fresh prime (first turn OR self-heal) yields a new session id — persist
+      // it AND the worktree it was primed in BEFORE capture, so a capture failure
+      // can't orphan it (the next turn must resume the same one). A resumed turn
+      // already has both persisted, so skip.
+      if (resumeId == null) {
+        const ts = new Date().toISOString()
+        const threads = store.getProject(doc.info.root).threads ?? []
+        store.setProject(doc.info.root, {
+          threads: upsertThread(threads, {
+            threadId: req.threadId,
+            sessionId: turn.sessionId,
+            primedWorkdir: doc.worktreeDir,
+            blockIds: req.blockIds,
+            ts,
+          }),
+        })
+      }
       const proposal = await doc.review.captureWorktree(doc.worktreeDir, turn.opId, req.instruction, req.spans)
       if (proposal) doc.diffPreview.prime(proposal.opId, proposal.branch, proposal.blocks)
       persistThreadTurn(doc.info.root, req, turn, proposal)

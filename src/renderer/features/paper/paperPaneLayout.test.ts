@@ -101,8 +101,16 @@ describe('phaseTone', () => {
     expect(accent).not.toBe('var(--add-600)')
   })
 
+  it('gives thread-idle its own accent, distinct from every one-shot phase', () => {
+    const accent = phaseTone('thread-idle').accent
+    expect(accent).not.toBe('var(--blue-500)')
+    expect(accent).not.toBe('var(--clay-400)')
+    expect(accent).not.toBe('var(--add-600)')
+    expect(accent).not.toBe(phaseTone('noop').accent)
+  })
+
   it('returns all four tone fields for every phase', () => {
-    for (const p of ['compose', 'busy', 'review', 'noop'] as const) {
+    for (const p of ['compose', 'busy', 'review', 'noop', 'thread-idle'] as const) {
       const t = phaseTone(p)
       expect(Object.keys(t).sort()).toEqual(['accent', 'edge', 'tint', 'wash'])
     }
@@ -123,7 +131,7 @@ const alpha = (color: string): number | null => {
 const WASH_TOKEN: Record<string, string> = { 'var(--select-fill)': 'rgba(194,92,57,0.13)' }
 
 describe('phaseTone — inactive tint is a translucent overlay (BUG-34)', () => {
-  for (const phase of ['busy', 'compose', 'review'] as const) {
+  for (const phase of ['busy', 'compose', 'review', 'thread-idle'] as const) {
     it(`${phase}: tint is a translucent rgba, fainter than its active wash`, () => {
       const { tint, wash } = phaseTone(phase)
       const tintA = alpha(tint)

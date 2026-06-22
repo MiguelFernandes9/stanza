@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 import type { ClaudeRequest, ClaudeStatus } from '../../shared/ipc/claude'
 import type { DocumentInfo } from '../../shared/ipc/document'
 import type { ProcessRunner, ProcResult } from '../infra/ProcessRunner'
@@ -95,30 +98,34 @@ export class ClaudeService {
 
   /** The --resume op CLI call shared by doc ops and thread turns. Runs in
    *  `workDir` (the op worktree) like every op, so a thread turn's edits land in
-   *  the worktree and capture from there — never the user's checkout. */
+   *  the worktree and capture from there — never the user's checkout.
+   *
+   *  A snapshot of the selected block (req.imageDataUrl) travels as a PNG written
+   *  OUTSIDE the worktree (writing it in would leak the image into the captured
+   *  diff); Claude reads it via its Read tool, so the shot dir is granted with a
+   *  second --add-dir and removed once the op returns. Living here, not in
+   *  execute(), means a persistent thread bubble can attach a fresh render too. */
   private async runResume(
     opId: string,
     sessionId: string,
     req: ClaudeRequest,
     onStatus: (s: ClaudeStatus) => void,
   ): Promise<{ opId: string; note: string }> {
-    onStatus({ opId, state: 'running' })
-    const proc = await this.claude([
-      '-p',
-      '--resume',
-      sessionId,
-      '--add-dir',
-      this.workDir,
-      '--output-format',
-      'json',
-      '--permission-mode',
-      'acceptEdits',
-      opPrompt(req),
-    ])
-    assertCompleted(proc, this.timeoutMs)
-    const note = extractNote(proc.stdout)
-    onStatus({ opId, state: 'done' })
-    return { opId, note }
+    let shotPath: string | undefined
+    try {
+      onStatus({ opId, state: 'running' })
+      if (req.imageDataUrl) shotPath = writeShot(opId, req.imageDataUrl)
+      const args = ['-p', '--resume', sessionId, '--add-dir', this.workDir]
+      if (shotPath) args.push('--add-dir', dirname(shotPath))
+      args.push('--output-format', 'json', '--permission-mode', 'acceptEdits', opPrompt(req, shotPath))
+      const proc = await this.claude(args)
+      assertCompleted(proc, this.timeoutMs)
+      const note = extractNote(proc.stdout)
+      onStatus({ opId, state: 'done' })
+      return { opId, note }
+    } finally {
+      if (shotPath) rmSync(shotPath, { force: true })
+    }
   }
 
   /** Prime a fresh, isolated session for a new thread IN `workDir` (Claude's
@@ -135,7 +142,7 @@ export class ClaudeService {
       this.workDir,
       '--output-format',
       'json',
-      primePrompt(this.doc),
+      primePrompt(this.doc, this.workDir),
     ])
     assertCompleted(proc, this.timeoutMs)
     return sessionId
@@ -168,7 +175,7 @@ export class ClaudeService {
         this.workDir,
         '--output-format',
         'json',
-        primePrompt(this.doc),
+        primePrompt(this.doc, this.workDir),
       ],
       signal,
     )
@@ -187,6 +194,19 @@ export class ClaudeService {
       ...(signal ? { signal } : {}),
     })
   }
+}
+
+const SHOT_DIR = join(tmpdir(), 'stanza-shots')
+
+/** Persist a captured block PNG (data-URL) to the shot dir so the CLI's Read
+ *  tool can open it; returns the absolute path. Kept out of the op worktree so
+ *  it never lands in the captured diff. */
+function writeShot(opId: string, dataUrl: string): string {
+  mkdirSync(SHOT_DIR, { recursive: true })
+  const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '')
+  const path = join(SHOT_DIR, `${opId}.png`)
+  writeFileSync(path, Buffer.from(base64, 'base64'))
+  return path
 }
 
 /** The child env for the claude CLI, with the API-key overrides removed so the

@@ -32,7 +32,8 @@ const proposal: ReviewProposal = {
   branch: 'stanza/op-op1',
   files: ['main.tex'],
   outsideSpan: [],
-  diff: ''
+  diff: '',
+  blocks: [] // required since per-block changes landed; TaskCard summarizes it
 }
 
 const handlers = () => ({
@@ -43,6 +44,7 @@ const handlers = () => ({
   onSubmit: vi.fn(),
   onDismiss: vi.fn(),
   onCollapse: vi.fn(),
+  onTogglePersistent: vi.fn(),
   onResolve: vi.fn(),
   onOpenReview: vi.fn(),
   refCb: vi.fn()

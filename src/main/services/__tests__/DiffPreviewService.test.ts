@@ -21,10 +21,10 @@ const block = (over: Partial<BlockChange>): BlockChange => ({
   ...over,
 })
 
-function setup(blocks: BlockChange[]) {
+function setup(blocks: BlockChange[], old = OLD_MAIN, neu = NEW_MAIN) {
   const show = vi.fn(async (rev: string, file: string) => {
     if (file !== 'main.tex') return ''
-    return rev === 'HEAD' ? OLD_MAIN : NEW_MAIN
+    return rev === 'HEAD' ? old : neu
   })
   const renderDiff = vi.fn(
     async (_preamble: string, _before: string, _after: string): Promise<SnippetResult> => ({ pdf: Buffer.from('PDF') })
@@ -71,5 +71,53 @@ describe('DiffPreviewService', () => {
     const res = await svc.get('op1')
     expect(res).toHaveLength(1)
     expect('error' in res[0] && res[0].error).toContain('Preview unavailable')
+  })
+
+  // computeBlockChanges already hands each block its OWN extent (a section is its
+  // heading line, not its widened subtree span — see ownSpan), so the region is a
+  // plain union of those spans and never balloons past the edited blocks.
+  test('the region unions blocks by their own spans and does not balloon', async () => {
+    const { svc, renderDiff } = setup([
+      block({ kind: 'section', name: 'Intro', beforeSpan: span(3, 3), afterSpan: span(3, 3) }), // heading-only (ownSpan)
+      block({ kind: 'paragraph', beforeSpan: span(4, 4), afterSpan: span(4, 4) }),
+    ])
+    await svc.get('op1')
+    const [, oldRegion] = renderDiff.mock.calls[0]
+    expect(oldRegion).toContain('\\section{Intro}')
+    expect(oldRegion).toContain('old para.') // region spans the heading + edited paragraph…
+    expect(oldRegion).not.toContain('x=1') // …not the equation below (line 5-7)
+  })
+
+  // Two edits with unchanged content between them must NOT be rendered as one span
+  // swallowing the middle — each contiguous run gets its own preview.
+  test('far-apart edits in one file render as separate previews (gap elided)', async () => {
+    const OLD = ['\\documentclass{article}', '\\begin{document}', 'intro old.', '', 'unchanged middle.', '', 'tail old.', '\\end{document}', ''].join('\n')
+    const NEW = ['\\documentclass{article}', '\\begin{document}', 'intro new.', '', 'unchanged middle.', '', 'tail new.', '\\end{document}', ''].join('\n')
+    const { svc, renderDiff } = setup([
+      block({ kind: 'paragraph', beforeSpan: span(3, 3), afterSpan: span(3, 3) }),
+      block({ kind: 'paragraph', beforeSpan: span(7, 7), afterSpan: span(7, 7) }),
+    ], OLD, NEW)
+    const results = await svc.get('op1')
+    expect(results).toHaveLength(2) // two previews, not one ballooned region
+    expect(renderDiff).toHaveBeenCalledTimes(2)
+    const [, r0] = renderDiff.mock.calls[0]
+    const [, r1] = renderDiff.mock.calls[1]
+    expect(r0).toContain('intro old.')
+    expect(r0).not.toContain('unchanged middle.') // the gap is not rendered
+    expect(r1).toContain('tail old.')
+  })
+
+  test('edits separated only by a blank line render as one preview', async () => {
+    const OLD = ['\\documentclass{article}', '\\begin{document}', 'para A old.', '', 'para B old.', '\\end{document}', ''].join('\n')
+    const NEW = ['\\documentclass{article}', '\\begin{document}', 'para A new.', '', 'para B new.', '\\end{document}', ''].join('\n')
+    const { svc, renderDiff } = setup([
+      block({ kind: 'paragraph', beforeSpan: span(3, 3), afterSpan: span(3, 3) }),
+      block({ kind: 'paragraph', beforeSpan: span(5, 5), afterSpan: span(5, 5) }),
+    ], OLD, NEW)
+    const results = await svc.get('op1')
+    expect(results).toHaveLength(1) // blank-only gap → one contiguous preview
+    const [, oldRegion] = renderDiff.mock.calls[0]
+    expect(oldRegion).toContain('para A old.')
+    expect(oldRegion).toContain('para B old.')
   })
 })

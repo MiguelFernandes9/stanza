@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -94,6 +94,9 @@ describe('ClaudeService.runOp', () => {
       const addDir = call.args.indexOf('--add-dir')
       expect(call.args[addDir + 1]).toBe('/tmp/stanza-wt/abc')
     }
+    // The prime prompt must root Claude at the worktree (the only granted dir),
+    // not the user checkout — else span paths resolve outside the grant (denied).
+    expect(runner.calls[0]!.args.at(-1)).toContain('Project root: /tmp/stanza-wt/abc')
     // session recorded as primed in the worktree (so resume only happens there)
     expect(store.getProject('/proj').primedWorkdir).toBe('/tmp/stanza-wt/abc')
   })
@@ -172,6 +175,35 @@ describe('ClaudeService.runOp', () => {
     expect(prompt).toContain('Scope (edit only inside these spans):')
     expect(prompt).toContain('- chapters/ch1.tex lines 10-20')
     expect(prompt).toContain('- chapters/ch1.tex lines 40-41')
+  })
+
+  test('an attached image is written, granted via --add-dir, referenced in the prompt, then cleaned up', async () => {
+    store.setProject('/proj', { sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', primedWorkdir: '/proj' })
+    let opArgs: string[] = []
+    const runner = new MockRunner((spec) => {
+      opArgs = spec.args
+      return claudeJson('ok')
+    })
+    const service = new ClaudeService(runner, store, doc)
+
+    await service.runOp(
+      { instruction: 'fix the label', spans: [], imageDataUrl: 'data:image/png;base64,iVBORw0KGgo=' },
+      () => {},
+    )
+
+    // The block PNG dir is granted as a SECOND --add-dir (the work dir is first).
+    const addDirs = opArgs.filter((_a, i) => opArgs[i - 1] === '--add-dir')
+    expect(addDirs).toHaveLength(2)
+    expect(addDirs[1]).toContain('stanza-shots')
+
+    // The prompt points Claude at the PNG and tells it to Read it.
+    const prompt = opArgs[opArgs.length - 1]!
+    const match = prompt.match(/(\S*stanza-shots\S*\.png)/)
+    expect(match).not.toBeNull()
+    expect(prompt).toContain('Read it')
+
+    // The temp PNG is removed once the op returns (never lands in the worktree).
+    expect(existsSync(match![1]!)).toBe(false)
   })
 
   test('status sequence priming → running → done; opId consistent', async () => {
@@ -316,6 +348,32 @@ describe('ClaudeService.runThreadTurn (persistent bubble)', () => {
       'tttttttt-tttt-tttt-tttt-tttttttttttt',
     ])
     expect(res.sessionId).toBe('tttttttt-tttt-tttt-tttt-tttttttttttt')
+  })
+
+  test('a thread turn carries an attached snapshot (shot dir granted + referenced, then cleaned)', async () => {
+    let opArgs: string[] = []
+    const runner = new MockRunner((spec) => {
+      opArgs = spec.args
+      return claudeJson('ok')
+    })
+    const service = new ClaudeService(runner, store, doc)
+
+    await service.runThreadTurn(
+      'tttttttt-tttt-tttt-tttt-tttttttttttt',
+      { instruction: 'why is this off?', spans: [], imageDataUrl: 'data:image/png;base64,iVBORw0KGgo=' },
+      () => {},
+    )
+
+    // Same shot path as a doc op — proves the logic lives in the shared runResume,
+    // so a persistent bubble's snapshot button reaches Claude too.
+    const addDirs = opArgs.filter((_a, i) => opArgs[i - 1] === '--add-dir')
+    expect(addDirs).toHaveLength(2)
+    expect(addDirs[1]).toContain('stanza-shots')
+    const prompt = opArgs[opArgs.length - 1]!
+    const match = prompt.match(/(\S*stanza-shots\S*\.png)/)
+    expect(match).not.toBeNull()
+    expect(prompt).toContain('Read it')
+    expect(existsSync(match![1]!)).toBe(false) // cleaned up after the turn
   })
 
   test('emits priming → running → done', async () => {

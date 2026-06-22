@@ -21,6 +21,7 @@ export const IpcChannels = {
   claudeStatus: 'claude:status',      // main→renderer event: ClaudeStatus
   claudeHistory: 'claude:history',    // invoke → OpRecord[] (chat pane, F9)
   threadsList: 'threads:list',        // invoke → ThreadRecord[] (persistent bubbles, restored on open)
+  threadsDelete: 'threads:delete',    // invoke threadId → void (drop a persistent bubble's record)
   reviewProposal: 'review:proposal',  // main→renderer event: ReviewProposal
   reviewResolve: 'review:resolve',    // invoke ReviewDecision → ReviewResolution
   reviewList: 'review:list',          // invoke → ReviewProposal[] (pending op branches)
