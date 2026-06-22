@@ -11,29 +11,23 @@ const SECTION_LEVELS: Record<string, number> = {
   subparagraph: 6,
 }
 
-/** AST node types that form their own block: `\begin{...}` environments
- *  ('environment'), math environments like equation/align/gather ('mathenv'),
- *  and 'verbatim'. NOT 'displaymath' (`\[..\]` / `$$..$$`): those are not
- *  `\begin{}` constructs and don't break a paragraph in LaTeX, so they join the
- *  surrounding paragraph via joinParagraph, exactly like inline `$..$` — see the
- *  fall-through at the end of walkNodes (BUG-45). */
+/** AST node types that form their own block: environments, math environments
+ *  (equation/align/…), verbatim. NOT 'displaymath' (`\[..\]`/`$$..$$`) — not a
+ *  `\begin{}` construct and doesn't break a paragraph, so it joins surrounding
+ *  prose like inline `$..$` (BUG-45). */
 const ENVIRONMENT_TYPES = new Set(['environment', 'mathenv', 'verbatim'])
 
-/** Environments that are their OWN top-level document division — LaTeX renders
- *  them with a sectioning heading ("References", "Index") and they belong after
- *  the body, not inside whatever \section happens to precede them. They close the
- *  open section stack so e.g. `thebibliography` after \section{Conclusion} is a
- *  sibling of the sections, not a child — selecting Conclusion then never hands the
- *  bibliography to the editor, and the bib is one independent block. */
+/** Environments that are their OWN top-level division (LaTeX gives them a
+ *  sectioning heading). They close the open section stack, so e.g.
+ *  `thebibliography` after \section{Conclusion} is a sibling of the sections,
+ *  not a child — the bib stays one independent block. */
 const SECTIONING_ENVS = new Set(['thebibliography', 'theindex'])
 
-/** Structural macros that carry no prose: they end the current paragraph
- *  and are skipped (like whitespace/comments), never becoming a selectable
- *  block. Otherwise \maketitle/\tableofcontents/\include et al. fall into
- *  the paragraph bucket and forge a bogus prose block over the title page.
- *  `\par` is an explicit paragraph terminator (same role as a blank-line
- *  parbreak); without it, prose split by `\par` inside a font-declaration
- *  group fuses into one over-reaching block (M2-4). */
+/** Structural macros carrying no prose: they flush the open paragraph and are
+ *  skipped, never a selectable block — otherwise \maketitle/\tableofcontents/
+ *  \include forge a bogus prose block over the title page. `\par` is an explicit
+ *  paragraph terminator; without it, prose split by `\par` inside a font group
+ *  fuses into one over-reaching block (M2-4). */
 const STANDALONE_MACROS = new Set([
   'par',
   'maketitle',
@@ -53,14 +47,11 @@ const STANDALONE_MACROS = new Set([
   'backmatter',
 ])
 
-/** Invisible marker macros that emit nothing on the page. They must NOT
- *  flush (unlike STANDALONE_MACROS) — a bare `\label` after `\chapter` would
- *  otherwise become a phantom paragraph that forward-maps onto the chapter
- *  title and steals the click (BUG-11). `\addcontentsline`/`\addtocontents`
- *  are the same hazard: invisible, but synctex maps them onto the heading
- *  above, dragging the following paragraph's box onto the title (BUG-20).
- *  Skipped without starting a paragraph; an already-open paragraph absorbs
- *  them, so an inline use doesn't split its prose. */
+/** Invisible marker macros that emit nothing. Unlike STANDALONE_MACROS they must
+ *  NOT flush: a bare `\label` after `\chapter` would become a phantom paragraph
+ *  that forward-maps onto the title and steals the click (BUG-11); same for
+ *  \addcontentsline/\addtocontents, which synctex maps onto the heading above
+ *  (BUG-20). Skipped without starting a paragraph; an open paragraph absorbs them. */
 const TRANSPARENT_MACROS = new Set([
   'label',
   'index',
@@ -70,11 +61,9 @@ const TRANSPARENT_MACROS = new Set([
   'phantomsection',
   'addcontentsline',
   'addtocontents',
-  // Argument-less font-size/family/series/shape DECLARATIONS. They carry no
-  // prose, so an opening `{\small …}` / `{\footnotesize …}` must not start a
-  // paragraph on its own line — that made the block span eat the group open
-  // (M2-4). Inline use inside prose still absorbs, so it doesn't split. (Note:
-  // \emph and \textbf take an argument and stay inline content — not listed.)
+  // Argument-less font size/family/series/shape DECLARATIONS — no prose, so a
+  // leading `{\small …}` must not start a paragraph (it made the span eat the
+  // group open, M2-4). \emph/\textbf take an argument and stay inline (not listed).
   'small',
   'footnotesize',
   'scriptsize',
@@ -96,21 +85,18 @@ const TRANSPARENT_MACROS = new Set([
   'upshape',
   'em',
   'normalfont',
-  // Alignment declarations — invisible, emit nothing. Must not start a paragraph,
-  // else a container's leading \centering (a figure's first line) becomes a
-  // phantom child block. Absorbed into an open paragraph like the others.
+  // Alignment declarations — invisible. Must not start a paragraph, else a
+  // figure's leading \centering becomes a phantom child block. Absorbed if open.
   'centering',
   'raggedright',
   'raggedleft',
 ])
 
-/** First interior line of an environment that carries visible content — the
- *  first child that isn't whitespace/comment/parbreak or an invisible
- *  TRANSPARENT_MACRO. A leading \label/\phantomsection/… forward-maps to the
- *  prose line ABOVE (BUG-11/20), so an env's geometry region must start past it
- *  or its box merges into the paragraph above (M2-7). Reuses the parser's
- *  TRANSPARENT_MACROS as the single source of truth. Undefined when the env is
- *  empty or all-transparent. */
+/** First interior line of an environment with visible content — the first child
+ *  that isn't whitespace/comment/parbreak or a TRANSPARENT_MACRO. A leading
+ *  \label/… forward-maps to the prose line ABOVE, so the env's geometry must
+ *  start past it or its box merges upward (BUG-11/20, M2-7). Undefined when the
+ *  env is empty or all-transparent. */
 function envContentStartLine(node: Ast.Environment): number | undefined {
   for (const child of node.content) {
     if (!child.position) continue
@@ -175,12 +161,10 @@ function walkBody(file: string, nodes: Ast.Node[]): BlockNode[] {
 }
 
 /** Process one flat node stream, attaching blocks to `out`. ONE nesting axis:
- *  sections nest via a local stack (document-body axis). Every environment is a
- *  single leaf block spanning its `\begin..\end` — its interior (prose, math,
- *  sub-envs, \item, \caption) is absorbed, never a child block (flat content
- *  model; supersedes the recursive model). Each scope keeps its own
- *  paragraph/section state; a brace group still recurses IN-scope so an internal
- *  parbreak splits the outer paragraph (BUG-22). */
+ *  sections nest via a local stack. Every environment is a single leaf block
+ *  spanning \begin..\end — its interior is absorbed, never a child (flat content
+ *  model). A brace group still recurses IN-scope so an internal parbreak splits
+ *  the outer paragraph (BUG-22). */
 function walkScope(file: string, nodes: Ast.Node[], out: BlockNode[]): void {
   const sectionStack: { block: BlockNode; level: number }[] = []
   let paragraph: { startLine: number; endLine: number } | null = null
@@ -208,11 +192,9 @@ function walkScope(file: string, nodes: Ast.Node[], out: BlockNode[]): void {
 
       if (node.type === 'whitespace') continue
       if (node.type === 'comment') {
-        // An own-line comment after prose is a soft paragraph break. unified-latex
-        // emits parbreak only on a blank line, so without this two paragraphs
-        // separated by a bare `% note` line (no blank line) fuse into one
-        // overshooting block (M2-3). A trailing inline comment (`prose % note`,
-        // sameline) absorbs into the open paragraph instead of splitting it.
+        // An own-line comment after prose is a soft paragraph break: unified-latex
+        // emits parbreak only on a blank line, so a bare `% note` between two
+        // paragraphs would otherwise fuse them (M2-3). Inline `prose % note` absorbs.
         if (!node.sameline) flushParagraph()
         else if (paragraph) paragraph.endLine = Math.max(paragraph.endLine, end.line)
         continue
@@ -247,9 +229,8 @@ function walkScope(file: string, nodes: Ast.Node[], out: BlockNode[]): void {
         flushParagraph()
         const env = node as Ast.Environment
         const name = envName(env)
-        // A backmatter sectioning environment (bibliography/index) is a top-level
-        // division: close every open section so it attaches at the root, not inside
-        // the preceding \section.
+        // A backmatter sectioning env (bibliography/index) is a top-level division:
+        // close every open section so it attaches at the root, not inside the \section.
         if (SECTIONING_ENVS.has(name)) sectionStack.length = 0
         const envBlock = block('environment', file, start.line, end.line, name)
         // Record the first real content line only when leading invisible macros
@@ -258,19 +239,15 @@ function walkScope(file: string, nodes: Ast.Node[], out: BlockNode[]): void {
         const contentStart = envContentStartLine(env)
         if (contentStart !== undefined && contentStart > start.line + 1) envBlock.contentStartLine = contentStart
         attach(envBlock)
-        // Flat content model: an environment is ONE block spanning \begin..\end.
-        // Its interior — prose, math, sub-environments, \item, \caption — is
-        // ABSORBED, never a child block, so selecting it hands Claude the whole
-        // unit and the overlay is one clean box. Only sections nest (the
-        // structural axis, via sectionStack). Supersedes the recursive model (#103).
+        // Flat content model: the environment is ONE block; its interior is
+        // absorbed, never a child, so selecting it hands Claude the whole unit.
+        // Only sections nest, via sectionStack (#103).
         continue
       }
 
-      // A brace group ({\large …}, {\small …}) is transparent for block
-      // structure: recurse into its content with the same paragraph/section
-      // state so an internal parbreak splits paragraphs and a nested
-      // \section/env still attaches. An inline group with no parbreak just
-      // joins the open paragraph, since its strings fall through below (BUG-22).
+      // A brace group ({\large …}) is transparent for block structure: recurse
+      // with the same paragraph/section state so an internal parbreak splits and a
+      // nested \section/env still attaches; an inline group joins the open paragraph (BUG-22).
       if (node.type === 'group') {
         walkNodes(node.content)
         continue
