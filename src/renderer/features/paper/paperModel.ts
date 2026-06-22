@@ -397,9 +397,15 @@ export function binBlocks(
   const band = contentBand(rowsByPage)
   const inBand = (yTop: number, yBottom: number): boolean =>
     !band || (yBottom >= band.top - BAND_EPS && yTop <= band.bottom + BAND_EPS)
+  const gating = regionsById.size > 0
   const inRegion = (u: AttributedUnit): boolean => {
+    if (!gating) return true // no forward info supplied (unit tests) → don't gate
     const rects = regionsById.get(u.blockId!)
-    if (!rects || !rects.length) return true
+    // No forward rects ⇒ synctex found this block NOWHERE in the compiled PDF — it's from
+    // a project .tex file that isn't part of this build (a multi-file project compiles ONE
+    // main file). A row that wrongly backward-maps to such a block is a cross-file synctex
+    // slip; reject it so it can't draw a phantom box over the real (compiled) block.
+    if (!rects || !rects.length) return false
     for (const r of rects)
       if (r.page === u.page && r.x < u.xRight && u.xLeft < r.x + r.width &&
           r.y - MAX_LINE_GAP < u.yBottom && u.yTop < r.y + r.height + MAX_LINE_GAP) return true
