@@ -232,6 +232,20 @@ export function TaskCard({
                   : 'Edit with Claude'}
           </span>
           <div style={{ flex: 1 }} />
+          {/* "Keep chat" lives in the header (a pin toggle), next to the X — flip a
+              compose draft into a persistent conversation bubble. Compose-only:
+              once persistent it renders as a ThreadCard. */}
+          {task.phase === 'compose' && blocks.length > 0 && (
+            <IconButton
+              size="sm"
+              label="Keep chat — pin as a persistent conversation"
+              active={!!task.persistent}
+              onClick={onTogglePersistent}
+              style={task.persistent ? { background: 'rgba(109,91,208,0.14)', color: VIOLET } : {}}
+            >
+              <Pin size={13} />
+            </IconButton>
+          )}
           {/* Edit (compose) X discards the draft — closes everything. Every other
               phase's X only collapses the bubble to its badge; the task lives on
               (busy keeps editing, review keeps its proposal, noop keeps its note).
@@ -288,15 +302,6 @@ export function TaskCard({
               <Plus size={11} /> blocks
             </button>
           )}
-          {task.phase === 'compose' && onSnapshot && blocks.length > 0 && (
-            <button
-              onClick={onSnapshot}
-              title={task.image ? 'Snapshot attached — click to remove' : "Attach a snapshot of the block's rendered output"}
-              style={pillStyle(!!task.image)}
-            >
-              {task.image ? <Check size={11} /> : <Camera size={11} />} snapshot
-            </button>
-          )}
         </div>
 
         {task.phase === 'compose' && (
@@ -342,23 +347,26 @@ export function TaskCard({
                   padding: '3px 0'
                 }}
               />
+              {onSnapshot && blocks.length > 0 && (
+                <button
+                  type="button"
+                  onClick={onSnapshot}
+                  title={
+                    task.image
+                      ? 'Snapshot attached (sent with Run) — click to remove'
+                      : "Attach a snapshot of the block's rendered output"
+                  }
+                  aria-label={task.image ? 'Snapshot attached' : 'Attach block snapshot'}
+                  style={{ ...pillStyle(!!task.image), height: 30 }}
+                >
+                  {task.image ? <Check size={12} /> : <Camera size={12} />}
+                </button>
+              )}
               <Button size="sm" variant="primary" disabled={!task.instruction.trim()} onClick={onSubmit} iconLeft={<ArrowUp size={13} />}>
                 Run
               </Button>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 6, paddingLeft: 1, flexWrap: 'wrap' }}>
-              {blocks.length > 0 && (
-              <button
-                type="button"
-                onClick={onTogglePersistent}
-                aria-pressed={task.persistent ? 'true' : 'false'}
-                title="Keep chat — make this block a persistent conversation that stays open"
-                style={pillStyle(!!task.persistent, 'violet')}
-              >
-                <Pin size={11} /> Keep chat
-              </button>
-              )}
-              <span style={{ flexBasis: '100%', height: 0 }} />
               {adding ? (
                 <span style={{ font: 'var(--weight-medium) var(--text-2xs)/1.4 var(--font-sans)', color: 'var(--clay-600)' }}>
                   Click blocks in the page to add them ·
