@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import type { JSX } from 'react'
 import { Check, Maximize2, X } from 'lucide-react'
 import { Button, DiffHunk } from '@renderer/components'
@@ -17,8 +18,17 @@ interface Props {
  *  replies. An edit turn whose proposal is still pending renders an inline diff
  *  with Accept/Reject; a resolved edit turn shows an accepted/rejected chip. */
 export function ThreadTranscript({ turns, proposal, busy, onResolve, onOpenReview }: Props): JSX.Element {
+  const streamRef = useRef<HTMLDivElement | null>(null)
+  // Auto-scroll to the newest message (matches the whole-doc ChatPane). Keyed on
+  // turn count + busy so it follows a fresh user message, the thinking dots, and
+  // the agent reply (with its inline diff) down to the bottom.
+  useEffect(() => {
+    if (streamRef.current) streamRef.current.scrollTop = streamRef.current.scrollHeight
+  }, [turns.length, busy])
+
   return (
     <div
+      ref={streamRef}
       style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 320, overflow: 'auto', userSelect: 'text' }}
     >
       {turns.map((t, i) =>
