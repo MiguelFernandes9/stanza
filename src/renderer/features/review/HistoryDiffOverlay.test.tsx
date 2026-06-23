@@ -20,6 +20,9 @@ function click(el: Element): void {
   act(() => el.dispatchEvent(new MouseEvent('click', { bubbles: true })))
 }
 
+const button = (name: string): HTMLButtonElement | null =>
+  [...container.querySelectorAll('button')].find((b) => b.textContent === name) ?? null
+
 const TWO_FILE_DIFF = `diff --git a/intro.tex b/intro.tex
 --- a/intro.tex
 +++ b/intro.tex
@@ -48,6 +51,7 @@ describe('HistoryDiffOverlay', () => {
         iso="2026-06-16T00:00:00Z"
         diff={TWO_FILE_DIFF}
         files={['intro.tex', 'method.tex']}
+        onRestore={() => {}}
         onClose={() => {}}
       />
     )
@@ -60,15 +64,31 @@ describe('HistoryDiffOverlay', () => {
 
   it('shows the commit subject in the header', () => {
     render(
-      <HistoryDiffOverlay subject="claude: tighten abstract" iso="2026-06-16T00:00:00Z" diff="" files={[]} onClose={() => {}} />
+      <HistoryDiffOverlay subject="claude: tighten abstract" iso="2026-06-16T00:00:00Z" diff="" files={[]} onRestore={() => {}} onClose={() => {}} />
     )
     expect(container.textContent).toContain('claude: tighten abstract')
   })
 
   it('clicking close fires onClose', () => {
     const onClose = vi.fn()
-    render(<HistoryDiffOverlay subject="x" iso="2026-06-16T00:00:00Z" diff="" files={[]} onClose={onClose} />)
+    render(<HistoryDiffOverlay subject="x" iso="2026-06-16T00:00:00Z" diff="" files={[]} onRestore={() => {}} onClose={onClose} />)
     click(container.querySelector('[aria-label="Close"]')!)
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('offers a "Restore to this version" button', () => {
+    render(<HistoryDiffOverlay subject="x" iso="2026-06-16T00:00:00Z" diff="" files={[]} onRestore={() => {}} onClose={() => {}} />)
+    expect(button('Restore to this version')).not.toBeNull()
+  })
+
+  it('clicking Restore fires onRestore and not onClose (it is inside the dialog, not the backdrop)', () => {
+    const onRestore = vi.fn()
+    const onClose = vi.fn()
+    render(
+      <HistoryDiffOverlay subject="x" iso="2026-06-16T00:00:00Z" diff="" files={[]} onRestore={onRestore} onClose={onClose} />
+    )
+    click(button('Restore to this version')!)
+    expect(onRestore).toHaveBeenCalledTimes(1)
+    expect(onClose).not.toHaveBeenCalled()
   })
 })

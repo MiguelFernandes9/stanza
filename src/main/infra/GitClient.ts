@@ -170,6 +170,15 @@ export class GitClient {
     await this.must(['checkout', '--force', '--detach', ref])
   }
 
+  /** Set this (worktree) tree + index to `sha`'s content WITHOUT moving HEAD —
+   *  like `reset --hard` but the branch ref stays put. A subsequent commit then
+   *  records "restore to <sha>" as a CHILD of HEAD whose diff vs HEAD undoes
+   *  every change since `sha`, including files added after it (the Restore-to-
+   *  this-version flow). */
+  async readTreeReset(sha: string): Promise<void> {
+    await this.must(['read-tree', '-u', '--reset', sha])
+  }
+
   /** Merge a proposal branch. On conflict: collect the conflicted
    *  files, abort the merge, leave the tree as it was. */
   async mergeNoFF(branch: string): Promise<{ ok: boolean; conflicts: string[] }> {

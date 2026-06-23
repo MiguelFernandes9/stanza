@@ -270,6 +270,37 @@ describe('GitClient history hash + diffAt (history diff viewer)', () => {
   })
 })
 
+describe('GitClient readTreeReset (restore to a version)', () => {
+  test('sets the tree to a past commit without moving HEAD; a commit then snapshots it onto HEAD', async () => {
+    await initWithCommit() // C0: main.tex = hello
+    const c0 = (await git.log(1))[0]!.hash
+    write('main.tex', 'goodbye\n')
+    write('extra.tex', 'added later\n')
+    await git.commitAll('claude: edit') // C1: main edited + extra added
+    const c1 = (await git.log(1))[0]!.hash
+
+    await git.readTreeReset(c0)
+
+    // The worktree now matches C0 — the later edit is undone and the later-added
+    // file removed (read-tree -u --reset handles deletions, like reset --hard).
+    expect(readFileSync(join(root, 'main.tex'), 'utf8')).toBe('hello\n')
+    expect(existsSync(join(root, 'extra.tex'))).toBe(false)
+    // HEAD did NOT move — still C1 — so the next commit parents on it.
+    const head = (await runner.run({ cmd: 'git', args: ['rev-parse', 'HEAD'], cwd: root })).stdout.trim()
+    expect(head).toBe(c1)
+    // The restore is uncommitted: the tree reads dirty vs HEAD (capture proceeds).
+    expect(await git.isClean()).toBe(false)
+
+    // Committing snapshots C0's tree as a CHILD of C1 (not a move back to C0).
+    await git.commitAll('restore: initial')
+    const parent = (await runner.run({ cmd: 'git', args: ['rev-parse', 'HEAD^'], cwd: root })).stdout.trim()
+    expect(parent).toBe(c1)
+    expect(await git.show('HEAD', 'main.tex')).toBe('hello\n')
+    expect(await git.show('HEAD', 'extra.tex')).toBe('') // gone at the restore commit
+    expect((await git.log(1))[0]!.subject).toBe('restore: initial')
+  })
+})
+
 describe('GitClient file-management plumbing (v0.2)', () => {
   test('mv moves a tracked file in the tree and index', async () => {
     await initWithCommit()

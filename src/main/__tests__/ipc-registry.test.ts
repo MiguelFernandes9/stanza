@@ -15,7 +15,7 @@ import type { BrowserWindow } from 'electron'
 import { IpcChannels } from '../../shared/ipc'
 import type { ClaudeResult } from '../../shared/ipc/claude'
 import type { ClaudeTurnResult, ThreadRecord } from '../../shared/ipc/conversation'
-import type { ReviewResolution } from '../../shared/ipc/review'
+import type { ReviewProposal, ReviewResolution } from '../../shared/ipc/review'
 import type { CommitInfo, FileEntry, FileMutationResult, HistoryDiff, PrimeStep } from '../../shared/ipc/document'
 import { DefaultProcessRunner } from '../infra/ProcessRunner'
 import { GitClient } from '../infra/GitClient'
@@ -710,5 +710,63 @@ esac`)
       accept: false,
     })) as ReviewResolution
     expect(resolution.doc).toBeUndefined()
+  }, 20_000)
+})
+
+describe('document:revertTo (restore to a version)', () => {
+  // Op call (--resume) appends a marker; prime just establishes the session.
+  const wholeDocStub = () =>
+    makeClaudeStub(`case "$*" in
+  *--resume*) sleep 0.3; printf 'edited by whole-doc op\\n' >> main.tex; echo '{"result":"Edited."}' ;;
+  *) echo '{"result":"primed"}' ;;
+esac`)
+
+  test('reverting to an earlier commit proposes the undo, broadcasts it, and on accept restores the tree', async () => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', wholeDocStub())
+    const root = makeProject()
+    await invoke('document:open', root)
+
+    // Make + accept a whole-doc edit so history is [edit, initial import].
+    const run = (await invoke('claude:run', { instruction: 'tighten', spans: [] })) as ClaudeResult
+    await invoke('review:resolve', { opId: run.proposal!.opId, accept: true })
+    expect(readFileSync(join(root, 'main.tex'), 'utf8')).toContain('edited by whole-doc op')
+
+    const hist = (await invoke('document:history')) as CommitInfo[]
+    const target = hist[hist.length - 1]!.hash // the initial import, before the edit
+
+    h.sent = []
+    const proposal = (await invoke('document:revertTo', target)) as ReviewProposal | null
+    expect(proposal).not.toBeNull()
+    expect(proposal!.diff).toContain('-edited by whole-doc op') // the restore undoes the edit
+    // Surfaced to the calling window as a review card (the crash-recovery path).
+    expect(h.sent.filter((e) => e.channel === 'review:proposal').map((e) => e.id)).toContain(
+      launcher.webContents.id,
+    )
+    // Not applied yet — the restore lives on its op branch until accepted.
+    expect(readFileSync(join(root, 'main.tex'), 'utf8')).toContain('edited by whole-doc op')
+
+    const res = (await invoke('review:resolve', { opId: proposal!.opId, accept: true })) as ReviewResolution
+    expect(res.committed).toBe(true)
+    expect(readFileSync(join(root, 'main.tex'), 'utf8')).toBe(ARTICLE) // rolled back to the version
+    const after = (await invoke('document:history')) as CommitInfo[]
+    expect(after[0]!.subject.startsWith('restore:')).toBe(true) // a distinct restore commit
+  }, 20_000)
+
+  test('reverting to the current HEAD changes nothing and returns null', async () => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', makeClaudeStub(`echo '{"result":"primed"}'`))
+    const root = makeProject()
+    await invoke('document:open', root)
+    const head = ((await invoke('document:history')) as CommitInfo[])[0]!.hash
+    expect(await invoke('document:revertTo', head)).toBeNull()
+  }, 20_000)
+
+  test('reverting while a proposal is pending is blocked (SPANS_LOCKED)', async () => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', wholeDocStub())
+    const root = makeProject()
+    await invoke('document:open', root)
+    const run = (await invoke('claude:run', { instruction: 'edit', spans: [] })) as ClaudeResult
+    expect(run.proposal).not.toBeNull() // a whole-doc proposal now owns the tree
+    const target = ((await invoke('document:history')) as CommitInfo[]).slice(-1)[0]!.hash
+    await expect(invoke('document:revertTo', target)).rejects.toThrow('SPANS_LOCKED')
   }, 20_000)
 })
