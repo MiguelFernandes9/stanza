@@ -447,14 +447,37 @@ export function binBlocks(
     }
   }
 
+  // Rendered ink (every unit, with its column) per page, to reject PHANTOM forward rects:
+  // synctex hands a block extent BELOW where text actually rendered (trailing \par glue, a
+  // vbox slug), so a fill that trusted it ended the box a line or three past the last real
+  // row. A forward rect counts only if a rendered unit IN ITS OWN COLUMN overlaps it — real
+  // same-column ink, not synctex's idea of it, and not a gutter-spanning merged row (those
+  // back a single-column rect spuriously, which is what overran the box on figure pages).
+  const unitsByPage = new Map<number, { u: AttributedUnit; col: PdfCol }[]>()
+  for (const u of units) { const c = colOfUnit(u); const a = unitsByPage.get(u.page); if (a) a.push({ u, col: c }); else unitsByPage.set(u.page, [{ u, col: c }]) }
+  const inkBacked = (page: number, col: PdfCol, r: PdfRect): boolean => {
+    const us = unitsByPage.get(page)
+    if (!us) return false
+    // STRICT vertical overlap (no slack): a phantom rect sits in the gap just past the last
+    // real row, so any slack would let it touch that row and pass.
+    for (const { u, col: uc } of us) if (uc === col && u.xLeft < r.x + r.width && r.x < u.xRight && u.yTop < r.y + r.height && r.y < u.yBottom) return true
+    return false
+  }
+
   // A block's forward LINE-height rects (≤ LINE_MAX) tagged with column — its EXACT
-  // rendered extent. Galley/vbox (tall) rects and shared-galley rects are excluded so they
-  // never re-inflate a box or duplicate one block's box onto another.
+  // rendered extent. Galley/vbox (tall) rects, shared-galley rects, and phantom (ink-less)
+  // rects are excluded so they never re-inflate a box, duplicate one, or overrun the text.
   interface FwdLine { page: number; col: PdfCol; x: number; y: number; right: number; bottom: number }
-  const lineRects = (id: string): FwdLine[] =>
-    (regionsById.get(id) ?? [])
-      .filter((r) => r.width > 0 && r.height > 0 && r.height <= LINE_MAX && inBand(r.y, r.y + r.height) && (keyOwners.get(rectKey(r.page, r)) ?? 0) <= 1)
-      .map((r) => ({ page: r.page, col: colOfUnit({ page: r.page, xLeft: r.x, yTop: r.y, xRight: r.x + r.width, yBottom: r.y + r.height, blockId: id }), x: r.x, y: r.y, right: r.x + r.width, bottom: r.y + r.height }))
+  const lineRects = (id: string): FwdLine[] => {
+    const out: FwdLine[] = []
+    for (const r of regionsById.get(id) ?? []) {
+      if (!(r.width > 0 && r.height > 0 && r.height <= LINE_MAX && inBand(r.y, r.y + r.height)) || (keyOwners.get(rectKey(r.page, r)) ?? 0) > 1) continue
+      const col = colOfUnit({ page: r.page, xLeft: r.x, yTop: r.y, xRight: r.x + r.width, yBottom: r.y + r.height, blockId: id })
+      if (!inkBacked(r.page, col, r)) continue
+      out.push({ page: r.page, col, x: r.x, y: r.y, right: r.x + r.width, bottom: r.y + r.height })
+    }
+    return out
+  }
 
   // A block's box per (page, column) is the UNION of its attributed units — NOT split by
   // vertical gaps (pdf.js drops rows mid-paragraph; a figure's image+caption sit a gap
