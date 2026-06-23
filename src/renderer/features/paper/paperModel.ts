@@ -617,6 +617,30 @@ export function binBlocks(
     boxesById.set(id, boxes)
   }
 
+  // Spatial orphan pass. A rendered text row that synctex maps NOWHERE — null inverse AND no
+  // forward rect (a math-heavy tail like "...the temporal sinusoid.") — is left unattributed
+  // and unboxed. Its only signal is position: it is the dropped tail of the block whose box
+  // sits directly above it in the same column. Attach each such row to that box (extend it
+  // down) when contiguous (within MAX_LINE_GAP). A run with no real box above it — the
+  // bibliography at a column top — finds none and stays unboxed, as intended.
+  const placed: PdfRect[] = []
+  for (const bs of boxesById.values()) for (const b of bs) placed.push(b)
+  const covered = (u: AttributedUnit): boolean =>
+    placed.some((b) => b.page === u.page && b.x - 2 <= u.xLeft && u.xRight <= b.x + b.width + 2 && b.y - 2 <= u.yTop && u.yBottom <= b.y + b.height + 2)
+  const orphans = units
+    .filter((u) => !u.blockId && u.yBottom - u.yTop <= LINE_MAX && inBand(u.yTop, u.yBottom) && !covered(u))
+    .sort((a, b) => a.page - b.page || a.yTop - b.yTop)
+  for (const u of orphans) {
+    let best: PdfRect | null = null
+    let bestGap = MAX_LINE_GAP
+    for (const b of placed) {
+      if (b.page !== u.page || !(b.x < u.xRight && u.xLeft < b.x + b.width)) continue
+      const gap = u.yTop - (b.y + b.height)
+      if (gap >= -2 && gap < bestGap) { bestGap = gap; best = b }
+    }
+    if (best) best.height = Math.max(best.height, u.yBottom - best.y)
+  }
+
   const contentTopByPage = new Map<number, number>()
   for (const arr of boxesById.values())
     for (const b of arr) {
