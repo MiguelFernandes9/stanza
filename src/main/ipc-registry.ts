@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import type { IpcMainInvokeEvent, WebContents } from 'electron'
+import { randomUUID } from 'node:crypto'
 import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { IpcChannels } from '@shared/ipc'
@@ -154,6 +155,13 @@ export function registerIpcHandlers(): void {
     const diff = await sessionFor(event).git.diffAt(sha)
     return { diff, files: changedFilesInDiff(diff) }
   })
+
+  // HISTORY "Restore to this version": roll the doc back to `sha` as a normal
+  // whole-doc review proposal (Accept = commit the rollback, Reject = discard).
+  // Null when the doc already sits at that version.
+  ipcMain.handle(IpcChannels.documentRevertTo, (event, sha: string) =>
+    runRestoreOp(sessionFor(event), event.sender, sha),
+  )
 
   ipcMain.handle(IpcChannels.documentFiles, (event): FileEntry[] => {
     const { info } = sessionFor(event)
@@ -533,6 +541,61 @@ async function runClaudeOp(
       // second accept hit an already-merged branch (BUG-18). The broadcast path is
       // reserved for reEmitPendingProposals (open-time crash recovery).
       return { opId: op.opId, note: op.note, proposal }
+    })
+  } finally {
+    setTimeout(() => doc.endOp(), FILE_WATCH_SETTLE_MS + 300)
+  }
+}
+
+/** HISTORY "Restore to this version": the SAME worktree-capture pipeline as
+ *  runClaudeOp, but the worktree edits come from `git read-tree`-ing the target
+ *  commit instead of from Claude. The result is a normal whole-doc proposal —
+ *  Accept commits the rollback, Reject discards it — so a restore previews
+ *  before it lands and is itself reversible. Null when the doc is already at
+ *  `sha` (read-tree leaves the worktree clean → capture returns null). No file
+ *  watcher: read-tree is synchronous, there's no external writer to settle. */
+async function runRestoreOp(
+  doc: DocumentSession,
+  wc: WebContents,
+  sha: string,
+): Promise<ReviewProposal | null> {
+  doc.review.assertSpansFree([]) // a restore owns the whole tree (v1 serial execution)
+  doc.beginOp()
+  try {
+    return await doc.runOpExclusive(async () => {
+      await doc.runMainTreeExclusive(() => doc.review.prepare())
+      await doc.ensureWorktree()
+      await doc.review.syncWorktree(doc.worktreeDir)
+
+      // Set the worktree to the target commit's tree, then capture that as the
+      // proposal's edits — its diff vs HEAD undoes every change since `sha`.
+      await doc.git.worktreeClient(doc.worktreeDir).readTreeReset(sha)
+      const subject = await doc.git.subject(sha)
+      const instruction = `Restore to "${subject}"`
+      const opId = randomUUID()
+      const proposal = await doc.review.captureWorktree(
+        doc.worktreeDir,
+        opId,
+        instruction,
+        [],
+        `restore: ${subject}`,
+      )
+      if (proposal) {
+        doc.diffPreview.prime(proposal.opId, proposal.branch, proposal.blocks)
+        appendOpRecord(doc.info.root, {
+          opId,
+          ts: new Date().toISOString(),
+          instruction,
+          note: '',
+          accepted: null,
+          scope: 'doc',
+        })
+        // Surface as a review card via the broadcast path (the same one open-time
+        // crash recovery uses): there's no busy task to thread it through, so this
+        // is the single delivery — the renderer's onReviewProposal → restore-proposal.
+        sendTo(wc, IpcChannels.reviewProposal, proposal)
+      }
+      return proposal
     })
   } finally {
     setTimeout(() => doc.endOp(), FILE_WATCH_SETTLE_MS + 300)

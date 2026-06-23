@@ -83,6 +83,18 @@ describe('ReviewService.captureWorktree', () => {
     expect(await git.listBranches('stanza/op-*')).toEqual(['stanza/op-op1'])
   })
 
+  test('an explicit commit subject overrides the default claude: prefix (restore flow)', async () => {
+    await review.syncWorktree(wt)
+    writeFileSync(join(wt, 'main.tex'), 'RESTORED\nline2\nline3\n')
+    const proposal = await review.captureWorktree(wt, 'rst1', 'Restore to "initial"', [], 'restore: initial')
+    // The human instruction still drives the review card…
+    expect(proposal!.instruction).toBe('Restore to "initial"')
+    // …but the commit lands under the given subject, not `claude: <instruction>`.
+    const resolution = await review.resolve({ opId: 'rst1', accept: true })
+    expect(resolution.commitSubject).toBe('restore: initial')
+    expect(read('main.tex')).toBe('RESTORED\nline2\nline3\n')
+  })
+
   test('no changes means no proposal and no branch', async () => {
     const proposal = await captureOp('op1', 'noop', [], {})
     expect(proposal).toBe(null)

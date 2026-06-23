@@ -55,6 +55,10 @@ export const api = {
   documentHistory: () => invoke<CommitInfo[]>(IpcChannels.documentHistory),
   /** The change a commit (by sha) introduced — its diff vs its parent (HISTORY viewer). */
   documentDiffAt: (sha: string) => invoke<HistoryDiff>(IpcChannels.documentDiffAt, sha),
+  /** Restore the document to a commit (by sha) — surfaces as a review proposal
+   *  via review:proposal; null when the doc is already at that version. */
+  documentRevertTo: (sha: string) =>
+    invoke<ReviewProposal | null>(IpcChannels.documentRevertTo, sha),
   documentSave: (req: { relPath: string; content: string }) =>
     invoke<void>(IpcChannels.documentSave, req.relPath, req.content),
   /** Working-tree file content (F4 editor). Contract addition, flagged at gate. */

@@ -72,6 +72,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
   // shown full-page until closed (subject/iso for the header come from the
   // commit row; diff/files from document:diffAt). null = no overlay.
   const [historyDiff, setHistoryDiff] = useState<{
+    hash: string
     subject: string
     iso: string
     diff: string
@@ -95,7 +96,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
   // In-flight loadBlocks count, so `blocksReloading` stays true until the LAST
   // overlapping reload settles (not cleared by the first of two).
   const blockLoads = useRef(0)
-  const [toast, setToast] = useState<{ title: string; message: string; tone: 'danger' | 'success' } | null>(null)
+  const [toast, setToast] = useState<{ title: string; message: string; tone: 'danger' | 'success' | 'neutral' } | null>(null)
   const [state, dispatch] = useReducer(taskReducer, initialTaskState)
   // Latest tree + tasks, read inside loadBlocks' async resolve without making
   // it depend on (and re-create on) every blocks/tasks change (BUG-33).
@@ -908,7 +909,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
             if (!commit) return
             // Load the past-version-vs-current diff, then open the overlay.
             void client.documentDiffAt(hash).then(
-              ({ diff, files }) => setHistoryDiff({ subject: commit.subject, iso: commit.iso, diff, files }),
+              ({ diff, files }) => setHistoryDiff({ hash, subject: commit.subject, iso: commit.iso, diff, files }),
               showErrToast
             )
           }}
@@ -1048,6 +1049,31 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           iso={historyDiff.iso}
           diff={historyDiff.diff}
           files={historyDiff.files}
+          onRestore={() => {
+            const sha = historyDiff.hash
+            setHistoryDiff(null)
+            // The restore comes back as a review card via onReviewProposal
+            // (review:proposal broadcast) — here we only handle the edge results.
+            void client.documentRevertTo(sha).then((proposal) => {
+              if (!proposal)
+                setToast({
+                  title: 'Already at this version',
+                  message: 'Nothing to restore — the document already matches this commit.',
+                  tone: 'neutral'
+                })
+            }, (err) => {
+              const msg = err instanceof Error ? err.message : String(err)
+              setToast(
+                msg.includes('SPANS_LOCKED')
+                  ? {
+                      title: 'Resolve the pending change first',
+                      message: 'Accept or reject the open proposal before restoring an earlier version.',
+                      tone: 'danger'
+                    }
+                  : { title: 'Restore failed', message: msg, tone: 'danger' }
+              )
+            })
+          }}
           onClose={() => setHistoryDiff(null)}
         />
       )}

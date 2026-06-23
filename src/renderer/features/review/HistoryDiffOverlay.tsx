@@ -1,7 +1,7 @@
 import { useEffect } from 'react'
 import type { JSX } from 'react'
-import { History, X } from 'lucide-react'
-import { IconButton } from '@renderer/components'
+import { History, RotateCcw, X } from 'lucide-react'
+import { Button, IconButton } from '@renderer/components'
 import { relativeTime } from '../workspace/sidebarData'
 import { DiffView } from './DiffView'
 
@@ -12,14 +12,17 @@ interface Props {
   /** Unified diff of the selected commit vs current HEAD, and its files. */
   diff: string
   files: string[]
+  /** Restore the document to this version — routed through the review pipeline
+   *  as a proposal, so it previews + is itself reversible (Accept/Reject). */
+  onRestore: () => void
   onClose: () => void
 }
 
 /** Full-page diff of a past commit vs the current version — opens from a
- *  HISTORY row click. Mirrors ReviewOverlay's fixed shell, but read-only: no
- *  resolve/restore buttons in v1 (a "restore to this version" button will land
- *  later, routed through the review pipeline). Source diff only. */
-export function HistoryDiffOverlay({ subject, iso, diff, files, onClose }: Props): JSX.Element {
+ *  HISTORY row click. Mirrors ReviewOverlay's fixed shell. The diff is
+ *  read-only; "Restore to this version" rolls the document back to this commit
+ *  as a normal review proposal (Accept commits the rollback, Reject discards). */
+export function HistoryDiffOverlay({ subject, iso, diff, files, onRestore, onClose }: Props): JSX.Element {
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') onClose()
@@ -72,6 +75,9 @@ export function HistoryDiffOverlay({ subject, iso, diff, files, onClose }: Props
             {relativeTime(iso)}
           </span>
           <div style={{ flex: 1 }} />
+          <Button size="sm" variant="primary" iconLeft={<RotateCcw size={13} />} onClick={onRestore}>
+            Restore to this version
+          </Button>
           <IconButton size="sm" label="Close" onClick={onClose}>
             <X size={15} />
           </IconButton>

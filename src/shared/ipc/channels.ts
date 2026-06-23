@@ -4,6 +4,7 @@ export const IpcChannels = {
   documentRecents: 'document:recents', // invoke → RecentProject[]
   documentHistory: 'document:history', // invoke → CommitInfo[] (sidebar HISTORY)
   documentDiffAt: 'document:diffAt',  // invoke sha → HistoryDiff ({diff, files}: the change that commit introduced)
+  documentRevertTo: 'document:revertTo', // invoke sha → ReviewProposal | null (restore the doc to a commit, as a review proposal)
   documentSave: 'document:save',      // invoke (relPath, content) → void (F4)
   documentRead: 'document:read',      // invoke relPath → string (working-tree content; F4 editor — contract addition, flagged at gate)
   documentFiles: 'document:files',    // invoke → FileEntry[] (sidebar FILES tree)
