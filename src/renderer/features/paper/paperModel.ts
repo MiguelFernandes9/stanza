@@ -431,12 +431,29 @@ export function binBlocks(
     return g ? ((u.xLeft + u.xRight) / 2 <= g.gx ? 'l' : 'r') : 'full'
   }
 
+  // A forward rect that 2+ DISTINCT blocks report identically is a shared galley locator
+  // (synctex returns the same \maketitle box for \title, \author and \abstract; or one
+  // vbox for several blocks) — non-informative, so it must not define any box. Count each
+  // line-rect's (page,x,y,h) key across blocks and drop keys owned by more than one.
+  const rectKey = (page: number, r: PdfRect): string =>
+    `${page}:${Math.round(r.x)}:${Math.round(r.y)}:${Math.round(r.height)}`
+  const keyOwners = new Map<string, number>()
+  for (const [, rs] of regionsById) {
+    const seen = new Set<string>()
+    for (const r of rs) {
+      if (r.width <= 0 || r.height <= 0 || r.height > LINE_MAX || !inBand(r.y, r.y + r.height)) continue
+      const k = rectKey(r.page, r)
+      if (!seen.has(k)) { seen.add(k); keyOwners.set(k, (keyOwners.get(k) ?? 0) + 1) }
+    }
+  }
+
   // A block's forward LINE-height rects (≤ LINE_MAX) tagged with column — its EXACT
-  // rendered extent. Galley/vbox (tall) rects are excluded so they never re-inflate a box.
+  // rendered extent. Galley/vbox (tall) rects and shared-galley rects are excluded so they
+  // never re-inflate a box or duplicate one block's box onto another.
   interface FwdLine { page: number; col: PdfCol; x: number; y: number; right: number; bottom: number }
   const lineRects = (id: string): FwdLine[] =>
     (regionsById.get(id) ?? [])
-      .filter((r) => r.width > 0 && r.height > 0 && r.height <= LINE_MAX && inBand(r.y, r.y + r.height))
+      .filter((r) => r.width > 0 && r.height > 0 && r.height <= LINE_MAX && inBand(r.y, r.y + r.height) && (keyOwners.get(rectKey(r.page, r)) ?? 0) <= 1)
       .map((r) => ({ page: r.page, col: colOfUnit({ page: r.page, xLeft: r.x, yTop: r.y, xRight: r.x + r.width, yBottom: r.y + r.height, blockId: id }), x: r.x, y: r.y, right: r.x + r.width, bottom: r.y + r.height }))
 
   // A block's box per (page, column) is the UNION of its attributed units — NOT split by
