@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { ProcessRunner, ProcResult, RunSpec } from '../../infra/ProcessRunner'
 import type { ClaudeStatus } from '../../../shared/ipc/claude'
 import type { DocumentInfo } from '../../../shared/ipc/document'
-import { Store } from '../../infra/Store'
+import { GlobalSettingsStore, Store } from '../../infra/Store'
 import { ClaudeService } from '../ClaudeService'
 
 const doc: DocumentInfo = {
@@ -36,10 +36,12 @@ class MockRunner implements ProcessRunner {
 
 let dir: string
 let store: Store
+let globalSettings: GlobalSettingsStore
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'stanza-claude-'))
   store = new Store(join(dir, 'projects.json'))
+  globalSettings = new GlobalSettingsStore(join(dir, 'settings.json'))
 })
 
 afterEach(() => {
@@ -50,7 +52,7 @@ afterEach(() => {
 describe('ClaudeService.runOp', () => {
   test('first op primes with --session-id, then resumes with the same uuid', async () => {
     const runner = new MockRunner(() => claudeJson('done'))
-    const service = new ClaudeService(runner, store, doc)
+    const service = new ClaudeService(runner, store, globalSettings, doc)
 
     const { note } = await service.runOp(
       { instruction: 'tighten the intro', spans: [] },
@@ -82,9 +84,44 @@ describe('ClaudeService.runOp', () => {
     expect(note).toBe('done')
   })
 
+  test('prepends --model and --effort from global settings to EVERY claude call', async () => {
+    globalSettings.set({ claudeModel: 'sonnet', claudeEffort: 'low' })
+    const runner = new MockRunner(() => claudeJson('done'))
+    const service = new ClaudeService(runner, store, globalSettings, doc)
+
+    await service.runOp({ instruction: 'x', spans: [] }, () => {})
+
+    expect(runner.calls).toHaveLength(2) // prime + resume
+    for (const call of runner.calls) {
+      expect(call.args.slice(0, 4)).toEqual(['--model', 'sonnet', '--effort', 'low'])
+      expect(call.args[4]).toBe('-p') // the original argv follows the injected flags
+    }
+  })
+
+  test('passes the model alias straight through (region-safe, auto-tracks)', async () => {
+    globalSettings.set({ claudeModel: 'haiku' })
+    const runner = new MockRunner(() => claudeJson('done'))
+    const service = new ClaudeService(runner, store, globalSettings, doc)
+
+    await service.runOp({ instruction: 'x', spans: [] }, () => {})
+
+    expect(runner.calls[0]!.args.slice(0, 2)).toEqual(['--model', 'haiku'])
+  })
+
+  test('injects no model/effort flags when unset (the CLI default)', async () => {
+    const runner = new MockRunner(() => claudeJson('done'))
+    const service = new ClaudeService(runner, store, globalSettings, doc)
+
+    await service.runOp({ instruction: 'x', spans: [] }, () => {})
+
+    expect(runner.calls[0]!.args[0]).toBe('-p')
+    expect(runner.calls[0]!.args).not.toContain('--model')
+    expect(runner.calls[0]!.args).not.toContain('--effort')
+  })
+
   test('ops run in a custom workDir (the op worktree), primed + resumed THERE', async () => {
     const runner = new MockRunner(() => claudeJson('ok'))
-    const service = new ClaudeService(runner, store, doc, '/tmp/stanza-wt/abc')
+    const service = new ClaudeService(runner, store, globalSettings, doc, '/tmp/stanza-wt/abc')
 
     await service.runOp({ instruction: 'x', spans: [] }, () => {})
 
@@ -104,7 +141,7 @@ describe('ClaudeService.runOp', () => {
   test('a session primed in a different dir is re-primed (sandbox is dir-pinned)', async () => {
     store.setProject('/proj', { sessionId: 'old-doc-root-session', primedWorkdir: '/proj' })
     const runner = new MockRunner(() => claudeJson('ok'))
-    const service = new ClaudeService(runner, store, doc, '/tmp/stanza-wt/abc') // different workDir
+    const service = new ClaudeService(runner, store, globalSettings, doc, '/tmp/stanza-wt/abc') // different workDir
 
     await service.runOp({ instruction: 'x', spans: [] }, () => {})
 
@@ -117,7 +154,7 @@ describe('ClaudeService.runOp', () => {
     vi.stubEnv('ANTHROPIC_API_KEY', 'sk-ant-should-not-reach-claude')
     vi.stubEnv('ANTHROPIC_AUTH_TOKEN', 'tok-should-not-reach-claude')
     const runner = new MockRunner(() => claudeJson('done'))
-    const service = new ClaudeService(runner, store, doc)
+    const service = new ClaudeService(runner, store, globalSettings, doc)
 
     await service.runOp({ instruction: 'x', spans: [] }, () => {})
 
@@ -131,7 +168,7 @@ describe('ClaudeService.runOp', () => {
 
   test('second op resumes only; session id persisted in the store', async () => {
     const runner = new MockRunner(() => claudeJson('ok'))
-    const service = new ClaudeService(runner, store, doc)
+    const service = new ClaudeService(runner, store, globalSettings, doc)
 
     await service.runOp({ instruction: 'a', spans: [] }, () => {})
     await service.runOp({ instruction: 'b', spans: [] }, () => {})
@@ -143,7 +180,7 @@ describe('ClaudeService.runOp', () => {
   test('a stored session id skips priming entirely (restart resume, FR8)', async () => {
     store.setProject('/proj', { sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', primedWorkdir: '/proj' })
     const runner = new MockRunner(() => claudeJson('resumed'))
-    const service = new ClaudeService(runner, store, doc)
+    const service = new ClaudeService(runner, store, globalSettings, doc)
 
     await service.runOp({ instruction: 'x', spans: [] }, () => {})
 
@@ -158,7 +195,7 @@ describe('ClaudeService.runOp', () => {
   test('span-scoped prompt lists each span', async () => {
     store.setProject('/proj', { sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', primedWorkdir: '/proj' })
     const runner = new MockRunner(() => claudeJson('ok'))
-    const service = new ClaudeService(runner, store, doc)
+    const service = new ClaudeService(runner, store, globalSettings, doc)
 
     await service.runOp(
       {
@@ -184,7 +221,7 @@ describe('ClaudeService.runOp', () => {
       opArgs = spec.args
       return claudeJson('ok')
     })
-    const service = new ClaudeService(runner, store, doc)
+    const service = new ClaudeService(runner, store, globalSettings, doc)
 
     await service.runOp(
       { instruction: 'fix the label', spans: [], imageDataUrl: 'data:image/png;base64,iVBORw0KGgo=' },
@@ -208,7 +245,7 @@ describe('ClaudeService.runOp', () => {
 
   test('status sequence priming → running → done; opId consistent', async () => {
     const runner = new MockRunner(() => claudeJson('ok'))
-    const service = new ClaudeService(runner, store, doc)
+    const service = new ClaudeService(runner, store, globalSettings, doc)
     const statuses: ClaudeStatus[] = []
 
     const { opId } = await service.runOp({ instruction: 'x', spans: [] }, (s) =>
@@ -228,7 +265,7 @@ describe('ClaudeService.runOp', () => {
       stderr: '',
       timedOut: true,
     }))
-    const service = new ClaudeService(runner, store, doc)
+    const service = new ClaudeService(runner, store, globalSettings, doc)
     const statuses: ClaudeStatus[] = []
 
     await expect(
@@ -248,7 +285,7 @@ describe('ClaudeService.runOp', () => {
       if (call === 0) await gate
       return claudeJson(`op${call}`)
     })
-    const service = new ClaudeService(runner, store, doc)
+    const service = new ClaudeService(runner, store, globalSettings, doc)
 
     const first = service.runOp({ instruction: 'first', spans: [] }, () => {})
     const second = service.runOp({ instruction: 'second', spans: [] }, () => {})
@@ -264,7 +301,7 @@ describe('ClaudeService.runOp', () => {
 
   test('prime() establishes the session without running an op, idempotently', async () => {
     const runner = new MockRunner(() => claudeJson('primed'))
-    const service = new ClaudeService(runner, store, doc)
+    const service = new ClaudeService(runner, store, globalSettings, doc)
 
     await service.prime()
     expect(runner.calls).toHaveLength(1)
@@ -277,7 +314,7 @@ describe('ClaudeService.runOp', () => {
   test('prime(signal) forwards the abort signal to the runner', async () => {
     const controller = new AbortController()
     const runner = new MockRunner(() => claudeJson('primed'))
-    const service = new ClaudeService(runner, store, doc)
+    const service = new ClaudeService(runner, store, globalSettings, doc)
 
     await service.prime(controller.signal)
 
@@ -290,7 +327,7 @@ describe('ClaudeService.runOp', () => {
       controller.abort()
       return { code: null, stdout: '', stderr: '', timedOut: false }
     })
-    const service = new ClaudeService(runner, store, doc)
+    const service = new ClaudeService(runner, store, globalSettings, doc)
 
     await expect(service.prime(controller.signal)).rejects.toThrow()
     expect(store.getProject('/proj').sessionId).toBeUndefined()
@@ -300,7 +337,7 @@ describe('ClaudeService.runOp', () => {
     vi.stubEnv('STANZA_CLAUDE_BIN', '/mocks/claude-mock.sh')
     store.setProject('/proj', { sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', primedWorkdir: '/proj' })
     const runner = new MockRunner(() => claudeJson('ok'))
-    const service = new ClaudeService(runner, store, doc)
+    const service = new ClaudeService(runner, store, globalSettings, doc)
 
     await service.runOp({ instruction: 'x', spans: [] }, () => {})
 
@@ -311,7 +348,7 @@ describe('ClaudeService.runOp', () => {
 describe('ClaudeService.runThreadTurn (persistent bubble)', () => {
   test('first turn primes a FRESH session and returns its id; doc session untouched', async () => {
     const runner = new MockRunner(() => claudeJson('hi'))
-    const service = new ClaudeService(runner, store, doc)
+    const service = new ClaudeService(runner, store, globalSettings, doc)
 
     const res = await service.runThreadTurn(null, { instruction: 'make it formal', spans: [] }, () => {})
 
@@ -333,7 +370,7 @@ describe('ClaudeService.runThreadTurn (persistent bubble)', () => {
 
   test('a given session id resumes only (no prime) — restart / later turns', async () => {
     const runner = new MockRunner(() => claudeJson('again'))
-    const service = new ClaudeService(runner, store, doc)
+    const service = new ClaudeService(runner, store, globalSettings, doc)
 
     const res = await service.runThreadTurn(
       'tttttttt-tttt-tttt-tttt-tttttttttttt',
@@ -356,7 +393,7 @@ describe('ClaudeService.runThreadTurn (persistent bubble)', () => {
       opArgs = spec.args
       return claudeJson('ok')
     })
-    const service = new ClaudeService(runner, store, doc)
+    const service = new ClaudeService(runner, store, globalSettings, doc)
 
     await service.runThreadTurn(
       'tttttttt-tttt-tttt-tttt-tttttttttttt',
@@ -378,7 +415,7 @@ describe('ClaudeService.runThreadTurn (persistent bubble)', () => {
 
   test('emits priming → running → done', async () => {
     const runner = new MockRunner(() => claudeJson('ok'))
-    const service = new ClaudeService(runner, store, doc)
+    const service = new ClaudeService(runner, store, globalSettings, doc)
     const states: ClaudeStatus['state'][] = []
 
     await service.runThreadTurn('s-s-s', { instruction: 'x', spans: [] }, (s) => states.push(s.state))
@@ -394,7 +431,7 @@ describe('ClaudeService.runThreadTurn (persistent bubble)', () => {
       if (call === 0) await gate
       return claudeJson(`r${call}`)
     })
-    const service = new ClaudeService(runner, store, doc)
+    const service = new ClaudeService(runner, store, globalSettings, doc)
 
     const op = service.runOp({ instruction: 'doc', spans: [] }, () => {})
     const turn = service.runThreadTurn('s-s-s', { instruction: 'thread', spans: [] }, () => {})

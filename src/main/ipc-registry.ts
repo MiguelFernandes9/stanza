@@ -366,7 +366,7 @@ export function registerIpcHandlers(): void {
         // recompile from the new file. open() honors the override just written.
         const info = await documents.open(root)
         if (info) {
-          sessions.set(event.sender.id, new DocumentSession(info, runner, store))
+          sessions.set(event.sender.id, new DocumentSession(info, runner, store, globalSettings))
           return { doc: info }
         }
         return { doc: null }
@@ -428,7 +428,7 @@ async function loadDoc(
 }
 
 function bindSession(wc: WebContents, info: DocumentInfo): void {
-  const session = new DocumentSession(info, runner, store)
+  const session = new DocumentSession(info, runner, store, globalSettings)
   sessions.set(wc.id, session)
   void session.ensureWorktree() // create/reuse the doc's op worktree (crash-safe)
   // Replace any prior watcher (re-opening a doc in the same window), then watch
