@@ -677,6 +677,24 @@ export function binBlocks(
     }
   }
 
+  // Env single-object dominance. A figure / listing / table is ONE rendered object — it
+  // does not scatter across non-adjacent pages. lstlisting/verbatim synctex is unreliable
+  // and can plant a phantom forward rect on a neighbouring page that catches a stray row,
+  // giving the env a real box plus a spurious one-line box on the wrong page ("two blocks").
+  // Keep the env's DOMINANT page (most box ink); drop a page whose ink is a small fraction
+  // of it. A genuine multi-page env — a longtable split ~evenly — keeps both pages, since
+  // neither is a small fraction. (Env-ness from the id's `envN` segment.)
+  const ENV_RE = /(^|\/)env\d+(#|$)/
+  for (const [id, bs] of boxesById) {
+    if (!ENV_RE.test(id) || bs.length < 2) continue
+    const inkByPage = new Map<number, number>()
+    for (const b of bs) inkByPage.set(b.page, (inkByPage.get(b.page) ?? 0) + b.height)
+    if (inkByPage.size < 2) continue
+    const domInk = Math.max(...inkByPage.values())
+    const kept = bs.filter((b) => (inkByPage.get(b.page) ?? 0) >= 0.25 * domInk)
+    if (kept.length && kept.length !== bs.length) boxesById.set(id, kept)
+  }
+
   const contentTopByPage = new Map<number, number>()
   for (const arr of boxesById.values())
     for (const b of arr) {
