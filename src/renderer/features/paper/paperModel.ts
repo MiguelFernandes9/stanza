@@ -401,25 +401,27 @@ export function binBlocks(
 ): BinnedContent {
   const columnsByPage = columnLayoutByPage(rowsByPage)
 
-  // Split a text unit that spans the page gutter into a left half and a right half. pdf.js
-  // merges a left-column line and a right-column line on a shared baseline into ONE
-  // gutter-crossing row when its per-page gutter detector fails (a figure-topped page), and
-  // that row then lands in one block and steals the other column's line. Splitting at the
-  // robust per-page gutter, with the forward-containment override below re-homing each half
-  // to the block whose line rect contains it, undoes the merge. Box-neutral for a genuine
-  // full-width row: both halves re-home to the SAME block and union back. Only text-height
-  // units split — a figure graphic stays whole.
-  const gutterByPage = new Map<number, { left: number; right: number; gx: number } | null>()
-  const gutterFor = (page: number): { left: number; right: number; gx: number } | null => {
-    if (!gutterByPage.has(page)) gutterByPage.set(page, dominantGutter(columnsByPage.get(page) ?? { bands: [] }))
-    return gutterByPage.get(page)!
-  }
-  units = units.flatMap((u) => {
-    const g = gutterFor(u.page)
-    if (g && u.yBottom - u.yTop <= LINE_MAX && u.xLeft < g.left && u.xRight > g.right)
-      return [{ ...u, xRight: g.left }, { ...u, xLeft: g.right }]
-    return [u]
-  })
+  // The column gutter is a DOCUMENT constant in a two-column paper. Detected per-page it is
+  // fooled by a page whose ONLY two-column structure is a TABLE's internal columns (a short
+  // last page with no real right column): that narrow, off-centre gutter then both clips the
+  // body boxes to half width and mis-splits their rows. Take the height-weighted median
+  // gutter across ALL pages, so the real body gutter (the tall majority) wins and a table's
+  // is a minority. Used for the row split below AND the column clip in the box loop.
+  const docGutter = dominantGutter({ bands: [...columnsByPage.values()].flatMap((l) => l.bands) })
+
+  // Split a text unit that spans the gutter into a left half and a right half. pdf.js merges
+  // a left-column line and a right-column line on a shared baseline into ONE gutter-crossing
+  // row when its per-page gutter detector fails (a figure-topped page), and that row then
+  // lands in one block and steals the other column's line. Splitting at the gutter, with the
+  // forward-containment override below re-homing each half to the block whose line rect
+  // contains it, undoes the merge. Box-neutral for a genuine full-width row: both halves
+  // re-home to the SAME block and union back. Only text-height units split — a graphic whole.
+  if (docGutter)
+    units = units.flatMap((u) =>
+      u.yBottom - u.yTop <= LINE_MAX && u.xLeft < docGutter.left && u.xRight > docGutter.right
+        ? [{ ...u, xRight: docGutter.left }, { ...u, xLeft: docGutter.right }]
+        : [u]
+    )
 
   const band = contentBand(rowsByPage)
   const inBand = (yTop: number, yBottom: number): boolean =>
@@ -448,8 +450,10 @@ export function binBlocks(
     const layout = columnsByPage.get(u.page)
     const c = layout ? columnOf(layout, u) : 'full'
     if (c !== 'full') return c
-    const g = layout ? dominantGutter(layout) : null
-    return g ? ((u.xLeft + u.xRight) / 2 <= g.gx ? 'l' : 'r') : 'full'
+    // Snap a gutter-spanning / single-band unit by the DOC gutter, not the per-page one —
+    // on a table-only last page the per-page gutter is the table's internal column boundary
+    // (off-centre), which would misclassify the body and fight the doc-gutter column clip.
+    return docGutter ? ((u.xLeft + u.xRight) / 2 <= docGutter.gx ? 'l' : 'r') : 'full'
   }
 
   // A forward rect that 2+ DISTINCT blocks report identically is a shared galley locator
@@ -558,7 +562,7 @@ export function binBlocks(
           byCol.delete('l'); byCol.delete('r'); byCol.set(keep, [...L, ...R])
         }
       }
-      const g = dominantGutter(columnsByPage.get(page) ?? { bands: [] })
+      const g = docGutter
       for (const [col, cu] of byCol) {
         let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity
         for (const u of cu) { x = Math.min(x, u.xLeft); y = Math.min(y, u.yTop); right = Math.max(right, u.xRight); bottom = Math.max(bottom, u.yBottom) }
