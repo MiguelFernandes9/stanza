@@ -501,18 +501,26 @@ export function binBlocks(
 
   // Missing-block fallback: a block with forward line rects (it IS in this PDF) but NO
   // attributed units — its rows all mis-attributed to a neighbour, common for a section
-  // heading or a single-line paragraph — gets a box from those rects, per (page, column).
+  // heading or a single-line paragraph — gets a box from its LARGEST contiguous run of
+  // forward line rects (per page, column). Only the dominant run: synctex forward for
+  // these blocks is often scattered, so a full bbox would balloon over the page.
   for (const id of regionsById.keys()) {
     if (boxesById.has(id)) continue
-    const cells = new Map<string, FwdLine>()
-    for (const r of lineRects(id)) {
-      const key = `${r.page}|${r.col}`
-      const cur = cells.get(key)
-      if (!cur) cells.set(key, { ...r })
-      else { cur.x = Math.min(cur.x, r.x); cur.y = Math.min(cur.y, r.y); cur.right = Math.max(cur.right, r.right); cur.bottom = Math.max(cur.bottom, r.bottom) }
+    const byCell = new Map<string, FwdLine[]>()
+    for (const r of lineRects(id)) { const k = `${r.page}|${r.col}`; const a = byCell.get(k); if (a) a.push(r); else byCell.set(k, [r]) }
+    const boxes: PdfRect[] = []
+    for (const [, rs] of byCell) {
+      rs.sort((a, b) => a.y - b.y)
+      let best: { x: number; y: number; right: number; bottom: number; ink: number } | null = null
+      let cur: { x: number; y: number; right: number; bottom: number; ink: number } | null = null
+      for (const r of rs) {
+        if (!cur || r.y - cur.bottom > MAX_LINE_GAP) { cur = { x: r.x, y: r.y, right: r.right, bottom: r.bottom, ink: 0 } }
+        cur.x = Math.min(cur.x, r.x); cur.y = Math.min(cur.y, r.y); cur.right = Math.max(cur.right, r.right); cur.bottom = Math.max(cur.bottom, r.bottom); cur.ink += r.bottom - r.y
+        if (!best || cur.ink > best.ink) best = cur
+      }
+      if (best) boxes.push({ page: rs[0]!.page, x: best.x, y: best.y, width: best.right - best.x, height: best.bottom - best.y, col: rs[0]!.col })
     }
-    if (!cells.size) continue
-    const boxes = [...cells.values()].map((c) => ({ page: c.page, x: c.x, y: c.y, width: c.right - c.x, height: c.bottom - c.y, col: c.col }))
+    if (!boxes.length) continue
     boxes.sort((a, b) => a.page - b.page || a.x - b.x)
     boxesById.set(id, boxes)
   }
