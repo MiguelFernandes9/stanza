@@ -566,10 +566,12 @@ export function binBlocks(
       for (const [col, cu] of byCol) {
         let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity
         for (const u of cu) { x = Math.min(x, u.xLeft); y = Math.min(y, u.yTop); right = Math.max(right, u.xRight); bottom = Math.max(bottom, u.yBottom) }
-        // Extent fill: grow the box's Y to the block's forward line rects in this column
-        // that are CONTIGUOUS with it (within MAX_LINE_GAP), iterating to closure — fills
-        // rows pdf.js dropped / mis-attributed so the box ends where the block really does.
-        // A far galley-collision rect is never reached, so the box can't over-extend.
+        // Extent fill: grow the box's Y *and X* to the block's forward line rects in this
+        // column that are CONTIGUOUS with it (within MAX_LINE_GAP), iterating to closure —
+        // fills rows pdf.js dropped / mis-attributed so the box covers where the block really
+        // is. X matters when only an INDENTED first line was attributed and the synctex-null
+        // body lines (reaching the margin) would otherwise sit left of the box. A far
+        // galley-collision rect is never reached, so the box can't over-extend.
         const cand = fwd.filter((r) => r.page === page && (r.col === col || col === 'full' || r.col === 'full'))
         const used = new Array<boolean>(cand.length).fill(false)
         for (let grew = true; grew;) {
@@ -577,7 +579,7 @@ export function binBlocks(
           for (let k = 0; k < cand.length; k++) {
             const r = cand[k]!
             if (used[k] || r.y > bottom + MAX_LINE_GAP || r.bottom < y - MAX_LINE_GAP) continue
-            y = Math.min(y, r.y); bottom = Math.max(bottom, r.bottom); used[k] = true; grew = true
+            y = Math.min(y, r.y); bottom = Math.max(bottom, r.bottom); x = Math.min(x, r.x); right = Math.max(right, r.right); used[k] = true; grew = true
           }
         }
         // Clip a column box to its column so a mis-measured full-width row can't widen it
