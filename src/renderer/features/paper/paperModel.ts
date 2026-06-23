@@ -623,24 +623,40 @@ export function binBlocks(
   // forward rect (a math-heavy tail like "...the temporal sinusoid.") — is left unattributed
   // and unboxed. Its only signal is position: it is the dropped tail of the block whose box
   // sits directly above it in the same column. Attach each such row to that box (extend it
-  // down) when contiguous (within MAX_LINE_GAP). A run with no real box above it — the
-  // bibliography at a column top — finds none and stays unboxed, as intended.
+  // down) when contiguous (within MAX_LINE_GAP). But cluster the orphans into same-column
+  // runs first and attach only SMALL runs: a LONG run is the BibTeX references (every line
+  // synctex-null) — attaching it would chain the whole bibliography into the conclusion box
+  // above it. References have no source block, so a long null run is left unboxed.
   const placed: PdfRect[] = []
   for (const bs of boxesById.values()) for (const b of bs) placed.push(b)
   const covered = (u: AttributedUnit): boolean =>
     placed.some((b) => b.page === u.page && b.x - 2 <= u.xLeft && u.xRight <= b.x + b.width + 2 && b.y - 2 <= u.yTop && u.yBottom <= b.y + b.height + 2)
+  const orphanCol = (u: AttributedUnit): PdfCol =>
+    !docGutter ? 'full' : (u.xLeft + u.xRight) / 2 <= docGutter.gx ? 'l' : 'r'
   const orphans = units
     .filter((u) => !u.blockId && u.yBottom - u.yTop <= LINE_MAX && inBand(u.yTop, u.yBottom) && !covered(u))
-    .sort((a, b) => a.page - b.page || a.yTop - b.yTop)
+    .sort((a, b) => a.page - b.page || (orphanCol(a) < orphanCol(b) ? -1 : orphanCol(a) > orphanCol(b) ? 1 : 0) || a.yTop - b.yTop)
+  // contiguous same-page same-column runs
+  const runs: AttributedUnit[][] = []
   for (const u of orphans) {
-    let best: PdfRect | null = null
-    let bestGap = MAX_LINE_GAP
-    for (const b of placed) {
-      if (b.page !== u.page || !(b.x < u.xRight && u.xLeft < b.x + b.width)) continue
-      const gap = u.yTop - (b.y + b.height)
-      if (gap >= -2 && gap < bestGap) { bestGap = gap; best = b }
+    const last = runs[runs.length - 1]
+    const prev = last?.[last.length - 1]
+    if (prev && prev.page === u.page && orphanCol(prev) === orphanCol(u) && u.yTop - prev.yBottom <= MAX_LINE_GAP) last!.push(u)
+    else runs.push([u])
+  }
+  const ORPHAN_RUN_MAX = 3
+  for (const run of runs) {
+    if (run.length > ORPHAN_RUN_MAX) continue // a references column — leave unboxed
+    for (const u of run) {
+      let best: PdfRect | null = null
+      let bestGap = MAX_LINE_GAP
+      for (const b of placed) {
+        if (b.page !== u.page || !(b.x < u.xRight && u.xLeft < b.x + b.width)) continue
+        const gap = u.yTop - (b.y + b.height)
+        if (gap >= -2 && gap < bestGap) { bestGap = gap; best = b }
+      }
+      if (best) best.height = Math.max(best.height, u.yBottom - best.y)
     }
-    if (best) best.height = Math.max(best.height, u.yBottom - best.y)
   }
 
   const contentTopByPage = new Map<number, number>()
