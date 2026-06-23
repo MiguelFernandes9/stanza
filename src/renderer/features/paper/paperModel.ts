@@ -593,16 +593,35 @@ export function binBlocks(
     if (boxes.length) boxesById.set(id, boxes)
   }
 
-  // Missing-block fallback: a block with forward line rects (it IS in this PDF) but NO
-  // attributed units — its rows all mis-attributed to a neighbour, common for a section
-  // heading or a single-line paragraph — gets a box from its LARGEST contiguous run of
-  // forward line rects (per page, column). Only the dominant run: synctex forward for
-  // these blocks is often scattered, so a full bbox would balloon over the page.
+  // Per-(page,column) forward fallback: a block renders in some (page,column) — it has
+  // forward LINE rects there — but got NO box there. Two cases: (a) the block has no box at
+  // all (a heading / single-line para whose rows all mis-attributed); (b) the block boxes
+  // one cell but its rows in ANOTHER cell are synctex-null — a paragraph continuing across a
+  // page break whose tail rows map nowhere. Either way, add a box for each UNBOXED cell from
+  // its LARGEST contiguous run of forward rects (the dominant run; synctex forward is often
+  // scattered, so a full bbox would balloon over the page).
+  const nullUnits = units.filter((u) => !u.blockId)
+  const nullBacked = (r: FwdLine): boolean =>
+    nullUnits.some((u) => u.page === r.page && u.xLeft < r.right && r.x < u.xRight && u.yTop < r.bottom && r.y < u.yBottom)
   for (const id of regionsById.keys()) {
-    if (boxesById.has(id)) continue
+    const existing = boxesById.get(id) ?? []
+    const have = new Set(existing.map((b) => `${b.page}|${b.col}`))
+    const maxPage = existing.length ? Math.max(...existing.map((b) => b.page)) : 0
     const byCell = new Map<string, FwdLine[]>()
-    for (const r of lineRects(id)) { const k = `${r.page}|${r.col}`; const a = byCell.get(k); if (a) a.push(r); else byCell.set(k, [r]) }
-    const boxes: PdfRect[] = []
+    for (const r of lineRects(id)) {
+      const k = `${r.page}|${r.col}`
+      if (have.has(k)) continue
+      // A block that ALREADY has a box only gains a new cell that (1) is its OWN synctex-null
+      // rows (a continuation, not another block's text coincidentally under a stray forward
+      // rect) and (2) flows FORWARD — same page or later. A continuation never lands on an
+      // EARLIER page; a forward rect that does is phantom (the listing's spurious prior-page
+      // box, where its rect coincided with another listing's null code). A block with NO box
+      // yet keeps the looser rule: its mis-attributed heading/line row may be a neighbour's.
+      if (existing.length && (!nullBacked(r) || r.page < maxPage)) continue
+      const a = byCell.get(k); if (a) a.push(r); else byCell.set(k, [r])
+    }
+    if (!byCell.size) continue
+    const boxes: PdfRect[] = [...existing]
     for (const [, rs] of byCell) {
       rs.sort((a, b) => a.y - b.y)
       let best: { x: number; y: number; right: number; bottom: number; ink: number } | null = null
@@ -614,7 +633,6 @@ export function binBlocks(
       }
       if (best) boxes.push({ page: rs[0]!.page, x: best.x, y: best.y, width: best.right - best.x, height: best.bottom - best.y, col: rs[0]!.col })
     }
-    if (!boxes.length) continue
     boxes.sort((a, b) => a.page - b.page || a.x - b.x)
     boxesById.set(id, boxes)
   }
