@@ -525,16 +525,6 @@ export function binBlocks(
     boxesById.set(id, boxes)
   }
 
-  // Wall-cap: the extent fill can push a box a few pt past the next block. Where two boxes
-  // in the same column overlap vertically, cap the UPPER one's bottom at the lower one's
-  // top so adjacent blocks touch but never overlap (the old binner's wall cap).
-  const allBoxes = [...boxesById.values()].flat()
-  for (const a of allBoxes) for (const b of allBoxes) {
-    if (a === b || a.page !== b.page) continue
-    if (!(a.col === b.col || a.col === 'full' || b.col === 'full')) continue
-    if (a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y && a.y + a.height > b.y) a.height = Math.max(0, b.y - a.y)
-  }
-
   const contentTopByPage = new Map<number, number>()
   for (const arr of boxesById.values())
     for (const b of arr) {
