@@ -182,9 +182,23 @@ function bandAt(layout: ColumnLayout, cy: number): ColumnBand | null {
 export function dominantGutter(layout: ColumnLayout): { left: number; right: number; gx: number } | null {
   const two = layout.bands.filter((b) => b.kind === 'two')
   if (!two.length) return null
-  const mid = (xs: number[]): number => xs.slice().sort((a, b) => a - b)[Math.floor(xs.length / 2)]!
-  const left = mid(two.map((b) => b.left![1]))
-  const right = mid(two.map((b) => b.right![0]))
+  // Weight each band's edge by its vertical extent: a SHORT figure/table band with a bogus
+  // internal gutter must not outvote the tall body band (a plain median over two bands
+  // picks the larger edge — a figure-topped page then clips the body's right column to the
+  // figure's gutter, leaving the left of every line outside its box). Replicate each edge
+  // by round(height) before the median so the body band dominates.
+  const wmid = (pick: (b: ColumnBand) => number): number => {
+    const s: number[] = []
+    for (const b of two) {
+      const w = Math.max(1, Math.round(b.bottom - b.top))
+      const v = pick(b)
+      for (let i = 0; i < w; i++) s.push(v)
+    }
+    s.sort((a, b) => a - b)
+    return s[Math.floor(s.length / 2)]!
+  }
+  const left = wmid((b) => b.left![1])
+  const right = wmid((b) => b.right![0])
   return { left, right, gx: (left + right) / 2 }
 }
 
