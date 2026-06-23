@@ -479,6 +479,33 @@ export function binBlocks(
     return out
   }
 
+  // Forward-containment override. The inverse map is off-by-one at a galley boundary: the
+  // text line just before a display equation maps to the equation's \begin line, so the
+  // equation's box STEALS the paragraph's last line. But the paragraph's own forward LINE
+  // rect sits exactly on that line while the equation's does not. So when a unit's backward
+  // block has NO line rect containing it yet another block's line rect does, reassign it to
+  // that block. Galley rows (no line rect contains them) keep their backward owner — this
+  // only corrects, never invents.
+  const fwdOwners = new Map<number, { id: string; x: number; y: number; right: number; bottom: number }[]>()
+  for (const [id, rs] of regionsById)
+    for (const r of rs) {
+      if (r.width <= 0 || r.height <= 0 || r.height > LINE_MAX || !inBand(r.y, r.y + r.height) || (keyOwners.get(rectKey(r.page, r)) ?? 0) > 1) continue
+      const e = { id, x: r.x, y: r.y, right: r.x + r.width, bottom: r.y + r.height }
+      const a = fwdOwners.get(r.page); if (a) a.push(e); else fwdOwners.set(r.page, [e])
+    }
+  for (const u of units) {
+    if (!u.blockId) continue
+    const os = fwdOwners.get(u.page); if (!os) continue
+    const cx = (u.xLeft + u.xRight) / 2, cy = (u.yTop + u.yBottom) / 2
+    let self = false, other: string | null = null, otherH = Infinity
+    for (const o of os) {
+      if (!(o.x - 2 <= cx && cx <= o.right + 2 && o.y - 2 <= cy && cy <= o.bottom + 2)) continue
+      if (o.id === u.blockId) { self = true; break }
+      const h = o.bottom - o.y; if (h < otherH) { otherH = h; other = o.id }
+    }
+    if (!self && other) u.blockId = other
+  }
+
   // A block's box per (page, column) is the UNION of its attributed units — NOT split by
   // vertical gaps (pdf.js drops rows mid-paragraph; a figure's image+caption sit a gap
   // apart yet are one box). The forward-region gate already excludes off-block strays.
