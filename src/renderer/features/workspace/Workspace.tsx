@@ -711,7 +711,8 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
 
   const resolveTask = (taskId: number, accept: boolean): void => {
     const task = state.tasks.find((t) => t.id === taskId)
-    const opId = task?.proposal?.opId ?? task?.opId
+    if (!task) return
+    const opId = task.proposal?.opId ?? task.opId
     if (!opId) return
     void client.reviewResolve({ opId, accept }).then(
       (resolution) => {
