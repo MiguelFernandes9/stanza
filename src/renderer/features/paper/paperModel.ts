@@ -286,6 +286,12 @@ const INK_KEEP_FRAC = 0.2
  *  coincidence at a page edge isn't mistaken for a block flowing across the break. */
 const MIN_CONTINUATION_INK = 6
 
+/** Max height (pt) of a forward synctex rect that counts as one rendered LINE. A block's
+ *  line rects are its EXACT extent — used to complete a box where pdf.js dropped rows and
+ *  to box a block whose rows all mis-attributed. A taller rect is a galley/vbox locator
+ *  and is ignored (it would re-inflate the box). ~2 body lines. */
+const LINE_MAX = 24
+
 /** Min x-inset (pt) past a region's left edge for an orphan row to read as that block's
  *  indented FIRST line rather than the trailing tail of the block above it — the one
  *  signal that tells a LEADING dropped line from a trailing one when both are equally
@@ -425,10 +431,17 @@ export function binBlocks(
     return g ? ((u.xLeft + u.xRight) / 2 <= g.gx ? 'l' : 'r') : 'full'
   }
 
+  // A block's forward LINE-height rects (≤ LINE_MAX) tagged with column — its EXACT
+  // rendered extent. Galley/vbox (tall) rects are excluded so they never re-inflate a box.
+  interface FwdLine { page: number; col: PdfCol; x: number; y: number; right: number; bottom: number }
+  const lineRects = (id: string): FwdLine[] =>
+    (regionsById.get(id) ?? [])
+      .filter((r) => r.width > 0 && r.height > 0 && r.height <= LINE_MAX && inBand(r.y, r.y + r.height))
+      .map((r) => ({ page: r.page, col: colOfUnit({ page: r.page, xLeft: r.x, yTop: r.y, xRight: r.x + r.width, yBottom: r.y + r.height, blockId: id }), x: r.x, y: r.y, right: r.x + r.width, bottom: r.y + r.height }))
+
   // A block's box per (page, column) is the UNION of its attributed units — NOT split by
-  // vertical gaps, because pdf.js drops rows mid-paragraph (a 70pt gap of missing rows is
-  // not a real discontinuity) and a figure's image+caption sit a gap apart yet are one
-  // box. The forward-region gate already excludes off-block strays, so the union is tight.
+  // vertical gaps (pdf.js drops rows mid-paragraph; a figure's image+caption sit a gap
+  // apart yet are one box). The forward-region gate already excludes off-block strays.
   const byBlock = new Map<string, AttributedUnit[]>()
   for (const u of units) {
     if (!u.blockId || !inBand(u.yTop, u.yBottom) || !inRegion(u)) continue
@@ -438,6 +451,7 @@ export function binBlocks(
   const ink = (arr: AttributedUnit[]): number => arr.reduce((s, u) => s + Math.max(1, u.yBottom - u.yTop), 0)
   const boxesById = new Map<string, PdfRect[]>()
   for (const [id, us] of byBlock) {
+    const fwd = lineRects(id)
     const byPage = new Map<number, AttributedUnit[]>()
     for (const u of us) { const a = byPage.get(u.page); if (a) a.push(u); else byPage.set(u.page, [u]) }
     const boxes: PdfRect[] = []
@@ -460,6 +474,20 @@ export function binBlocks(
       for (const [col, cu] of byCol) {
         let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity
         for (const u of cu) { x = Math.min(x, u.xLeft); y = Math.min(y, u.yTop); right = Math.max(right, u.xRight); bottom = Math.max(bottom, u.yBottom) }
+        // Extent fill: grow the box's Y to the block's forward line rects in this column
+        // that are CONTIGUOUS with it (within MAX_LINE_GAP), iterating to closure — fills
+        // rows pdf.js dropped / mis-attributed so the box ends where the block really does.
+        // A far galley-collision rect is never reached, so the box can't over-extend.
+        const cand = fwd.filter((r) => r.page === page && (r.col === col || col === 'full' || r.col === 'full'))
+        const used = new Array<boolean>(cand.length).fill(false)
+        for (let grew = true; grew;) {
+          grew = false
+          for (let k = 0; k < cand.length; k++) {
+            const r = cand[k]!
+            if (used[k] || r.y > bottom + MAX_LINE_GAP || r.bottom < y - MAX_LINE_GAP) continue
+            y = Math.min(y, r.y); bottom = Math.max(bottom, r.bottom); used[k] = true; grew = true
+          }
+        }
         // Clip a column box to its column so a mis-measured full-width row can't widen it
         // across the gutter into the other column's blocks.
         if (g && col === 'l') right = Math.min(right, g.right)
@@ -469,6 +497,34 @@ export function binBlocks(
     }
     boxes.sort((a, b) => a.page - b.page || a.x - b.x)
     if (boxes.length) boxesById.set(id, boxes)
+  }
+
+  // Missing-block fallback: a block with forward line rects (it IS in this PDF) but NO
+  // attributed units — its rows all mis-attributed to a neighbour, common for a section
+  // heading or a single-line paragraph — gets a box from those rects, per (page, column).
+  for (const id of regionsById.keys()) {
+    if (boxesById.has(id)) continue
+    const cells = new Map<string, FwdLine>()
+    for (const r of lineRects(id)) {
+      const key = `${r.page}|${r.col}`
+      const cur = cells.get(key)
+      if (!cur) cells.set(key, { ...r })
+      else { cur.x = Math.min(cur.x, r.x); cur.y = Math.min(cur.y, r.y); cur.right = Math.max(cur.right, r.right); cur.bottom = Math.max(cur.bottom, r.bottom) }
+    }
+    if (!cells.size) continue
+    const boxes = [...cells.values()].map((c) => ({ page: c.page, x: c.x, y: c.y, width: c.right - c.x, height: c.bottom - c.y, col: c.col }))
+    boxes.sort((a, b) => a.page - b.page || a.x - b.x)
+    boxesById.set(id, boxes)
+  }
+
+  // Wall-cap: the extent fill can push a box a few pt past the next block. Where two boxes
+  // in the same column overlap vertically, cap the UPPER one's bottom at the lower one's
+  // top so adjacent blocks touch but never overlap (the old binner's wall cap).
+  const allBoxes = [...boxesById.values()].flat()
+  for (const a of allBoxes) for (const b of allBoxes) {
+    if (a === b || a.page !== b.page) continue
+    if (!(a.col === b.col || a.col === 'full' || b.col === 'full')) continue
+    if (a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y && a.y + a.height > b.y) a.height = Math.max(0, b.y - a.y)
   }
 
   const contentTopByPage = new Map<number, number>()
