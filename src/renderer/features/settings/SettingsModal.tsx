@@ -22,6 +22,26 @@ const FONT_FAMILIES = [
   { label: 'Courier New', value: '"Courier New", monospace' }
 ]
 const PAPER_SIZES = ['a4', 'letter', 'a5', 'b5', 'legal']
+// Claude models (claude --model). Region-safe ALIASES: each resolves to the latest
+// model available to the account/region (versions auto-track; no pinned ids). '' =
+// omit the flag → the account's default (Opus 4.8 on Max/API tiers), so name it
+// rather than show a bare "Default". Fable is NOT offered — region-restricted (no
+// Europe); a live per-region list isn't reachable from the CLI/OAuth (see plan).
+// Version numbers below are current-latest annotations on the alias, not pins.
+const CLAUDE_MODELS: { label: string; value: NonNullable<GlobalSettings['claudeModel']> | '' }[] = [
+  { label: 'Opus 4.8 (default)', value: '' },
+  { label: 'Sonnet 4.6', value: 'sonnet' },
+  { label: 'Haiku 4.5', value: 'haiku' }
+]
+// Reasoning effort (claude --effort) — lower is faster/cheaper. '' = omit the flag →
+// the model's default effort (High on Opus 4.8 / Sonnet 4.6), so name it.
+const CLAUDE_EFFORTS: { label: string; value: NonNullable<GlobalSettings['claudeEffort']> | '' }[] = [
+  { label: 'High (default)', value: '' },
+  { label: 'Low (fastest)', value: 'low' },
+  { label: 'Medium', value: 'medium' },
+  { label: 'Extra high', value: 'xhigh' },
+  { label: 'Max', value: 'max' }
+]
 
 /** Settings panel (Lane S) — a fixed-overlay sibling (mirrors HistoryDiffOverlay).
  *  Four areas: editor font [global], main file [per-doc], compiler [per-doc],
@@ -222,7 +242,41 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
             </Row>
           </Section>
 
-          {/* 5 — general [global] */}
+          {/* 5 — assistant [global]: which model + reasoning effort ops run with */}
+          <Section title="Assistant" testid="section-assistant">
+            <Row label="Model">
+              <select
+                aria-label="Assistant model"
+                value={global.claudeModel ?? ''}
+                onChange={(e) =>
+                  patchGlobal({ claudeModel: (e.target.value || undefined) as GlobalSettings['claudeModel'] })
+                }
+              >
+                {CLAUDE_MODELS.map((m) => (
+                  <option key={m.value} value={m.value}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </Row>
+            <Row label="Effort">
+              <select
+                aria-label="Assistant effort"
+                value={global.claudeEffort ?? ''}
+                onChange={(e) =>
+                  patchGlobal({ claudeEffort: (e.target.value || undefined) as GlobalSettings['claudeEffort'] })
+                }
+              >
+                {CLAUDE_EFFORTS.map((ef) => (
+                  <option key={ef.value} value={ef.value}>
+                    {ef.label}
+                  </option>
+                ))}
+              </select>
+            </Row>
+          </Section>
+
+          {/* 6 — general [global] */}
           <Section title="General" testid="section-general">
             <Row label="Warn before quitting">
               <input

@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import type { ClaudeRequest, ClaudeStatus } from '../../shared/ipc/claude'
 import type { DocumentInfo } from '../../shared/ipc/document'
 import type { ProcessRunner, ProcResult } from '../infra/ProcessRunner'
-import type { Store } from '../infra/Store'
+import type { GlobalSettingsStore, Store } from '../infra/Store'
 import { opPrompt, primePrompt } from './prompts'
 
 // A Claude op is an agentic CLI run — extended thinking plus many tool
@@ -28,6 +28,7 @@ export class ClaudeService {
   constructor(
     private runner: ProcessRunner,
     private store: Store,
+    private globalSettings: GlobalSettingsStore,
     private doc: DocumentInfo,
     private workDir: string = doc.root,
     private timeoutMs: number = DEFAULT_TIMEOUT_MS,
@@ -187,12 +188,25 @@ export class ClaudeService {
   private claude(args: string[], signal?: AbortSignal): Promise<ProcResult> {
     return this.runner.run({
       cmd: process.env.STANZA_CLAUDE_BIN ?? 'claude',
-      args,
+      args: [...this.modelFlags(), ...args],
       cwd: this.workDir,
       timeoutMs: this.timeoutMs,
       env: claudeEnv(),
       ...(signal ? { signal } : {}),
     })
+  }
+
+  /** `--model`/`--effort` from the global settings, read FRESH per call so a
+   *  settings change takes effect on the next op without rebuilding the session
+   *  (both flags are valid on `--resume`). Unset → omit → the CLI's own default. */
+  private modelFlags(): string[] {
+    const g = this.globalSettings.get()
+    const flags: string[] = []
+    // claudeModel is a region-safe alias (opus/sonnet/haiku) passed straight to
+    // --model — the CLI resolves it to the latest model available to this account.
+    if (g.claudeModel) flags.push('--model', g.claudeModel)
+    if (g.claudeEffort) flags.push('--effort', g.claudeEffort)
+    return flags
   }
 }
 

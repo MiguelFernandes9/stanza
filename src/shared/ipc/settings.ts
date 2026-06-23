@@ -25,6 +25,15 @@ export interface GlobalSettings {
   /** Show a confirm dialog on ⌘Q before quitting. Default-on: `undefined`/`true`
    *  prompts, `false` quits straight away ("Don't ask again"). */
   confirmBeforeQuit?: boolean
+  /** Model the Claude bridge runs ops with (`claude --model`). A region-safe CLI
+   *  alias — each resolves to the latest model available to the account/region, so
+   *  it auto-tracks versions and never pins an unavailable id (e.g. fable, which is
+   *  unavailable in Europe, is deliberately not offered). Unset → omit → CLI default. */
+  claudeModel?: 'opus' | 'sonnet' | 'haiku'
+  /** Reasoning effort for ops (`claude --effort`). Lower = faster/cheaper. Unset
+   *  → omit → CLI default. (Fast mode isn't headless-controllable; effort is the
+   *  speed lever instead.) */
+  claudeEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 }
 
 /** Per-document settings, persisted on the project's Store record (keyed by
