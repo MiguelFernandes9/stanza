@@ -400,6 +400,27 @@ export function binBlocks(
   regionsById: Map<string, PdfRect[]> = new Map()
 ): BinnedContent {
   const columnsByPage = columnLayoutByPage(rowsByPage)
+
+  // Split a text unit that spans the page gutter into a left half and a right half. pdf.js
+  // merges a left-column line and a right-column line on a shared baseline into ONE
+  // gutter-crossing row when its per-page gutter detector fails (a figure-topped page), and
+  // that row then lands in one block and steals the other column's line. Splitting at the
+  // robust per-page gutter, with the forward-containment override below re-homing each half
+  // to the block whose line rect contains it, undoes the merge. Box-neutral for a genuine
+  // full-width row: both halves re-home to the SAME block and union back. Only text-height
+  // units split — a figure graphic stays whole.
+  const gutterByPage = new Map<number, { left: number; right: number; gx: number } | null>()
+  const gutterFor = (page: number): { left: number; right: number; gx: number } | null => {
+    if (!gutterByPage.has(page)) gutterByPage.set(page, dominantGutter(columnsByPage.get(page) ?? { bands: [] }))
+    return gutterByPage.get(page)!
+  }
+  units = units.flatMap((u) => {
+    const g = gutterFor(u.page)
+    if (g && u.yBottom - u.yTop <= LINE_MAX && u.xLeft < g.left && u.xRight > g.right)
+      return [{ ...u, xRight: g.left }, { ...u, xLeft: g.right }]
+    return [u]
+  })
+
   const band = contentBand(rowsByPage)
   const inBand = (yTop: number, yBottom: number): boolean =>
     !band || (yBottom >= band.top - BAND_EPS && yTop <= band.bottom + BAND_EPS)
