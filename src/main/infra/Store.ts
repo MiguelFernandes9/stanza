@@ -12,6 +12,11 @@ export interface ProjectRecord {
    *  pinned there — so a stored session whose `primedWorkdir` ≠ the current
    *  worktree must be re-primed. */
   primedWorkdir?: string
+  /** Set once the doc has been opened+parsed, so a reopen takes the instant
+   *  `documents.open` path instead of re-running the prime pipeline. (Pre-fork
+   *  this was inferred from `sessionId`, which the per-fork model no longer sets
+   *  at the doc level.) */
+  primed?: boolean
   ops?: OpRecord[]
   /** Persistent conversation bubbles ("Keep chat") — each its own session +
    *  transcript + block anchor, restored when the project reopens. */

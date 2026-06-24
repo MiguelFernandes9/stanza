@@ -42,7 +42,17 @@ export class ForkManager {
   /** Allocate a fork + reserve its worktree path. The worktree dir itself is
    *  created lazily on the first turn (see `ensureWorktree`). */
   create(scope: ForkScope, lifetime: ForkLifetime): Fork {
-    const forkId = randomUUID()
+    return this.adopt(randomUUID(), scope, lifetime)
+  }
+
+  /** Get the fork with `forkId`, or create it under that exact id. Used for a
+   *  persistent chat whose id is stable (the thread id), so its turns resume in
+   *  the SAME worktree across the session. The scope refreshes per turn. */
+  getOrCreate(forkId: string, scope: ForkScope, lifetime: ForkLifetime): Fork {
+    return this.forks.get(forkId) ?? this.adopt(forkId, scope, lifetime)
+  }
+
+  private adopt(forkId: string, scope: ForkScope, lifetime: ForkLifetime): Fork {
     const fork = new Fork(forkId, join(this.baseDir, forkId), scope, lifetime)
     this.forks.set(forkId, fork)
     return fork

@@ -38,6 +38,10 @@ export interface GlobalSettings {
    *  prompt — caps token spend on old history. Unset → 20. Raise it to have the
    *  model consider more history. */
   busCommitLimit?: number
+  /** How many forks (parallel edits) may run their Claude turn at once, across
+   *  all of this document's windows. Each fork = one worktree + one CLI process,
+   *  so this bounds memory/PTY load. Unset → 4. */
+  forkConcurrency?: number
 }
 
 /** Per-document settings, persisted on the project's Store record (keyed by

@@ -99,6 +99,15 @@ describe('ForkManager — fork allocation', () => {
     expect(fm.get(a.forkId)).toBe(a)
     expect(fm.list()).toHaveLength(2)
   })
+
+  test('getOrCreate returns the same fork for a stable id (a persistent chat)', () => {
+    const fm = new ForkManager(new FakeGit(), base, 4)
+    const first = fm.getOrCreate('thread-7', { kind: 'doc' }, 'persistent')
+    const again = fm.getOrCreate('thread-7', { kind: 'blocks', spans: [] }, 'persistent')
+    expect(again).toBe(first) // same worktree across turns
+    expect(first.worktreeDir).toBe(join(base, 'thread-7'))
+    expect(fm.list()).toHaveLength(1)
+  })
 })
 
 describe('ForkManager — worktree lifecycle', () => {
