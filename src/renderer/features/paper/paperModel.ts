@@ -642,31 +642,6 @@ export function binBlocks(
     boxesById.set(id, boxes)
   }
 
-  // Reference-region fallback. A \bibliography block's only synctex is a full-column GALLEY
-  // (entries come from the .bbl, with no per-line mapping) and every reference row is
-  // synctex-null. Box the null rows that fall inside the block's galley, grouped per (page,
-  // column) — a two-column reference list then draws one box per column. Runs before the
-  // orphan pass so those rows count as covered and are not chained onto a neighbour.
-  for (const id of regionsById.keys()) {
-    if (boxesById.has(id)) continue
-    const galley = (regionsById.get(id) ?? []).filter((r) => r.height > LINE_MAX && r.width > 0 && inBand(r.y, r.y + r.height))
-    if (!galley.length) continue
-    const claimed = units.filter((u) => !u.blockId && u.yBottom - u.yTop <= LINE_MAX && inBand(u.yTop, u.yBottom) &&
-      galley.some((r) => r.page === u.page && r.x - 2 < u.xRight && u.xLeft < r.x + r.width + 2 && r.y - 2 < u.yBottom && u.yTop < r.y + r.height + 2))
-    if (claimed.length < 4) continue // a real reference list, not a stray null row or two
-    const cells = new Map<string, { page: number; col: PdfCol; x: number; y: number; right: number; bottom: number }>()
-    for (const u of claimed) {
-      const col = colOfUnit(u)
-      const k = `${u.page}|${col}`
-      const c = cells.get(k)
-      if (!c) cells.set(k, { page: u.page, col, x: u.xLeft, y: u.yTop, right: u.xRight, bottom: u.yBottom })
-      else { c.x = Math.min(c.x, u.xLeft); c.y = Math.min(c.y, u.yTop); c.right = Math.max(c.right, u.xRight); c.bottom = Math.max(c.bottom, u.yBottom) }
-    }
-    const boxes = [...cells.values()].map((c) => ({ page: c.page, x: c.x, y: c.y, width: c.right - c.x, height: c.bottom - c.y, col: c.col }))
-    boxes.sort((a, b) => a.page - b.page || a.x - b.x)
-    boxesById.set(id, boxes)
-  }
-
   // Spatial orphan pass. A rendered text row that synctex maps NOWHERE — null inverse AND no
   // forward rect (a math-heavy tail like "...the temporal sinusoid.") — is left unattributed
   // and unboxed. Its only signal is position: it is the dropped tail of the block whose box
