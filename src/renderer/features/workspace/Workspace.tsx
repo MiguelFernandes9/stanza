@@ -665,8 +665,23 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
         if (!chatOpen) setUnreadNotes((n) => n + 1)
         loadOps()
       },
-      (err: unknown) =>
-        dispatch({ type: 'op-failed', taskId, error: err instanceof Error ? err.message : String(err) })
+      (err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err)
+        dispatch({ type: 'op-failed', taskId, error: msg })
+        // A block op shows its error inline on the rail card, but a whole-doc op
+        // (spans: []) has no card — surface it as a toast so the chat never fails
+        // silently. The common case is a span lock from a pending block proposal.
+        if (spans.length === 0)
+          setToast(
+            msg.includes('SPANS_LOCKED')
+              ? {
+                  title: 'Resolve the pending change first',
+                  message: 'Accept or reject the open block proposal before editing the whole document.',
+                  tone: 'danger'
+                }
+              : { title: 'Edit failed', message: msg, tone: 'danger' }
+          )
+      }
     )
   }
 
