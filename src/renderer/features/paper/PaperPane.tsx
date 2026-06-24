@@ -326,11 +326,14 @@ export function PaperPane(props: Props): JSX.Element {
       if (!alive) return
       const knownFiles = [...new Set(pageBlocks.map((b) => b.span.file))]
       const fullWidthIds = new Set(pageBlocks.filter((b) => b.envName?.endsWith('*')).map((b) => b.id))
+      // \bibliography blocks: their .bbl rows are synctex-null, so the binner claims the
+      // long null run for them instead of leaving the reference list unboxed.
+      const bibliographyIds = new Set(pageBlocks.filter((b) => b.envName === 'bibliography').map((b) => b.id))
       const attributed = units.map((u, i): AttributedUnit => {
         const loc = locs[i]
         return { page: u.page, xLeft: u.xLeft, yTop: u.yTop, xRight: u.xRight, yBottom: u.yBottom, blockId: loc ? blockForSourceLine(pageBlocks, resolveToKnownFile(loc.file, knownFiles), loc.line) : null }
       })
-      const result = binBlocks(attributed, rowsByPage, fullWidthIds, regionsById)
+      const result = binBlocks(attributed, rowsByPage, fullWidthIds, regionsById, bibliographyIds)
       // One box per block from its rendered ink; a section's box is its heading
       // line, selection expands to its members via expandIds (selection layer).
       setBlockRects(result.boxesById)

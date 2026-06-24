@@ -397,7 +397,11 @@ export function binBlocks(
   // actually occupies — rejecting a running header or repeated content whose source line
   // maps into the block but renders where the block doesn't. A block with no forward
   // rects (forward missed) is not gated.
-  regionsById: Map<string, PdfRect[]> = new Map()
+  regionsById: Map<string, PdfRect[]> = new Map(),
+  // Blocks that are a \bibliography / \printbibliography reference list. Their .bbl
+  // entries are synctex-null (no per-line map), so they never attribute by backward map;
+  // the orphan pass claims the long null run for them instead of leaving it unboxed.
+  bibliographyIds: Set<string> = new Set()
 ): BinnedContent {
   const columnsByPage = columnLayoutByPage(rowsByPage)
 
@@ -667,9 +671,33 @@ export function binBlocks(
     if (prev && prev.page === u.page && orphanCol(prev) === orphanCol(u) && u.yTop - prev.yBottom <= MAX_LINE_GAP) last!.push(u)
     else runs.push([u])
   }
+  // The bibliography block to claim a long null run for: the one whose forward galley
+  // anchors the earliest page. Its .bbl rows are synctex-null, so they only ever surface
+  // here as a long null run; box them per cell instead of leaving them unselectable.
+  let bibClaim: { id: string; anchorPage: number } | null = null
+  for (const id of bibliographyIds) {
+    const rects = regionsById.get(id)
+    if (!rects || !rects.length) continue
+    const anchorPage = Math.min(...rects.map((r) => r.page))
+    if (!bibClaim || anchorPage < bibClaim.anchorPage) bibClaim = { id, anchorPage }
+  }
   const ORPHAN_RUN_MAX = 3
   for (const run of runs) {
-    if (run.length > ORPHAN_RUN_MAX) continue // a references column — leave unboxed
+    if (run.length > ORPHAN_RUN_MAX) {
+      // A long null run that renders at/after a bibliography block (its galley anchors a
+      // page; the list often spills back one column into the previous page) IS the
+      // reference list — box it for that block (one box per cell). Otherwise it is a
+      // source-less math tail: leave it unboxed, as before.
+      if (bibClaim && run[0]!.page >= bibClaim.anchorPage - 1) {
+        let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity
+        for (const u of run) { x = Math.min(x, u.xLeft); y = Math.min(y, u.yTop); right = Math.max(right, u.xRight); bottom = Math.max(bottom, u.yBottom) }
+        const box: PdfRect = { page: run[0]!.page, x, y, width: right - x, height: bottom - y, col: orphanCol(run[0]!) }
+        const merged = [...(boxesById.get(bibClaim.id) ?? []), box].sort((a, b) => a.page - b.page || a.x - b.x)
+        boxesById.set(bibClaim.id, merged)
+        placed.push(box)
+      }
+      continue
+    }
     for (const u of run) {
       let best: PdfRect | null = null
       let bestGap = MAX_LINE_GAP
@@ -697,7 +725,9 @@ export function binBlocks(
       Math.min(b.x + b.width, o.x + o.width) - Math.max(b.x, o.x) > 8 &&
       Math.min(b.y + b.height, o.y + o.height) - Math.max(b.y, o.y) > 8)
   for (const [id, bs] of boxesById) {
-    if (!ENV_RE.test(id) || bs.length < 2) continue
+    // A bibliography reference list legitimately spans adjacent pages/columns — it is not
+    // a single rendered object, so the single-object dominance filter must not prune it.
+    if (!ENV_RE.test(id) || bs.length < 2 || bibliographyIds.has(id)) continue
     const inkByPage = new Map<number, number>()
     for (const b of bs) inkByPage.set(b.page, (inkByPage.get(b.page) ?? 0) + b.height)
     if (inkByPage.size < 2) continue
@@ -709,6 +739,48 @@ export function binBlocks(
     // the listing) is dropped even when its ink is substantial.
     const kept = bs.filter((b) => b.page === domPage || ((inkByPage.get(b.page) ?? 0) >= 0.25 * domInk && !overlapsOther(id, b)))
     if (kept.length && kept.length !== bs.length) boxesById.set(id, kept)
+  }
+
+  // Displaced-content split. A block whose rendered units map to ONE source line can render
+  // in two far-apart regions of a column — a \maketitle front-matter block's title sits at the
+  // column top, its \thanks footnote at the bottom, and BOTH backward-map to \maketitle. The
+  // per-(page,col) union would then box the whole column, swallowing the body between them.
+  // Where another block's box sits strictly inside a box (same page+column), re-box this
+  // block's units in the gaps around it — one box per cluster. The intervening body IS the
+  // separator, so there is no gap constant; an ordinary block (nothing inside it) is untouched.
+  const allBoxes: { id: string; b: PdfRect }[] = []
+  for (const [id, bs] of boxesById) for (const b of bs) allBoxes.push({ id, b })
+  for (const [id, bs] of boxesById) {
+    const us = byBlock.get(id)
+    if (!us) continue
+    let split = false
+    const rebuilt: PdfRect[] = []
+    for (const b of bs) {
+      const bands = allBoxes
+        .filter(({ id: oid, b: o }) => oid !== id && o.page === b.page &&
+          o.x < b.x + b.width && b.x < o.x + o.width &&
+          o.y > b.y + 2 && o.y + o.height < b.y + b.height - 2)
+        .map(({ b: o }) => ({ top: o.y, bottom: o.y + o.height }))
+        .sort((p, q) => p.top - q.top)
+      // Gather b's units by VERTICAL overlap with the box, not x/column — the box x was
+      // clipped to its column (a full-width title in an 'l' box is cut at the gutter) and the
+      // l/r fold can have re-homed a gutter-crossing row, so neither x nor colOfUnit is a
+      // faithful membership test. The box y-extent is untouched by the clip, so it is.
+      const cellUnits = bands.length ? us.filter((u) => u.page === b.page && u.yTop < b.y + b.height && b.y < u.yBottom) : []
+      const clusters = new Map<number, AttributedUnit[]>()
+      for (const u of cellUnits) {
+        const k = bands.filter((band) => band.bottom <= u.yTop).length // intervening boxes fully above this unit
+        const a = clusters.get(k); if (a) a.push(u); else clusters.set(k, [u])
+      }
+      if (clusters.size < 2) { rebuilt.push(b); continue }
+      for (const cu of clusters.values()) {
+        let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity
+        for (const u of cu) { x = Math.min(x, u.xLeft); y = Math.min(y, u.yTop); right = Math.max(right, u.xRight); bottom = Math.max(bottom, u.yBottom) }
+        rebuilt.push({ page: b.page, x, y, width: right - x, height: bottom - y, col: b.col })
+      }
+      split = true
+    }
+    if (split) { rebuilt.sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x); boxesById.set(id, rebuilt) }
   }
 
   const contentTopByPage = new Map<number, number>()
@@ -1138,6 +1210,10 @@ const HEADING_ENVS = new Set(['abstract', 'thebibliography', 'theindex'])
  *  taskSpans/Claude still see \begin..\end. */
 export function environmentInteriorSpan(block: PageBlock): BlockSpan | null {
   if (block.kind !== 'environment') return null
+  // The front-matter block (\title…\maketitle) is synthetic — it has no \begin/\end
+  // delimiter lines to trim, and \title (its startLine) renders the title. Query its FULL
+  // span so the forward region covers the title, author and \thanks footnote.
+  if (block.envName === 'frontmatter') return null
   // Heading envs: include the \begin line (it draws the title). Otherwise skip
   // leading invisible-macro lines (a \label maps onto the prose line above, M2-7),
   // falling back to the line after \begin when the parser recorded none.

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { BlockNode } from '../../../shared/blocks/types'
 import type { BlockSpan, PdfRect } from '../../../shared/ipc'
 import {
+  binBlocks,
   binContentToBlocks,
   blockForSourceLine,
   blockGeometryRects,
@@ -22,7 +23,7 @@ import {
   viewportAnchorTops,
   washBoxes
 } from './paperModel'
-import type { PageBlock } from './paperModel'
+import type { AttributedUnit, PageBlock } from './paperModel'
 import type { TextRow } from './pdfTextRows'
 import type { GraphicBox } from './pdfGraphics'
 
@@ -331,6 +332,16 @@ const prect = (page: number, x: number, y: number, w: number, h: number): PdfRec
   height: h
 })
 const boxBottom = (b: PdfRect): number => b.y + b.height
+// An AttributedUnit (binBlocks input): a rendered row pre-attributed to a block
+// by the synctex backward map (blockId null = synctex-null / unmapped).
+const aunit = (
+  page: number,
+  xLeft: number,
+  yTop: number,
+  xRight: number,
+  yBottom: number,
+  blockId: string | null
+): AttributedUnit => ({ page, xLeft, yTop, xRight, yBottom, blockId })
 // A contiguous body run top→bottom with ≤13pt line gaps (one cluster), so the
 // band test never spuriously splits it.
 const bodyRun = (top: number, bot: number, xL = 90, xR = 522): TextRow[] => {
@@ -1379,5 +1390,83 @@ describe('binContentToBlocks — column axis (two-column papers)', () => {
     expect(b).toHaveLength(1)
     expect(b[0]!.col).toBe('full')
     expect(columnsByPage.get(1)!.bands.every((band) => band.kind === 'single')).toBe(true)
+  })
+})
+
+describe('binBlocks — bibliography reference list (Bug A)', () => {
+  // A reference list rendered from the .bbl: every row is synctex-null (blockId
+  // null). With no claim a long null run is left unboxed (the old "references
+  // column — leave unboxed"). The bibliography block (its forward galley anchors
+  // the run's page) claims the run so the references are selectable.
+  const refUnits = (page: number, top: number, bot: number): AttributedUnit[] =>
+    bodyRun(top, bot, 90, 520).map((r) => aunit(page, r.xLeft, r.yTop, r.xRight, r.yBottom, null))
+
+  it('boxes a synctex-null reference run for the bibliography block', () => {
+    const units = refUnits(2, 60, 220)
+    const rowsByPage = new Map([[2, bodyRun(60, 220, 90, 520)]])
+    // the \bibliography forward galley is a TALL full-column rect (no per-line map)
+    const regionsById = new Map<string, PdfRect[]>([['env9#bib', [prect(2, 48, 55, 514, 660)]]])
+    const { boxesById } = binBlocks(units, rowsByPage, new Set(), regionsById, new Set(['env9#bib']))
+    const boxes = boxesById.get('env9#bib')
+    expect(boxes).toBeTruthy()
+    expect(boxes!).toHaveLength(1)
+    expect(boxes![0]!.y).toBeLessThan(60) // covers the reference run top
+    expect(boxBottom(boxes![0]!)).toBeGreaterThan(210) // …down to its bottom
+  })
+
+  it('claims a reference run that spilled back one page (galley anchors the later page)', () => {
+    // The real shape: references fill page 3 (the \bibliography galley) and spill
+    // back into the bottom of page 2 — that earlier cell has no forward rect.
+    const units = [...refUnits(2, 500, 700), ...refUnits(3, 55, 240)]
+    const rowsByPage = new Map([
+      [2, bodyRun(500, 700, 90, 520)],
+      [3, bodyRun(55, 240, 90, 520)]
+    ])
+    const regionsById = new Map<string, PdfRect[]>([['env9#bib', [prect(3, 48, 50, 514, 660)]]])
+    const { boxesById } = binBlocks(units, rowsByPage, new Set(), regionsById, new Set(['env9#bib']))
+    const boxes = boxesById.get('env9#bib')!
+    // one box per cell — the spilled page-2 cell AND the page-3 cell
+    expect(boxes.map((b) => b.page).sort()).toEqual([2, 3])
+  })
+
+  it('leaves a long null run unboxed when there is NO bibliography block (a math tail)', () => {
+    const units = refUnits(2, 60, 220)
+    const rowsByPage = new Map([[2, bodyRun(60, 220, 90, 520)]])
+    const { boxesById } = binBlocks(units, rowsByPage, new Set(), new Map(), new Set())
+    expect([...boxesById.values()].flat()).toHaveLength(0)
+  })
+})
+
+describe('binBlocks — front-matter title/footnote split (Bug B)', () => {
+  it('splits a block whose box would engulf another block into top + bottom boxes', () => {
+    // The \maketitle front-matter block: the title+author at the column top and the
+    // \thanks footnote at the column bottom both backward-map to \maketitle, so they
+    // share one block. The abstract/body renders between them. The per-(page,col)
+    // union would box the whole column; the split re-boxes around the intervening
+    // body block → a tight title box and a tight footnote box.
+    const titleRows = bodyRun(60, 110, 120, 460)
+    const bodyRows = bodyRun(200, 400, 90, 520)
+    const footRows = bodyRun(600, 640, 90, 300)
+    const fm = [...titleRows, ...footRows].map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'env1#fm'))
+    const body = bodyRows.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'sec1/par1#b'))
+    // a 2nd page whose body spans the whole y-range so contentBand doesn't peel the
+    // page-1 title/footnote clusters as furniture (mirrors the real multi-page doc)
+    const rowsByPage = new Map([
+      [1, [...titleRows, ...bodyRows, ...footRows]],
+      [2, bodyRun(49, 645, 90, 520)]
+    ])
+    const { boxesById } = binBlocks([...fm, ...body], rowsByPage, new Set(), new Map(), new Set())
+    const fmBoxes = boxesById.get('env1#fm')!
+    expect(fmBoxes).toHaveLength(2) // split, not one ballooning column box
+    const [top, bottom] = [...fmBoxes].sort((a, b) => a.y - b.y)
+    expect(boxBottom(top!)).toBeLessThan(200) // title cluster ends before the body
+    expect(bottom!.y).toBeGreaterThan(400) // footnote cluster sits below the body
+  })
+
+  it('does not split an ordinary block with no intervening box', () => {
+    const rows = bodyRun(60, 300, 90, 520)
+    const units = rows.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'p1#x'))
+    const { boxesById } = binBlocks(units, new Map([[1, rows]]), new Set(), new Map(), new Set())
+    expect(boxesById.get('p1#x')!).toHaveLength(1)
   })
 })
