@@ -1194,27 +1194,54 @@ export function blockForSourceLine(
   return best?.id ?? null
 }
 
-/** Geometry-anchored ideal top (px, within the page-stack wrap) for each
- *  task's rail card — derived from the block's topmost synctex box, not the
- *  DOM, so a card stays beside its block even when the block's page is
- *  virtualized out of the render window. A task whose box isn't resolved yet
- *  (no block, no rect, or no page geometry — e.g. on open before the
- *  PDF/synctex lands) returns `top: null` so the caller hides it rather than
- *  parking it at the screen top (BUG-32). Whole-doc tasks (no blockIds) fall
- *  through to `null` too — they are NOT page-anchored; their marker is pinned to
- *  the pane (M3-3), so scope drives the anchor, never a viewport accident.
- *  Caller applies collision-stacking on top of these ideals (BUG-17). */
-export function cardAnchorTops(
+/** The current viewport in page-stack scroll coords. `scrollTop`/`height` are the
+ *  container's; `pad` is the page stack's top offset, so a box at anchor `a`
+ *  renders at `pad + a` and is on screen when it overlaps `[scrollTop, scrollTop
+ *  + height]`. */
+export interface Viewport {
+  scrollTop: number
+  height: number
+  pad: number
+}
+
+/** Ideal top (px, within the page-stack wrap, PAD not applied) for each task's
+ *  rail card — the badge + bubble sit AT the block's box on the page the user is
+ *  viewing, so they FOLLOW the block across the pages/columns it spans: of all
+ *  the block's boxes, pick the one most visible in `view` (most overlap; nearest
+ *  when none is on screen), and anchor to its top `(page-1)*slot + y*zoom`. As
+ *  the user scrolls across a page break the card hops to the continuation
+ *  segment; once scrolled past the block the nearest box is the last one, so the
+ *  card stops at the block's end. A task with no resolved box (no block, no rect,
+ *  no page geometry) returns `top: null` so the caller hides it rather than
+ *  parking it at the screen top (BUG-32); whole-doc tasks (no blockIds) return
+ *  null too — they are pane-pinned, never page-anchored (M3-3). Caller
+ *  collision-stacks these ideals (BUG-17). */
+export function viewportAnchorTops(
   tasks: { id: number; blockIds: string[] }[],
   rects: Map<string, PdfRect[]>,
   geo: { height: number; gap: number } | null,
-  zoom: number
+  zoom: number,
+  view: Viewport
 ): { id: number; top: number | null }[] {
   return tasks.map((t) => {
-    const blockId = t.blockIds[0]
-    const rect = blockId ? rects.get(blockId)?.[0] : undefined
-    if (!rect || !geo) return { id: t.id, top: null }
-    return { id: t.id, top: (rect.page - 1) * (geo.height + geo.gap) + rect.y * zoom }
+    if (!geo) return { id: t.id, top: null }
+    const slot = geo.height + geo.gap
+    const vpTop = view.scrollTop
+    const vpBottom = view.scrollTop + view.height
+    let best: { top: number; overlap: number; dist: number } | null = null
+    for (const id of t.blockIds) {
+      for (const b of rects.get(id) ?? []) {
+        const top = (b.page - 1) * slot + b.y * zoom
+        const r0 = view.pad + top
+        const r1 = r0 + b.height * zoom
+        const overlap = Math.max(0, Math.min(r1, vpBottom) - Math.max(r0, vpTop))
+        const dist = overlap > 0 ? 0 : Math.min(Math.abs(r0 - vpBottom), Math.abs(r1 - vpTop))
+        if (!best || overlap > best.overlap || (overlap === best.overlap && dist < best.dist)) {
+          best = { top, overlap, dist }
+        }
+      }
+    }
+    return { id: t.id, top: best ? best.top : null }
   })
 }
 

@@ -5,7 +5,6 @@ import {
   binContentToBlocks,
   blockForSourceLine,
   blockGeometryRects,
-  cardAnchorTops,
   combinedSpanLabel,
   contentBand,
   environmentInteriorSpan,
@@ -20,6 +19,7 @@ import {
   selectionBounds,
   spanLabel,
   taskSpans,
+  viewportAnchorTops,
   washBoxes
 } from './paperModel'
 import type { PageBlock } from './paperModel'
@@ -904,47 +904,62 @@ describe('binContentToBlocks — a small cross-page continuation tail keeps its 
   })
 })
 
-describe('cardAnchorTops — geometry-anchored rail cards (BUG-17)', () => {
-  const geo = { height: 800, gap: 16 }
+describe('viewportAnchorTops — card sits at the block box on the page in view', () => {
+  const geo = { height: 800, gap: 16 } // slot = 816
   const rects = new Map<string, PdfRect[]>([
-    ['b-pg3', [{ page: 3, x: 72, y: 120, width: 300, height: 40 }]],
-    // straddling block: topmost box (page 2) anchors the card
+    ['b-pg3', [{ page: 3, x: 72, y: 120, width: 300, height: 40 }]], // anchor 1752 (render 1780)
+    // straddling block: a tail on page 2 (anchor 1506), a head on page 3 (anchor 1692)
     ['b-straddle', [
       { page: 2, x: 72, y: 690, width: 300, height: 12 },
       { page: 3, x: 72, y: 60, width: 300, height: 12 }
     ]]
   ])
+  const view = (scrollTop: number, height = 600) => ({ scrollTop, height, pad: 28 })
 
-  it('anchors a scoped card from its block rect — non-zero even if the page is not rendered', () => {
-    const out = cardAnchorTops([{ id: 1, blockIds: ['b-pg3'] }], rects, geo, 1)
-    // (3-1)*(800+16) + 120*1 = 1752 — derived from the rect, not a top:0 pin
-    expect(out).toEqual([{ id: 1, top: 1752 }])
+  it('anchors to the page-2 box while that segment is the one on screen', () => {
+    // vp [1000,1600]: page2 box renders ~1534 (in view), page3 box ~1720 (out)
+    const out = viewportAnchorTops([{ id: 1, blockIds: ['b-straddle'] }], rects, geo, 1, view(1000))
+    expect(out).toEqual([{ id: 1, top: 1506 }])
   })
 
-  // M3-3: a whole-doc task (empty blockIds) is no longer page-anchored — it gets
-  // a pane-pinned marker instead, so it must NOT return a scroll-dependent top.
-  it('returns null for an unscoped whole-doc card (empty blockIds), not a scrollTop pin', () => {
-    expect(cardAnchorTops([{ id: 7, blockIds: [] }], rects, geo, 1)).toEqual([{ id: 7, top: null }])
+  it('hops to the page-3 box once the continuation is the visible segment', () => {
+    // vp [1650,2250]: page2 box (~1534) scrolled past, page3 box (~1720) now in view
+    const out = viewportAnchorTops([{ id: 1, blockIds: ['b-straddle'] }], rects, geo, 1, view(1650))
+    expect(out).toEqual([{ id: 1, top: 1692 }])
   })
 
-  it('uses the topmost (lowest-page) box and scales rect.y by zoom', () => {
-    const out = cardAnchorTops([{ id: 2, blockIds: ['b-straddle'] }], rects, geo, 2)
-    // topmost box is page 2, y 690: (2-1)*(800+16) + 690*2 = 816 + 1380 = 2196
-    expect(out).toEqual([{ id: 2, top: 2196 }])
+  it('waits at the nearest (first) box before the block is reached', () => {
+    // vp [0,600], both boxes below → nearest is the page-2 box
+    const out = viewportAnchorTops([{ id: 1, blockIds: ['b-straddle'] }], rects, geo, 1, view(0))
+    expect(out).toEqual([{ id: 1, top: 1506 }])
   })
 
-  // BUG-32: a scoped task whose box isn't resolved yet returns null so the
-  // renderer can hide the badge/bubble until geometry lands.
-  it('returns null for a scoped task with no resolved rect — geometry not ready (BUG-32)', () => {
-    expect(cardAnchorTops([{ id: 3, blockIds: ['missing'] }], rects, geo, 1)).toEqual([
-      { id: 3, top: null }
-    ])
+  it('stops at the last box once the block is scrolled past', () => {
+    // vp [3000,3600], both boxes above → nearest is the page-3 box (the end)
+    const out = viewportAnchorTops([{ id: 1, blockIds: ['b-straddle'] }], rects, geo, 1, view(3000))
+    expect(out).toEqual([{ id: 1, top: 1692 }])
   })
 
-  it('returns null for a scoped task when page geometry is absent (BUG-32)', () => {
-    expect(cardAnchorTops([{ id: 4, blockIds: ['b-pg3'] }], rects, null, 1)).toEqual([
-      { id: 4, top: null }
-    ])
+  it('keeps a single-page block at its box regardless of scroll', () => {
+    expect(viewportAnchorTops([{ id: 2, blockIds: ['b-pg3'] }], rects, geo, 1, view(1700))).toEqual([{ id: 2, top: 1752 }])
+    expect(viewportAnchorTops([{ id: 2, blockIds: ['b-pg3'] }], rects, geo, 1, view(0))).toEqual([{ id: 2, top: 1752 }])
+  })
+
+  it('picks the most-visible box across multiple selected blocks (section)', () => {
+    // vp [1700,2300]: b-pg3 (overlap 40) beats straddle page3 box (overlap 12)
+    const out = viewportAnchorTops([{ id: 5, blockIds: ['b-straddle', 'b-pg3'] }], rects, geo, 1, view(1700))
+    expect(out).toEqual([{ id: 5, top: 1752 }])
+  })
+
+  // M3-3: whole-doc task (no blockIds) is pane-pinned, never page-anchored.
+  it('returns null for an unscoped whole-doc card (empty blockIds)', () => {
+    expect(viewportAnchorTops([{ id: 7, blockIds: [] }], rects, geo, 1, view(0))).toEqual([{ id: 7, top: null }])
+  })
+
+  // BUG-32: hide a scoped card until its geometry resolves.
+  it('returns null for a scoped task with no resolved rect or absent geometry (BUG-32)', () => {
+    expect(viewportAnchorTops([{ id: 3, blockIds: ['missing'] }], rects, geo, 1, view(0))).toEqual([{ id: 3, top: null }])
+    expect(viewportAnchorTops([{ id: 4, blockIds: ['b-pg3'] }], rects, null, 1, view(0))).toEqual([{ id: 4, top: null }])
   })
 })
 
