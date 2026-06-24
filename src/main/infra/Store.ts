@@ -26,6 +26,10 @@ export interface ProjectRecord {
   /** Per-document settings: main-file override + compiler options (Lane S). */
   mainFile?: string
   compile?: CompileOptions
+  /** Per-section/subsection paper summaries, keyed by title-path (e.g.
+   *  "Methodology > Setup"). `hash` is the FNV-1a of that node's own prose when
+   *  it was summarized — a model re-summarizes only nodes whose hash drifted. */
+  summaries?: Record<string, { gist: string; hash: string }>
 }
 
 /** Atomic temp+rename write so a crash never leaves a half-written file. */

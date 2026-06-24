@@ -339,4 +339,22 @@ describe('ClaudeService.primeSession', () => {
 
     expect(runner.calls[0]!.signal).toBe(controller.signal)
   })
+
+  test('injects the paper context (outline + summaries) into the prime prompt', async () => {
+    const runner = new MockRunner(() => claudeJson('primed'))
+    const service = new ClaudeService(
+      runner,
+      globalSettings,
+      doc,
+      undefined,
+      undefined,
+      undefined,
+      () => 'Paper outline (context only):\nIntroduction — the gist',
+    )
+
+    await service.primeSession(WD)
+
+    expect(runner.calls[0]!.args.at(-1)).toContain('Paper outline (context only)')
+    expect(runner.calls[0]!.args.at(-1)).toContain('Introduction — the gist')
+  })
 })

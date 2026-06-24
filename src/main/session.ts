@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { DocumentInfo } from '../shared/ipc/document'
@@ -7,6 +8,7 @@ import { GitClient } from './infra/GitClient'
 import type { GlobalSettingsStore, Store } from './infra/Store'
 import { ForkManager } from './fork/ForkManager'
 import { ClaudeService } from './services/ClaudeService'
+import { SummaryService } from './services/SummaryService'
 import { ActiveOps } from './services/sessionBus'
 import { CompileService } from './services/CompileService'
 import { DiffPreviewService } from './services/DiffPreviewService'
@@ -25,6 +27,9 @@ export class DocumentSession {
   readonly files: FileService
   readonly snippets: SnippetCompiler
   readonly diffPreview: DiffPreviewService
+  /** Per-section/subsection paper summaries injected into each fork's prime so it
+   *  "knows the paper"; a cheap model refreshes only the nodes whose content drifted. */
+  readonly summaries: SummaryService
   /** Every fork (parallel edit / chat) for this document: its per-fork worktree
    *  pool + bounded scheduler. Replaces the single shared op worktree — each fork
    *  edits its OWN worktree, so the user's checkout is never touched mid-op and
@@ -90,12 +95,23 @@ export class DocumentSession {
     this.git = new GitClient(runner, info.root)
     this.review = new ReviewService(this.git)
     this.forks = new ForkManager(this.git, forkBase, globalSettings.get().forkConcurrency ?? 12)
+    this.summaries = new SummaryService(runner, store)
+    const readDoc = (rel: string): string | null => {
+      try {
+        return readFileSync(join(info.root, rel), 'utf8')
+      } catch {
+        return null
+      }
+    }
     // The bus digest reads the document repo's recent commits fresh per op (the
     // shared, always-live "what changed" source); `this.git` targets info.root.
-    // Each fork runs Claude in its OWN worktree (passed per call to runForkTurn).
+    // Each fork runs Claude in its OWN worktree (passed per call to runForkTurn);
+    // every prime also carries the paper outline + per-section summaries (cached,
+    // refreshed in the background when a section's content drifts).
     this.claude = new ClaudeService(
       runner, globalSettings, info, undefined, activeOps,
       (n) => this.git.log(n),
+      () => this.summaries.contextFor(info.root, info.texFiles, readDoc),
     )
     this.files = new FileService(info.root, this.git)
     this.snippets = new SnippetCompiler(runner, info.root)

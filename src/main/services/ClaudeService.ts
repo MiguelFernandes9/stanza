@@ -34,6 +34,10 @@ export class ClaudeService {
      *  always-live "what changed" half of the bus digest. DocumentSession wires this
      *  to its GitClient; defaults to none for isolated callers (tests). */
     private recentCommits: (n: number) => Promise<CommitInfo[]> = async () => [],
+    /** Builds the paper-context block (outline + per-section gists) injected into
+     *  each prime so a fresh fork "knows the paper". Synchronous + cached — never
+     *  blocks priming. */
+    private paperContext: () => string = () => '',
   ) {}
 
   /** Run one turn of a FORK (`forkId`) in its OWN `workDir`: prime a fresh session
@@ -114,7 +118,7 @@ export class ClaudeService {
         workDir,
         '--output-format',
         'json',
-        primePrompt(this.doc, workDir),
+        primePrompt(this.doc, workDir, this.paperContext()),
       ],
       signal,
     )
@@ -166,7 +170,7 @@ function writeShot(opId: string, dataUrl: string): string {
  *  shell/launchd env would otherwise route every op to API credits and fail
  *  with "Credit balance is too low" (BUG-29). The CLI reads its OAuth/session
  *  auth from its own config, not from these vars. */
-function claudeEnv(): NodeJS.ProcessEnv {
+export function claudeEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env }
   delete env.ANTHROPIC_API_KEY
   delete env.ANTHROPIC_AUTH_TOKEN
@@ -188,7 +192,7 @@ function assertCompleted(proc: ProcResult, timeoutMs: number): void {
 /** `--output-format json` prints one JSON object whose `result` field
  *  is Claude's response text. Fall back to raw stdout if the shape
  *  ever differs. */
-function extractNote(stdout: string): string {
+export function extractNote(stdout: string): string {
   try {
     const parsed: unknown = JSON.parse(stdout)
     if (parsed && typeof parsed === 'object' && 'result' in parsed) {

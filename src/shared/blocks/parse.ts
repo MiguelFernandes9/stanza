@@ -380,7 +380,7 @@ function assignIds(blocks: BlockNode[], lines: string[], parentPath: string): vo
 }
 
 /** FNV-1a, six hex chars — stable fingerprint of the block's source. */
-function contentHash(text: string): string {
+export function contentHash(text: string): string {
   let hash = 0x811c9dc5
   for (let i = 0; i < text.length; i++) {
     hash ^= text.charCodeAt(i)
