@@ -120,38 +120,32 @@ describe('ClaudeService.runOp', () => {
     expect(runner.calls[0]!.args).not.toContain('--effort')
   })
 
-  test('injects a digest of OTHER sessions accepted ops into the op prompt (bus)', async () => {
-    store.setProject('/proj', {
-      ops: [
-        { opId: 'o1', ts: '2026-06-24T10:00:00.000Z', instruction: 'rewrite the intro', note: 'shortened it', accepted: true, scope: 'doc', sessionId: 'other' },
-      ],
-    })
+  test("injects the document's recent commits into the op prompt (bus)", async () => {
+    const recentCommits = async () => [
+      { hash: 'h1', subject: 'claude: rewrite the intro', iso: '2026-06-24T13:34:00+01:00', kind: 'claude' as const },
+    ]
     const runner = new MockRunner(() => claudeJson('done'))
-    const service = new ClaudeService(runner, store, globalSettings, doc, undefined, undefined, 'me')
+    const service = new ClaudeService(runner, store, globalSettings, doc, undefined, undefined, 'me', new ActiveOps(), recentCommits)
 
     await service.runOp({ instruction: 'fix typos', spans: [] }, () => {})
 
     const opPromptText = runner.calls[1]!.args.at(-1)! // resume call, last arg = prompt
-    expect(opPromptText).toContain('Already applied')
+    expect(opPromptText).toContain('Recently committed')
     expect(opPromptText).toContain('rewrite the intro')
     expect(opPromptText).toContain('Instruction: fix typos') // own instruction still present
   })
 
-  test('does NOT inject this session own ops (already in its context)', async () => {
-    store.setProject('/proj', {
-      ops: [
-        { opId: 'o1', ts: '2026-06-24T10:00:00.000Z', instruction: 'mine', note: 'did it', accepted: true, scope: 'doc', sessionId: 'me' },
-      ],
-    })
+  test('omits the digest when there are no commits and nothing in flight', async () => {
     const runner = new MockRunner(() => claudeJson('done'))
     const service = new ClaudeService(runner, store, globalSettings, doc, undefined, undefined, 'me')
 
     await service.runOp({ instruction: 'next', spans: [] }, () => {})
 
-    expect(runner.calls[1]!.args.at(-1)!).not.toContain('Already applied')
+    expect(runner.calls[1]!.args.at(-1)!).not.toContain('Recently committed')
+    expect(runner.calls[1]!.args.at(-1)!).not.toContain('Context only')
   })
 
-  test('injects siblings IN-FLIGHT ops (write-on-prompt) into the op prompt', async () => {
+  test('injects siblings IN-FLIGHT edits (write-on-prompt) into the op prompt', async () => {
     const activeOps = new ActiveOps()
     activeOps.start({ sessionId: 'other', root: '/proj', instruction: 'rewriting section 3', startedAt: '2026-06-24T10:05:00.000Z' })
     const runner = new MockRunner(() => claudeJson('done'))
@@ -160,7 +154,7 @@ describe('ClaudeService.runOp', () => {
     await service.runOp({ instruction: 'fix a typo', spans: [] }, () => {})
 
     const prompt = runner.calls[1]!.args.at(-1)!
-    expect(prompt).toContain('In progress now')
+    expect(prompt).toContain('In progress right now')
     expect(prompt).toContain('rewriting section 3')
   })
 

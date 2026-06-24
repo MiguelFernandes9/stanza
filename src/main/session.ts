@@ -100,7 +100,12 @@ export class DocumentSession {
     this.compiler.setOptions(store.getProject(info.root).compile ?? {})
     this.git = new GitClient(runner, info.root)
     this.review = new ReviewService(this.git)
-    this.claude = new ClaudeService(runner, store, globalSettings, info, this.worktreeDir, undefined, this.sessionId, activeOps)
+    // The bus digest reads the document repo's recent commits fresh per op (the
+    // shared, always-live "what changed" source); `this.git` targets info.root.
+    this.claude = new ClaudeService(
+      runner, store, globalSettings, info, this.worktreeDir, undefined, this.sessionId, activeOps,
+      () => this.git.log(12),
+    )
     this.files = new FileService(info.root, this.git)
     this.snippets = new SnippetCompiler(runner, info.root)
     this.diffPreview = new DiffPreviewService(this.git, this.snippets, info)

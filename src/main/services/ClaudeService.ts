@@ -3,7 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { ClaudeRequest, ClaudeStatus } from '../../shared/ipc/claude'
-import type { DocumentInfo } from '../../shared/ipc/document'
+import type { CommitInfo, DocumentInfo } from '../../shared/ipc/document'
 import type { ProcessRunner, ProcResult } from '../infra/ProcessRunner'
 import type { GlobalSettingsStore, Store } from '../infra/Store'
 import { opPrompt, primePrompt } from './prompts'
@@ -39,6 +39,10 @@ export class ClaudeService {
     /** Shared in-memory registry of in-flight ops across windows — its entries (from
      *  OTHER sessions) feed the "editing right now" part of the digest. */
     private activeOps: ActiveOps = new ActiveOps(),
+    /** Recent commits of the DOCUMENT repo (read fresh per op) — the shared,
+     *  always-live "what changed" half of the bus digest. DocumentSession wires this
+     *  to its GitClient; defaults to none for isolated callers (tests). */
+    private recentCommits: () => Promise<CommitInfo[]> = async () => [],
   ) {}
 
   /** Establish the session without running an op (priming pipeline).
@@ -125,14 +129,11 @@ export class ClaudeService {
       if (req.imageDataUrl) shotPath = writeShot(opId, req.imageDataUrl)
       const args = ['-p', '--resume', sessionId, '--add-dir', this.workDir]
       if (shotPath) args.push('--add-dir', dirname(shotPath))
-      // Read-on-prompt hook: prepend a digest of what OTHER sessions are doing — both
-      // in-flight (ActiveOps) and already-committed (Store ops[]), live across windows
-      // in this process. Excludes our own session.
-      const digest = formatSessionDigest(
-        this.store.getProject(this.doc.root).ops ?? [],
-        this.activeOps.othersFor(this.doc.root, this.sessionId),
-        this.sessionId,
-      )
+      // Read-on-prompt hook: prepend a digest of recent edits — the document's git
+      // history (read fresh from disk, so it's live across every app instance and
+      // captures manual edits too) plus any edits in progress in another window now.
+      const commits = await this.recentCommits().catch((): CommitInfo[] => [])
+      const digest = formatSessionDigest(commits, this.activeOps.othersFor(this.doc.root, this.sessionId))
       args.push('--output-format', 'json', '--permission-mode', 'acceptEdits', opPrompt(req, shotPath, digest ?? undefined))
       const proc = await this.claude(args)
       assertCompleted(proc, this.timeoutMs)

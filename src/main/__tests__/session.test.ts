@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import type { DocumentInfo } from '../../shared/ipc/document'
 import type { ProcessRunner, ProcResult, RunSpec } from '../infra/ProcessRunner'
 import { GlobalSettingsStore, Store } from '../infra/Store'
+import { ActiveOps } from '../services/sessionBus'
 import { DocumentSession } from '../session'
 
 const doc: DocumentInfo = { root: '/proj', mainFile: 'main.tex', texFiles: ['main.tex'] }
@@ -38,22 +39,22 @@ describe('DocumentSession', () => {
     expect(session.files).toBeDefined()
   })
 
-  test('session bus: a session injects ANOTHER session accepted ops into its op prompt', async () => {
+  test('session bus: a session sees ANOTHER session in-flight edit in its op prompt', async () => {
     const runner = new MockRunner()
-    const a = new DocumentSession(doc, runner, store, globalSettings)
-    const b = new DocumentSession(doc, runner, store, globalSettings)
+    const shared = new ActiveOps() // ipc-registry shares one registry across windows
+    const a = new DocumentSession(doc, runner, store, globalSettings, shared)
+    const b = new DocumentSession(doc, runner, store, globalSettings, shared)
     expect(a.sessionId).not.toBe(b.sessionId) // one id per window
 
-    // Session A made an accepted change (as ipc-registry records it, tagged with A).
-    store.setProject(doc.root, {
-      ops: [{ opId: 'o', ts: '2026-06-24T10:00:00.000Z', instruction: 'A rewrote the intro', note: 'did A', accepted: true, scope: 'doc', sessionId: a.sessionId }],
-    })
+    // Session A is mid-edit (ipc-registry marks this at prompt-trigger).
+    shared.start({ sessionId: a.sessionId, root: doc.root, instruction: 'A is rewriting the intro', startedAt: '2026-06-24T10:00:00.000Z' })
 
-    // Session B runs an op → its prompt carries A's change (read-on-prompt hook).
+    // Session B runs an op → its prompt shows A's in-flight edit (read-on-prompt hook).
+    // (Committed edits travel via the doc's git log, exercised in ClaudeService tests.)
     await b.claude.runOp({ instruction: 'B fixes typos', spans: [] }, () => {})
     const prompt = runner.calls.at(-1)!.args.at(-1)!
-    expect(prompt).toContain('Already applied')
-    expect(prompt).toContain('A rewrote the intro')
+    expect(prompt).toContain('In progress right now')
+    expect(prompt).toContain('A is rewriting the intro')
     expect(prompt).toContain('Instruction: B fixes typos')
   })
 
