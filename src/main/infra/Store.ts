@@ -41,48 +41,50 @@ function loadJson<T>(filePath: string, fallback: T): T {
 }
 
 /** Per-project persisted state in one JSON file (<userData>/projects.json).
- *  Atomic temp+rename writes; a missing or corrupt file reads as empty. */
+ *
+ *  Reads + writes hit DISK fresh — the file IS the source of truth, never an
+ *  in-memory cache. Stanza can run as several processes (separate app launches all
+ *  sharing this one file); a cached copy meant a peer's write — e.g. a sibling
+ *  session's op in the session bus — wasn't seen until the app restarted. Reading
+ *  fresh, and read-merge-writing each patch, keeps every instance current without a
+ *  restart. `readFileSync`/`writeFileSync` are synchronous, so a read-merge-write is
+ *  atomic WITHIN a process (two patches can't interleave); across processes a rare
+ *  TOCTOU remains (two near-simultaneous writers, one lost) — acceptable for the
+ *  human-paced op cadence; a file lock would be the durable fix. */
 export class Store {
-  private data: Record<string, ProjectRecord>
+  constructor(private filePath: string) {}
 
-  constructor(private filePath: string) {
-    this.data = loadJson(filePath, {})
+  private all(): Record<string, ProjectRecord> {
+    return loadJson<Record<string, ProjectRecord>>(this.filePath, {})
   }
 
   getProject(root: string): ProjectRecord {
-    return this.data[root] ?? {}
+    return this.all()[root] ?? {}
   }
 
   setProject(root: string, patch: Partial<ProjectRecord>): void {
-    this.data[root] = { ...this.data[root], ...patch }
-    this.persist()
+    const all = this.all() // re-read so a peer's concurrent change isn't clobbered
+    all[root] = { ...all[root], ...patch }
+    atomicWriteJson(this.filePath, all)
   }
 
   listProjects(): [string, ProjectRecord][] {
-    return Object.entries(this.data)
-  }
-
-  private persist(): void {
-    atomicWriteJson(this.filePath, this.data)
+    return Object.entries(this.all())
   }
 }
 
-/** App-wide settings (fonts + theme) in one JSON file (<userData>/settings.json).
- *  Separate from the per-project Store; same atomic-write / corrupt-tolerant load. */
+/** App-wide settings in one JSON file (<userData>/settings.json). Reads/writes fresh
+ *  like Store (above) so a model/effort change in one instance reaches another. */
 export class GlobalSettingsStore {
-  private data: GlobalSettings
-
-  constructor(private filePath: string) {
-    this.data = loadJson<GlobalSettings>(filePath, {})
-  }
+  constructor(private filePath: string) {}
 
   get(): GlobalSettings {
-    return this.data
+    return loadJson<GlobalSettings>(this.filePath, {})
   }
 
   set(patch: Partial<GlobalSettings>): GlobalSettings {
-    this.data = { ...this.data, ...patch }
-    atomicWriteJson(this.filePath, this.data)
-    return this.data
+    const next = { ...loadJson<GlobalSettings>(this.filePath, {}), ...patch }
+    atomicWriteJson(this.filePath, next)
+    return next
   }
 }

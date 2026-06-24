@@ -1,72 +1,79 @@
 import { describe, expect, test } from 'vitest'
-import type { OpRecord } from '../../../shared/ipc/claude'
-import { formatSessionDigest } from '../sessionBus'
+import type { CommitInfo } from '../../../shared/ipc/document'
+import { ActiveOps, formatSessionDigest } from '../sessionBus'
+import type { ActiveOp } from '../sessionBus'
 
-const op = (p: Partial<OpRecord>): OpRecord => ({
-  opId: p.opId ?? 'op',
-  ts: p.ts ?? '2026-06-24T10:00:00.000Z',
-  instruction: p.instruction ?? 'edit',
-  note: p.note ?? 'changed something',
-  accepted: p.accepted ?? null,
-  scope: p.scope,
-  sessionId: p.sessionId,
+const commit = (p: Partial<CommitInfo>): CommitInfo => ({
+  hash: p.hash ?? 'abc123',
+  subject: p.subject ?? 'claude: edit something',
+  iso: p.iso ?? '2026-06-24T13:34:00+01:00',
+  kind: p.kind ?? 'claude',
 })
 
-describe('formatSessionDigest', () => {
-  test('returns null when there are no other-session ops', () => {
-    expect(formatSessionDigest([], 'me')).toBeNull()
+const active = (p: Partial<ActiveOp>): ActiveOp => ({
+  sessionId: p.sessionId ?? 'other',
+  root: p.root ?? '/proj',
+  instruction: p.instruction ?? 'working',
+  startedAt: p.startedAt ?? '2026-06-24T10:05:00.000Z',
+})
+
+describe('formatSessionDigest — recent commits', () => {
+  test('returns null when there is nothing to report', () => {
+    expect(formatSessionDigest([], [])).toBeNull()
   })
 
-  test('excludes the own session', () => {
-    const ops = [op({ accepted: true, sessionId: 'me', instruction: 'mine' })]
-    expect(formatSessionDigest(ops, 'me')).toBeNull()
+  test('lists recent commits, framed as context with no coordination vocabulary', () => {
+    const digest = formatSessionDigest([commit({ subject: 'claude: tighten the intro' })], [])!
+    expect(digest).toContain('Context only')
+    expect(digest).toContain('Recently committed')
+    expect(digest).toContain('tighten the intro') // claude: prefix stripped
+    expect(digest).toContain('Do NOT report, mention, or act')
+    expect(digest).not.toMatch(/session|agent/i)
   })
 
-  test('excludes untagged (legacy) ops — no known origin', () => {
-    const ops = [op({ accepted: true, sessionId: undefined, instruction: 'legacy' })]
-    expect(formatSessionDigest(ops, 'me')).toBeNull()
+  test('labels a manual (wip) edit instead of showing the bare subject', () => {
+    const digest = formatSessionDigest([commit({ subject: 'wip: manual edits', kind: 'wip' })], [])!
+    expect(digest).toContain('manual edit')
   })
 
-  test('excludes pending and rejected ops — only accepted changed the doc', () => {
-    const ops = [
-      op({ accepted: null, sessionId: 'other', instruction: 'pending' }),
-      op({ accepted: false, sessionId: 'other', instruction: 'rejected' }),
-    ]
-    expect(formatSessionDigest(ops, 'me')).toBeNull()
+  test('caps at the limit, keeping the newest (git log is newest-first)', () => {
+    const commits = Array.from({ length: 20 }, (_, i) => commit({ subject: `claude: edit ${i}` }))
+    const digest = formatSessionDigest(commits, [], 12)!
+    expect(digest.split('\n').filter((l) => l.startsWith('- '))).toHaveLength(12)
+    expect(digest).toContain('edit 0') // newest kept
+    expect(digest).not.toContain('edit 19') // oldest (index 19) dropped
+  })
+})
+
+describe('formatSessionDigest — in-flight (active) edits', () => {
+  test('reports what is being edited right now', () => {
+    const digest = formatSessionDigest([], [active({ instruction: 'rewrite section 3' })])!
+    expect(digest).toContain('In progress right now')
+    expect(digest).toContain('rewrite section 3')
   })
 
-  test('includes other-session accepted ops with scope + instruction + note', () => {
-    const ops = [
-      op({ accepted: true, sessionId: 'other', scope: 'blocks', instruction: 'tighten intro', note: 'shortened ¶1' }),
-    ]
-    const digest = formatSessionDigest(ops, 'me')
-    expect(digest).toContain('Other Stanza sessions')
-    expect(digest).toContain('[blocks]')
-    expect(digest).toContain('tighten intro')
-    expect(digest).toContain('shortened ¶1')
-    expect(digest).toContain('do not undo or duplicate')
+  test('shows in-flight AND committed together', () => {
+    const digest = formatSessionDigest([commit({ subject: 'claude: fixed refs' })], [active({ instruction: 'editing now' })])!
+    expect(digest).toContain('In progress right now')
+    expect(digest).toContain('editing now')
+    expect(digest).toContain('Recently committed')
+    expect(digest).toContain('fixed refs')
+  })
+})
+
+describe('ActiveOps registry', () => {
+  test('othersFor returns same-project edits from OTHER sessions only', () => {
+    const reg = new ActiveOps()
+    reg.start(active({ sessionId: 'a', root: '/proj' }))
+    reg.start(active({ sessionId: 'me', root: '/proj' }))
+    reg.start(active({ sessionId: 'b', root: '/other' }))
+    expect(reg.othersFor('/proj', 'me').map((o) => o.sessionId)).toEqual(['a'])
   })
 
-  test('labels a whole-document op', () => {
-    const ops = [op({ accepted: true, sessionId: 'other', scope: 'doc', instruction: 'reformat' })]
-    expect(formatSessionDigest(ops, 'me')).toContain('[whole document]')
-  })
-
-  test('caps at the limit, keeping the most recent', () => {
-    const ops = Array.from({ length: 15 }, (_, i) =>
-      op({ accepted: true, sessionId: 'other', instruction: `edit ${i}` }),
-    )
-    const digest = formatSessionDigest(ops, 'me', 10)!
-    const bullets = digest.split('\n').filter((l) => l.startsWith('- '))
-    expect(bullets).toHaveLength(10)
-    expect(digest).toContain('edit 14') // newest kept
-    expect(digest).not.toContain('edit 4') // oldest dropped
-  })
-
-  test('collapses a multi-line note into one bullet', () => {
-    const ops = [op({ accepted: true, sessionId: 'other', note: 'line one\n\nline two' })]
-    const digest = formatSessionDigest(ops, 'me')!
-    expect(digest).toContain('line one line two')
-    expect(digest.split('\n').filter((l) => l.startsWith('- '))).toHaveLength(1)
+  test('end removes a session entry', () => {
+    const reg = new ActiveOps()
+    reg.start(active({ sessionId: 'a', root: '/proj' }))
+    reg.end('a')
+    expect(reg.othersFor('/proj', 'me')).toEqual([])
   })
 })

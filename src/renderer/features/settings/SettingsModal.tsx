@@ -51,6 +51,8 @@ const CLAUDE_EFFORTS: { label: string; value: NonNullable<GlobalSettings['claude
 export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.Element | null {
   const [global, setGlobal] = useState<GlobalSettings>({})
   const [docSettings, setDocSettings] = useState<DocumentSettings>({})
+  // Transient "Reset — next edit starts fresh" ack after the reset button.
+  const [resetAck, setResetAck] = useState(false)
 
   useEffect(() => {
     if (!open) return
@@ -273,6 +275,38 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
                   </option>
                 ))}
               </select>
+            </Row>
+            <Row label="Bus history">
+              <input
+                aria-label="Bus commit limit"
+                type="number"
+                min={0}
+                max={100}
+                value={global.busCommitLimit ?? 20}
+                onChange={(e) => patchGlobal({ busCommitLimit: Number(e.target.value) || undefined })}
+                style={{ width: 64 }}
+              />
+              <span style={{ color: 'var(--text-faint)' }}>commits of project history shown to the model</span>
+            </Row>
+            <Row label="Session">
+              <button
+                aria-label="Reset assistant session"
+                disabled={!doc}
+                onClick={() => {
+                  void client.assistantReset().then(
+                    () => {
+                      setResetAck(true)
+                      setTimeout(() => setResetAck(false), 3000)
+                    },
+                    () => undefined
+                  )
+                }}
+              >
+                Reset session
+              </button>
+              <span style={{ color: 'var(--text-faint)' }}>
+                {resetAck ? 'Reset — next edit starts fresh' : !doc ? 'Open a document to reset' : 'Clears context if the model degrades'}
+              </span>
             </Row>
           </Section>
 

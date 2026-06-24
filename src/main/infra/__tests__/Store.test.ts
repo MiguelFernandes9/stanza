@@ -63,6 +63,26 @@ describe('Store', () => {
     const roots = store.listProjects().map(([root]) => root)
     expect(roots.sort()).toEqual(['/a', '/b'])
   })
+
+  // Cross-instance freshness (the session-bus restart bug): two Store instances on
+  // the same file model two app processes. A write by one is seen by the OTHER
+  // without re-constructing it — the old in-memory cache needed an app restart.
+  test('a write by one instance is visible to a long-lived other instance', () => {
+    const a = new Store(filePath)
+    const b = new Store(filePath) // constructed BEFORE the write
+    a.setProject('/proj', { ops: [{ opId: 'o1', ts: 't', instruction: 'i', note: 'n', accepted: true }] })
+    expect(b.getProject('/proj').ops).toHaveLength(1) // b sees it live, no restart
+  })
+
+  test('concurrent instances merge instead of clobbering (read-merge-write)', () => {
+    const a = new Store(filePath)
+    const b = new Store(filePath)
+    a.setProject('/proj', { sessionId: 's-a' })
+    b.setProject('/proj', { blockCount: 7 }) // re-reads first, keeps a's write
+    const record = new Store(filePath).getProject('/proj')
+    expect(record.sessionId).toBe('s-a')
+    expect(record.blockCount).toBe(7)
+  })
 })
 
 describe('GlobalSettingsStore (Lane S)', () => {
@@ -84,5 +104,13 @@ describe('GlobalSettingsStore (Lane S)', () => {
     const path = join(dir, 'settings.json')
     writeFileSync(path, '{ not json')
     expect(new GlobalSettingsStore(path).get()).toEqual({})
+  })
+
+  test('a setting changed in one instance is read fresh by another (no restart)', () => {
+    const path = join(dir, 'settings.json')
+    const a = new GlobalSettingsStore(path)
+    const b = new GlobalSettingsStore(path)
+    a.set({ claudeModel: 'sonnet' })
+    expect(b.get().claudeModel).toBe('sonnet')
   })
 })
