@@ -14,8 +14,8 @@ given spans unless the instruction explicitly requires updating cross-references
 labels, or the bibliography. Never run git. Never compile. Reply with a one-paragraph
 summary of what you changed.`
 
-export const opPrompt = (req: ClaudeRequest, imagePath?: string) =>
-  `Instruction: ${req.instruction}
+export const opPrompt = (req: ClaudeRequest, imagePath?: string, injectedContext?: string) =>
+  `${injectedContext ? `${injectedContext}\n\n` : ''}Instruction: ${req.instruction}
 ${
   req.spans.length === 0
     ? 'Scope: whole document.'

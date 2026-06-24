@@ -534,6 +534,7 @@ async function runClaudeOp(
         note: op.note,
         accepted: null,
         scope: req.spans.length === 0 ? 'doc' : 'blocks',
+        sessionId: doc.sessionId, // tag for the per-project session bus
       })
       // The proposal travels back on this return — the initiating renderer wires it
       // into the busy task. Do NOT also broadcast review:proposal here: that
@@ -589,6 +590,7 @@ async function runRestoreOp(
           note: '',
           accepted: null,
           scope: 'doc',
+          sessionId: doc.sessionId, // tag for the per-project session bus
         })
         // Surface as a review card via the broadcast path (the same one open-time
         // crash recovery uses): there's no busy task to thread it through, so this
