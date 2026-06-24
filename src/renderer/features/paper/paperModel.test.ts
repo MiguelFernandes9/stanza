@@ -1514,4 +1514,31 @@ describe('binBlocks — front-matter title/footnote split (Bug B)', () => {
     expect(fm[0]!.x).toBeLessThan(120) // reaches the title's left
     expect(fm[0]!.x + fm[0]!.width).toBeGreaterThan(450) // AND its right — spans the gutter, uncut
   })
+
+  it('builds a split cluster box like the main builder — extent-fills to the forward rects', () => {
+    // The footnote cluster's last rendered line landed in NULL (not the fm units), but the
+    // block's forward line-rect covers it. The split must build its box the SAME way as the
+    // main per-(page,col) loop — extent-fill to that rect — not a raw bbox that stops at the
+    // last captured unit (the #142 split artifact).
+    const toRect = (r: TextRow): PdfRect => prect(1, r.xLeft, r.yTop, r.xRight - r.xLeft, r.yBottom - r.yTop)
+    const titleRows = lineRows([60, 73], 90, 500)
+    const bodyRows = lineRows([200, 213, 226, 239], 90, 500)
+    const footRows = lineRows([600, 613], 90, 300) // captured footnote units
+    const dropRow = lineRows([626], 90, 300) // a footnote line that landed in null, not fm
+    const rows = new Map([
+      [1, [...titleRows, ...bodyRows, ...footRows, ...dropRow]],
+      [2, bodyRun(45, 640, 90, 500)] // wide band so contentBand keeps the title/footnote clusters
+    ])
+    const fmUnits = [...titleRows, ...footRows].map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'env1#fm'))
+    const bodyUnits = bodyRows.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'sec1/par1#b'))
+    const dropUnit = dropRow.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, null))
+    const regionsById = new Map<string, PdfRect[]>([
+      ['env1#fm', [...titleRows, ...footRows, ...dropRow].map(toRect)],
+      ['sec1/par1#b', bodyRows.map(toRect)]
+    ])
+    const { boxesById } = binBlocks([...fmUnits, ...bodyUnits, ...dropUnit], rows, new Set(['env1#fm']), regionsById)
+    const fm = [...boxesById.get('env1#fm')!].sort((a, b) => a.y - b.y)
+    expect(fm).toHaveLength(2) // split fired (title + footnote)
+    expect(boxBottom(fm[1]!)).toBeCloseTo(626, 0) // footnote box extent-fills to the dropped line (raw bbox stops at 613)
+  })
 })
