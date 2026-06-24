@@ -307,9 +307,10 @@ case "$*" in
   *) echo '{"result":"primed"}' ;;
 esac`)
 
-  // The op worktree session.ts derives for a root (stable hash under tmpdir).
-  const worktreeFor = (root: string) =>
-    join(tmpdir(), 'stanza-wt', createHash('sha1').update(root).digest('hex').slice(0, 16))
+  // The fork worktree the session derives for a thread: <base>/<threadId>, base
+  // = stable hash under tmpdir. A persistent chat resumes in its own worktree.
+  const worktreeFor = (root: string, threadId: string) =>
+    join(tmpdir(), 'stanza-wt', createHash('sha1').update(root).digest('hex').slice(0, 16), threadId)
 
   const seedThread = (root: string, rec: Record<string, unknown>): void => {
     writeFileSync(join(h.userData, 'projects.json'), JSON.stringify({ [root]: { threads: [rec] } }))
@@ -350,7 +351,7 @@ esac`)
     expect(res.proposal).not.toBeNull() // the fresh session did the edit
     expect(res.sessionId).not.toBe('poison-session-id') // a new id took over
     const rec = readThread(root, 'T1')
-    expect(rec.primedWorkdir).toBe(worktreeFor(root)) // re-primed in the op worktree
+    expect(rec.primedWorkdir).toBe(worktreeFor(root, 'T1')) // re-primed in the fork worktree
     expect(rec.sessionId).toBe(res.sessionId)
   }, 20_000)
 
@@ -361,7 +362,7 @@ esac`)
     seedThread(root, {
       threadId: 'T2',
       sessionId: 'good-session-id',
-      primedWorkdir: worktreeFor(root), // already primed in THIS worktree
+      primedWorkdir: worktreeFor(root, 'T2'), // already primed in THIS fork worktree
       blockIds: ['main.tex#h'],
       turns: [],
       ts: '2026-01-01',
@@ -387,7 +388,7 @@ esac`)
     seedThread(root, {
       threadId: 'T3',
       sessionId: 'shot-session-id',
-      primedWorkdir: worktreeFor(root),
+      primedWorkdir: worktreeFor(root, 'T3'),
       blockIds: ['main.tex#h'],
       turns: [],
       ts: '2026-01-01',
