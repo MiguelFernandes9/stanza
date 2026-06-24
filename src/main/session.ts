@@ -7,6 +7,7 @@ import type { ProcessRunner } from './infra/ProcessRunner'
 import { GitClient } from './infra/GitClient'
 import type { GlobalSettingsStore, Store } from './infra/Store'
 import { ClaudeService } from './services/ClaudeService'
+import { ActiveOps } from './services/sessionBus'
 import { CompileService } from './services/CompileService'
 import { DiffPreviewService } from './services/DiffPreviewService'
 import { FileService } from './services/FileService'
@@ -83,7 +84,15 @@ export class DocumentSession {
     return result
   }
 
-  constructor(info: DocumentInfo, runner: ProcessRunner, store: Store, globalSettings: GlobalSettingsStore) {
+  constructor(
+    info: DocumentInfo,
+    runner: ProcessRunner,
+    store: Store,
+    globalSettings: GlobalSettingsStore,
+    /** Shared across windows by ipc-registry so a session sees its siblings' in-flight
+     *  ops; defaults to a private registry for isolated callers (tests). */
+    activeOps: ActiveOps = new ActiveOps(),
+  ) {
     this.info = info
     this.worktreeDir = join(tmpdir(), 'stanza-wt', createHash('sha1').update(info.root).digest('hex').slice(0, 16))
     this.compiler = new CompileService(runner, info)
@@ -91,7 +100,7 @@ export class DocumentSession {
     this.compiler.setOptions(store.getProject(info.root).compile ?? {})
     this.git = new GitClient(runner, info.root)
     this.review = new ReviewService(this.git)
-    this.claude = new ClaudeService(runner, store, globalSettings, info, this.worktreeDir, undefined, this.sessionId)
+    this.claude = new ClaudeService(runner, store, globalSettings, info, this.worktreeDir, undefined, this.sessionId, activeOps)
     this.files = new FileService(info.root, this.git)
     this.snippets = new SnippetCompiler(runner, info.root)
     this.diffPreview = new DiffPreviewService(this.git, this.snippets, info)

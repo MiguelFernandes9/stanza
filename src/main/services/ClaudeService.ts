@@ -7,7 +7,7 @@ import type { DocumentInfo } from '../../shared/ipc/document'
 import type { ProcessRunner, ProcResult } from '../infra/ProcessRunner'
 import type { GlobalSettingsStore, Store } from '../infra/Store'
 import { opPrompt, primePrompt } from './prompts'
-import { formatSessionDigest } from './sessionBus'
+import { ActiveOps, formatSessionDigest } from './sessionBus'
 
 // A Claude op is an agentic CLI run — extended thinking plus many tool
 // calls and recompiles — so it can legitimately run for many minutes. This
@@ -36,6 +36,9 @@ export class ClaudeService {
     /** The owning window's session id — tags this session's ops and excludes them
      *  from the cross-session bus digest (DocumentSession passes its id). */
     private sessionId: string = randomUUID(),
+    /** Shared in-memory registry of in-flight ops across windows — its entries (from
+     *  OTHER sessions) feed the "editing right now" part of the digest. */
+    private activeOps: ActiveOps = new ActiveOps(),
   ) {}
 
   /** Establish the session without running an op (priming pipeline).
@@ -122,9 +125,14 @@ export class ClaudeService {
       if (req.imageDataUrl) shotPath = writeShot(opId, req.imageDataUrl)
       const args = ['-p', '--resume', sessionId, '--add-dir', this.workDir]
       if (shotPath) args.push('--add-dir', dirname(shotPath))
-      // Read-on-prompt hook: prepend a digest of what OTHER sessions changed (the
-      // shared Store is live across windows in this process). Excludes our own ops.
-      const digest = formatSessionDigest(this.store.getProject(this.doc.root).ops ?? [], this.sessionId)
+      // Read-on-prompt hook: prepend a digest of what OTHER sessions are doing — both
+      // in-flight (ActiveOps) and already-committed (Store ops[]), live across windows
+      // in this process. Excludes our own session.
+      const digest = formatSessionDigest(
+        this.store.getProject(this.doc.root).ops ?? [],
+        this.activeOps.othersFor(this.doc.root, this.sessionId),
+        this.sessionId,
+      )
       args.push('--output-format', 'json', '--permission-mode', 'acceptEdits', opPrompt(req, shotPath, digest ?? undefined))
       const proc = await this.claude(args)
       assertCompleted(proc, this.timeoutMs)

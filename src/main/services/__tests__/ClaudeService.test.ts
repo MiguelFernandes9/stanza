@@ -7,6 +7,7 @@ import type { ClaudeStatus } from '../../../shared/ipc/claude'
 import type { DocumentInfo } from '../../../shared/ipc/document'
 import { GlobalSettingsStore, Store } from '../../infra/Store'
 import { ClaudeService } from '../ClaudeService'
+import { ActiveOps } from '../sessionBus'
 
 const doc: DocumentInfo = {
   root: '/proj',
@@ -131,7 +132,7 @@ describe('ClaudeService.runOp', () => {
     await service.runOp({ instruction: 'fix typos', spans: [] }, () => {})
 
     const opPromptText = runner.calls[1]!.args.at(-1)! // resume call, last arg = prompt
-    expect(opPromptText).toContain('Other Stanza sessions')
+    expect(opPromptText).toContain('already changed this project')
     expect(opPromptText).toContain('rewrite the intro')
     expect(opPromptText).toContain('Instruction: fix typos') // own instruction still present
   })
@@ -147,7 +148,20 @@ describe('ClaudeService.runOp', () => {
 
     await service.runOp({ instruction: 'next', spans: [] }, () => {})
 
-    expect(runner.calls[1]!.args.at(-1)!).not.toContain('Other Stanza sessions')
+    expect(runner.calls[1]!.args.at(-1)!).not.toContain('Awareness from other Stanza sessions')
+  })
+
+  test('injects siblings IN-FLIGHT ops (write-on-prompt) into the op prompt', async () => {
+    const activeOps = new ActiveOps()
+    activeOps.start({ sessionId: 'other', root: '/proj', instruction: 'rewriting section 3', startedAt: '2026-06-24T10:05:00.000Z' })
+    const runner = new MockRunner(() => claudeJson('done'))
+    const service = new ClaudeService(runner, store, globalSettings, doc, undefined, undefined, 'me', activeOps)
+
+    await service.runOp({ instruction: 'fix a typo', spans: [] }, () => {})
+
+    const prompt = runner.calls[1]!.args.at(-1)!
+    expect(prompt).toContain('editing this project RIGHT NOW')
+    expect(prompt).toContain('rewriting section 3')
   })
 
   test('ops run in a custom workDir (the op worktree), primed + resumed THERE', async () => {

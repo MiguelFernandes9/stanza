@@ -38,12 +38,16 @@ import { Store, GlobalSettingsStore } from './infra/Store'
 import { appendTurns, patchTurnByOpId, removeThread, upsertThread } from './threadStore'
 import { changedFilesInDiff } from './services/diffSpans'
 import { DocumentService } from './services/DocumentService'
+import { ActiveOps } from './services/sessionBus'
 import { DocumentSession } from './session'
 import { mapRecents } from './recents'
 
 const runner = new DefaultProcessRunner()
 let store: Store
 let globalSettings: GlobalSettingsStore
+/** In-flight ops across all windows (shared by every DocumentSession) — the session
+ *  bus reads it so one window's op sees what its siblings are editing right now. */
+const activeOps = new ActiveOps()
 let documents: DocumentService
 /** One DocumentSession per window, keyed by its `webContents.id`. Each window is
  *  a fully independent document (mac doc-app model); a handler resolves its
@@ -374,7 +378,7 @@ export function registerIpcHandlers(): void {
         // recompile from the new file. open() honors the override just written.
         const info = await documents.open(root)
         if (info) {
-          sessions.set(event.sender.id, new DocumentSession(info, runner, store, globalSettings))
+          sessions.set(event.sender.id, new DocumentSession(info, runner, store, globalSettings, activeOps))
           return { doc: info }
         }
         return { doc: null }
@@ -436,7 +440,7 @@ async function loadDoc(
 }
 
 function bindSession(wc: WebContents, info: DocumentInfo): void {
-  const session = new DocumentSession(info, runner, store, globalSettings)
+  const session = new DocumentSession(info, runner, store, globalSettings, activeOps)
   sessions.set(wc.id, session)
   void session.ensureWorktree() // create/reuse the doc's op worktree (crash-safe)
   // Replace any prior watcher (re-opening a doc in the same window), then watch
@@ -494,6 +498,9 @@ async function runClaudeOp(
 ): Promise<ClaudeResult> {
   doc.review.assertSpansFree(req.spans)
 
+  // Write-on-prompt (session bus): record this op as in-flight the moment it's
+  // triggered, so a sibling session that starts an op meanwhile sees it's editing.
+  activeOps.start({ sessionId: doc.sessionId, root: doc.info.root, instruction: req.instruction, startedAt: new Date().toISOString() })
   // Mark the op active so the file watcher ignores the brief user-tree churn
   // (accept merge / wip-commit) — the op's OWN edits land in the worktree and
   // never churn this tree. Release a beat after the body so the settle fires muted.
@@ -544,6 +551,7 @@ async function runClaudeOp(
       return { opId: op.opId, note: op.note, proposal }
     })
   } finally {
+    activeOps.end(doc.sessionId) // op no longer in flight (session bus)
     setTimeout(() => doc.endOp(), FILE_WATCH_SETTLE_MS + 300)
   }
 }
@@ -615,6 +623,8 @@ async function runClaudeTurn(
 ): Promise<ClaudeTurnResult> {
   const claudeReq: ClaudeRequest = { instruction: req.instruction, spans: req.spans, imageDataUrl: req.imageDataUrl }
   doc.review.assertSpansFree(req.spans)
+  // Write-on-prompt (session bus): mark this turn in-flight so siblings see it.
+  activeOps.start({ sessionId: doc.sessionId, root: doc.info.root, instruction: req.instruction, startedAt: new Date().toISOString() })
   doc.beginOp()
   try {
     return await doc.runOpExclusive(async () => {
@@ -667,6 +677,7 @@ async function runClaudeTurn(
       return { opId: turn.opId, note: turn.note, sessionId: turn.sessionId, proposal }
     })
   } finally {
+    activeOps.end(doc.sessionId) // turn no longer in flight (session bus)
     setTimeout(() => doc.endOp(), FILE_WATCH_SETTLE_MS + 300)
   }
 }
