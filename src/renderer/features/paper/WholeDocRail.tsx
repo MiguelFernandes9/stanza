@@ -21,7 +21,15 @@ interface Props {
 }
 
 const badgeLabel = (phase: TaskPhase): string =>
-  phase === 'review' ? 'Proposal ready' : phase === 'busy' ? 'Editing…' : phase === 'noop' ? 'No changes' : 'Draft edit'
+  phase === 'review'
+    ? 'Proposal ready'
+    : phase === 'busy'
+      ? 'Editing…'
+      : phase === 'noop'
+        ? 'No changes'
+        : phase === 'thread-idle'
+          ? 'Conversation'
+          : 'Draft edit'
 
 /** Whole-document ops have no block to anchor to, so their markers are PINNED to
  *  the PDF pane's top-right — a pane-relative layer that stays put while the page
@@ -92,7 +100,11 @@ export function WholeDocRail({
               <FileText size={14} />
             </button>
             {isOpen && (
-              <div data-testid="whole-doc-bubble" style={{ width: RAIL }}>
+              <div
+                data-testid="whole-doc-bubble"
+                onPointerDown={(e) => e.stopPropagation()}
+                style={{ width: RAIL }}
+              >
                 <TaskCard
                   task={t}
                   blocks={[]}
@@ -107,6 +119,7 @@ export function WholeDocRail({
                   onSubmit={() => onSubmit(t.id)}
                   onDismiss={() => onDismiss(t.id)}
                   onCollapse={() => onCollapse(t.id)}
+                  onTogglePersistent={() => undefined}
                   onResolve={(accept) => onResolve(t.id, accept)}
                   onOpenReview={() => onOpenReview(t.id)}
                 />

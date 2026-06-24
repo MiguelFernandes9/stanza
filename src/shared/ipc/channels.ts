@@ -4,6 +4,7 @@ export const IpcChannels = {
   documentRecents: 'document:recents', // invoke → RecentProject[]
   documentHistory: 'document:history', // invoke → CommitInfo[] (sidebar HISTORY)
   documentDiffAt: 'document:diffAt',  // invoke sha → HistoryDiff ({diff, files}: the change that commit introduced)
+  documentRevertTo: 'document:revertTo', // invoke sha → ReviewProposal | null (restore the doc to a commit, as a review proposal)
   documentSave: 'document:save',      // invoke (relPath, content) → void (F4)
   documentRead: 'document:read',      // invoke relPath → string (working-tree content; F4 editor — contract addition, flagged at gate)
   documentFiles: 'document:files',    // invoke → FileEntry[] (sidebar FILES tree)
@@ -18,8 +19,11 @@ export const IpcChannels = {
   synctexInverseBatch: 'synctex:inverse-batch', // invoke InversePoint[] → (SourceLocation|null)[]
   synctexForward: 'synctex:forward',  // invoke BlockSpan → PdfRect[]
   claudeRun: 'claude:run',            // invoke ClaudeRequest → ClaudeResult
+  claudeRunTurn: 'claude:runTurn',    // invoke ClaudeTurnRequest → ClaudeTurnResult (persistent thread bubble)
   claudeStatus: 'claude:status',      // main→renderer event: ClaudeStatus
   claudeHistory: 'claude:history',    // invoke → OpRecord[] (chat pane, F9)
+  threadsList: 'threads:list',        // invoke → ThreadRecord[] (persistent bubbles, restored on open)
+  threadsDelete: 'threads:delete',    // invoke threadId → void (drop a persistent bubble's record)
   reviewProposal: 'review:proposal',  // main→renderer event: ReviewProposal
   reviewResolve: 'review:resolve',    // invoke ReviewDecision → ReviewResolution
   reviewList: 'review:list',          // invoke → ReviewProposal[] (pending op branches)

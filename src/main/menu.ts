@@ -3,23 +3,10 @@ import type { MenuItemConstructorOptions } from 'electron'
 import { buildFileSubmenu } from './menuTemplate'
 import { getRecentProjects } from './ipc-registry'
 
-/** Stanza's application menu.
- *
- *  The default Electron menu binds View → Reload to CmdOrCtrl+R, which would
- *  shadow the in-app ⌘R recompile (and wipe renderer state). This menu keeps
- *  the essential roles — app (quit/hide), edit (undo/cut/copy/paste/selectAll,
- *  needed by the CodeMirror editor and inputs), window — but leaves ⌘R to the
- *  renderer. Force-reload and devtools stay available under non-conflicting
- *  accelerators as dev escape hatches.
- *
- *  The File submenu (New document / Open folder / Open Recent / Settings /
- *  Close Tab) sends a menu:* channel to the focused window; the renderer routes
- *  it (App.tsx). ⌘W is rebound off the default close-window role to "Close Tab":
- *  the accelerator fires regardless of focus and drives the editor's tab close;
- *  the renderer falls back to window:close when no tab is open.
- *
- *  Re-runnable: rebuilt after each document open/create (registered via
- *  setRecentsListener) so Open Recent reflects the current store. */
+/** Build and install Stanza's application menu (app/edit/view/window roles).
+ *  Leaves ⌘R free for the renderer recompile. File-submenu items send menu:* to
+ *  the focused window (renderer routes them). Re-runnable: rebuilt after each
+ *  document open/create so Open Recent stays fresh. */
 export function buildAppMenu(): void {
   const isMac = process.platform === 'darwin'
 

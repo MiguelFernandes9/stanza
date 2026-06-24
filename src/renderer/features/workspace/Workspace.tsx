@@ -10,7 +10,8 @@ import type {
   DocumentInfo,
   FileEntry,
   FileMutationResult,
-  OpRecord
+  OpRecord,
+  ThreadTurn
 } from '@shared/ipc'
 import { ChatPane } from '../chat/ChatPane'
 import type { ComposeChip } from '../chat/ChatPane'
@@ -39,7 +40,7 @@ import { expandIds, flattenBlocks, parentOf, spanLabel, taskSpans } from '../pap
 import { resolveToKnownFile } from '@renderer/lib/paths'
 import { blockLabel, tagKind } from '../tasks/TaskCard'
 import { dismissRoute, initialTaskState, isWholeDocTask, taskReducer } from '../tasks/taskStore'
-import { pendingRemap } from '../tasks/reanchor'
+import { pendingRemap, restoreAnchors, vanishedThreads } from '../tasks/reanchor'
 import { planMove } from './fileDrag'
 import { revealBlock } from './revealBlock'
 import { ResizeHandle } from './ResizeHandle'
@@ -71,6 +72,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
   // shown full-page until closed (subject/iso for the header come from the
   // commit row; diff/files from document:diffAt). null = no overlay.
   const [historyDiff, setHistoryDiff] = useState<{
+    hash: string
     subject: string
     iso: string
     diff: string
@@ -83,7 +85,18 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
   const panes = usePaneWidths()
   const [unreadNotes, setUnreadNotes] = useState(0)
   const [compile, setCompile] = useState<CompileInfo>({ state: 'idle', errors: 0, warnings: 0 })
-  const [toast, setToast] = useState<{ title: string; message: string; tone: 'danger' | 'success' } | null>(null)
+  // After LaTeX reports ok the pane still reloads the PDF and re-bins block
+  // geometry; PaperPane reports that window so the pill stays "Compiling…" until
+  // the new page swaps in (compile = LaTeX + block render, one status).
+  const [blocksRendering, setBlocksRendering] = useState(false)
+  // The block tree is being reparsed after a compile (loadBlocks in flight). The
+  // paper pane gates its geometry recompute on this so it never bins fresh spans
+  // against the previous PDF (or stale spans against the fresh PDF) — see loadBlocks.
+  const [blocksReloading, setBlocksReloading] = useState(false)
+  // In-flight loadBlocks count, so `blocksReloading` stays true until the LAST
+  // overlapping reload settles (not cleared by the first of two).
+  const blockLoads = useRef(0)
+  const [toast, setToast] = useState<{ title: string; message: string; tone: 'danger' | 'success' | 'neutral' } | null>(null)
   const [state, dispatch] = useReducer(taskReducer, initialTaskState)
   // Latest tree + tasks, read inside loadBlocks' async resolve without making
   // it depend on (and re-create on) every blocks/tasks change (BUG-33).
@@ -224,14 +237,44 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
   // instead of the pre-edit ones (BUG-15). Every compile trigger (⌘S, ⌘R,
   // accept) surfaces through onCompileStatus('ok').
   const loadBlocks = useCallback(() => {
+    // Mark the block tree as reloading until the fresh parse lands. The paper
+    // pane gates its geometry recompute on this (plus the PDF's own load): a
+    // recompile updates the PDF and the block tree through two independent async
+    // pipelines, and the on-disk synctex is always the latest — so computing
+    // geometry while EITHER input is stale maps mismatched spans/pages and yields
+    // wrong boxes. Holding both until fresh lets the pane swap atomically.
+    blockLoads.current += 1
+    setBlocksReloading(true)
     void client.documentProjectBlocks().then((fresh) => {
       // A reparse can renumber a pending block's positional id while its hash
       // holds; re-anchor busy/review tasks to the new ids before swapping the
       // tree, so their PDF overlays follow instead of vanishing (BUG-33).
       const remap = pendingRemap(blocksRef.current, fresh, tasksRef.current)
       if (Object.keys(remap).length) dispatch({ type: 'reanchor', remap })
+      // A persistent thread whose anchor block was DELETED (no hash/path
+      // successor) loses its home — drop the bubble and its persisted record. If
+      // it still holds a pending proposal, reject it first so its op branch +
+      // span lock are freed (BUG-42), exactly as deleteThread does.
+      for (const taskId of vanishedThreads(blocksRef.current, fresh, tasksRef.current)) {
+        const task = tasksRef.current.find((t) => t.id === taskId)
+        if (!task) continue
+        const opId = task.proposal?.opId ?? task.opId
+        if (task.phase === 'review' && opId) {
+          void client.reviewResolve({ opId, accept: false }).catch(() => undefined)
+        }
+        if (task.threadId) void client.threadsDelete(task.threadId).catch(() => undefined)
+        dispatch({ type: 'dismiss', taskId })
+      }
       setBlocks(fresh)
-    }, () => setBlocks([]))
+    }, () => {
+      setBlocks([])
+    }).finally(() => {
+      // Stay "reloading" until the LAST in-flight load settles, so overlapping
+      // reloads (rapid recompiles) don't clear it early and unblock geometry
+      // against a half-updated tree.
+      blockLoads.current -= 1
+      if (blockLoads.current === 0) setBlocksReloading(false)
+    })
   }, [])
 
   const loadFiles = useCallback(() => {
@@ -248,6 +291,37 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
     )
   }, [doc.mainFile])
 
+  // Rehydrate persistent "Keep chat" bubbles from the Store on open. Self-
+  // contained (fetches its own blocks + pending proposals) so it doesn't race
+  // loadBlocks or the reEmitPendingProposals push: anchors are resolved against
+  // the current tree (dropping threads whose block was deleted while closed),
+  // and a thread that closed mid-review restores straight into its proposal.
+  const restoreThreads = useCallback(() => {
+    void Promise.all([client.threadsList(), client.documentProjectBlocks(), client.reviewList()]).then(
+      ([records, blocks, proposals]) => {
+        const pendingByOp = new Map(proposals.map((p) => [p.opId, p]))
+        const threads = []
+        for (const r of records) {
+          const { ids, gone } = restoreAnchors(blocks, r.blockIds)
+          if (gone) {
+            void client.threadsDelete(r.threadId).catch(() => undefined)
+            continue
+          }
+          const pending = r.turns.find((t) => t.opId && t.accepted == null && pendingByOp.has(t.opId))
+          threads.push({
+            threadId: r.threadId,
+            threadSessionId: r.sessionId,
+            blockIds: ids,
+            turns: r.turns,
+            proposal: pending ? pendingByOp.get(pending.opId!) : null,
+          })
+        }
+        if (threads.length) dispatch({ type: 'restore-threads', threads })
+      },
+      () => undefined
+    )
+  }, [])
+
   useEffect(() => {
     loadFiles()
     // Blocks for the whole project (all \include'd files), not just main —
@@ -255,7 +329,8 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
     loadBlocks()
     loadHistory()
     loadOps()
-  }, [doc, loadFiles, loadBlocks, loadHistory, loadOps])
+    restoreThreads()
+  }, [doc, loadFiles, loadBlocks, loadHistory, loadOps, restoreThreads])
 
   // Refresh autocomplete data when the file tree changes (new/renamed/deleted
   // files, and the initial listing).
@@ -285,6 +360,11 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
       client.onCompileStatus((s) => {
         setCompile((c) => ({ ...c, state: s === 'running' ? 'running' : s === 'ok' ? 'ok' : 'failed' }))
         if (s === 'ok') {
+          // The block render starts now (PDF reload + re-bin) — mark it busy up
+          // front so the pill never flips to green "Compiled" before PaperPane
+          // reports back. The page still shows the PREVIOUS PDF until the new one
+          // and its boxes swap in together, so green would be a lie until then.
+          setBlocksRendering(true)
           // Bump the cache-busting nonce on EVERY successful compile, not only
           // the runCompile promise path — a compile triggered elsewhere must
           // still refresh the pane (L5). Reuses the known PDF name.
@@ -465,7 +545,9 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
   const lockedFiles = useMemo(() => {
     const set = new Set<string>()
     for (const t of state.tasks) {
-      if (t.phase === 'busy' || t.phase === 'review') {
+      // Persistent threads own their block in any phase — its file stays locked
+      // so a rename can't move the doc out from under the next turn.
+      if (t.phase === 'busy' || t.phase === 'review' || t.persistent) {
         for (const span of taskSpans(t.blockIds, blocks)) set.add(span.file)
       }
     }
@@ -596,6 +678,12 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
     const task = state.tasks.find((t) => t.id === taskId)
     const instruction = (instructionOverride ?? task?.instruction ?? '').trim()
     if (!task || !instruction) return
+    // A "Keep chat" draft starts a conversation, not a one-shot op — its first
+    // Run goes through the thread path (its own session + transcript).
+    if (task.persistent) {
+      submitThreadTurn(taskId, instruction)
+      return
+    }
     if (instructionOverride) dispatch({ type: 'update-instruction', taskId, instruction })
     dispatch({ type: 'submit', taskId })
     runOp(taskId, instruction, taskSpans(task.blockIds, blocks), task.image)
@@ -624,7 +712,8 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
 
   const resolveTask = (taskId: number, accept: boolean): void => {
     const task = state.tasks.find((t) => t.id === taskId)
-    const opId = task?.proposal?.opId ?? task?.opId
+    if (!task) return
+    const opId = task.proposal?.opId ?? task.opId
     if (!opId) return
     void client.reviewResolve({ opId, accept }).then(
       (resolution) => {
@@ -637,7 +726,10 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           })
           return
         }
-        dispatch({ type: 'resolve', taskId })
+        // A persistent thread stays open after resolve (keep chatting); a
+        // one-shot task is removed.
+        if (task.persistent) dispatch({ type: 'resolve-thread-turn', taskId, accept })
+        else dispatch({ type: 'resolve', taskId })
         loadOps()
         // Refresh stale editor buffers for the files this accept wrote to disk —
         // blocks/PDF/history already refresh off compile-ok; the open editor
@@ -681,6 +773,64 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
     }
   }
 
+  // ── Persistent conversation bubbles ("Keep chat") ──────────────────────────
+  const toggleTaskPersistent = (taskId: number): void => dispatch({ type: 'toggle-persistent', taskId })
+
+  /** Send one turn of a persistent thread on its OWN session. The thread is born
+   *  (threadId) on its first turn; later turns + restored threads resume by
+   *  threadSessionId. An edit turn comes back with a proposal (review); a
+   *  question turn with just text (thread-idle). */
+  const submitThreadTurn = (taskId: number, text: string): void => {
+    const task = state.tasks.find((t) => t.id === taskId)
+    const instruction = text.trim()
+    if (!task || !instruction) return
+    const threadId = task.threadId ?? crypto.randomUUID()
+    dispatch({
+      type: 'add-user-turn',
+      taskId,
+      turn: { role: 'user', text: instruction, ts: new Date().toISOString() },
+      threadId
+    })
+    void client
+      .claudeRunTurn({
+        threadId,
+        sessionId: task.threadSessionId ?? null,
+        instruction,
+        spans: taskSpans(task.blockIds, blocks),
+        blockIds: task.blockIds,
+        // A staged snapshot rides with this turn (add-user-turn clears it after).
+        imageDataUrl: task.image
+      })
+      .then(
+        (res) => {
+          const agentTurn: ThreadTurn = {
+            role: 'agent',
+            text: res.note,
+            ts: new Date().toISOString(),
+            ...(res.proposal ? { opId: res.opId, accepted: null } : {})
+          }
+          dispatch({ type: 'turn-result', taskId, turn: agentTurn, proposal: res.proposal, sessionId: res.sessionId })
+          if (!chatOpen) setUnreadNotes((n) => n + 1)
+        },
+        (err: unknown) =>
+          dispatch({ type: 'turn-failed', taskId, error: err instanceof Error ? err.message : String(err) })
+      )
+  }
+
+  const deleteThread = (taskId: number): void => {
+    const task = state.tasks.find((t) => t.id === taskId)
+    // Mid-turn (busy) is not deletable: 'dismiss' no-ops on busy AND the in-flight
+    // runClaudeTurn would re-persist the record we just deleted — so the delete
+    // would silently resurrect. Bail; the user deletes once the turn settles.
+    if (!task || task.phase === 'busy') return
+    // A pending proposal owns a backend op branch + lock — reject it so both are
+    // freed (BUG-42) before the bubble goes.
+    const opId = task.proposal?.opId ?? task.opId
+    if (task.phase === 'review' && opId) void client.reviewResolve({ opId, accept: false }).catch(() => undefined)
+    if (task.threadId) void client.threadsDelete(task.threadId).catch(() => undefined)
+    dispatch({ type: 'dismiss', taskId })
+  }
+
   const projectName = doc.root.split('/').pop() ?? doc.root
   const activeTask = state.tasks.find((t) => t.id === state.activeTask)
   const pageById = new Map(pageBlocks.map((b) => [b.id, b]))
@@ -712,12 +862,18 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
     if (owner) resolveTask(owner.id, accept)
   }
 
+  // LaTeX finished but the blocks are still rendering → keep the pill in its
+  // "Compiling…" state so the toolbar matches the dim page; otherwise the real
+  // status. (errors stay 0 on a successful compile, so nothing is masked.)
+  const compileView: CompileInfo =
+    blocksRendering && compile.state === 'ok' ? { ...compile, state: 'running' } : compile
+
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--surface-canvas)' }}>
       <TitleBar
         title={projectName}
         mainFile={doc.mainFile}
-        compile={compile}
+        compile={compileView}
         onCompile={saveAndCompile}
         sourceOpen={sourceOpen}
         onToggleSource={toggleSource}
@@ -753,7 +909,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
             if (!commit) return
             // Load the past-version-vs-current diff, then open the overlay.
             void client.documentDiffAt(hash).then(
-              ({ diff, files }) => setHistoryDiff({ subject: commit.subject, iso: commit.iso, diff, files }),
+              ({ diff, files }) => setHistoryDiff({ hash, subject: commit.subject, iso: commit.iso, diff, files }),
               showErrToast
             )
           }}
@@ -804,6 +960,8 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           blocks={blocks}
           state={state}
           compile={compile}
+          blocksReloading={blocksReloading}
+          onRenderingChange={setBlocksRendering}
           pdfUrl={pdfUrl}
           onInverseSearch={inverseSearch}
           flash={pdfFlash}
@@ -842,6 +1000,9 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           onSubmitTask={submitTask}
           onDismissTask={dismissTask}
           onResolveTask={resolveTask}
+          onTogglePersistent={toggleTaskPersistent}
+          onSubmitThreadTurn={submitThreadTurn}
+          onDeleteThread={deleteThread}
           onAttachImage={(taskId, image) => dispatch({ type: 'attach-image', taskId, image })}
           onSnapshotError={() =>
             setToast({
@@ -888,6 +1049,31 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           iso={historyDiff.iso}
           diff={historyDiff.diff}
           files={historyDiff.files}
+          onRestore={() => {
+            const sha = historyDiff.hash
+            setHistoryDiff(null)
+            // The restore comes back as a review card via onReviewProposal
+            // (review:proposal broadcast) — here we only handle the edge results.
+            void client.documentRevertTo(sha).then((proposal) => {
+              if (!proposal)
+                setToast({
+                  title: 'Already at this version',
+                  message: 'Nothing to restore — the document already matches this commit.',
+                  tone: 'neutral'
+                })
+            }, (err) => {
+              const msg = err instanceof Error ? err.message : String(err)
+              setToast(
+                msg.includes('SPANS_LOCKED')
+                  ? {
+                      title: 'Resolve the pending change first',
+                      message: 'Accept or reject the open proposal before restoring an earlier version.',
+                      tone: 'danger'
+                    }
+                  : { title: 'Restore failed', message: msg, tone: 'danger' }
+              )
+            })
+          }}
           onClose={() => setHistoryDiff(null)}
         />
       )}

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { JSX } from 'react'
-import { Check, CircleSlash, PenLine, Sparkles } from 'lucide-react'
+import { Check, CircleSlash, MessagesSquare, PenLine, Sparkles } from 'lucide-react'
 import { client } from '@renderer/lib/client'
 import type { CompileState } from '@renderer/components'
 import type { PdfRect, InversePoint, SourceLocation, BlockSpan } from '@shared/ipc'
@@ -8,8 +8,10 @@ import type { BlockNode } from '@shared/blocks/types'
 import { usePdfDocument } from '../pdf/usePdfDocument'
 import { PdfPageStack } from '../pdf/PdfPageStack'
 import type { PageGeometry } from '../pdf/PdfPageStack'
+import type { PDFDocumentProxy } from '../pdf/pdfjsSetup'
 import { ReviewOverlay } from '../review/ReviewOverlay'
 import { blockLabel, TaskCard, tagKind } from '../tasks/TaskCard'
+import { ThreadCard } from '../tasks/ThreadCard'
 import { isWholeDocTask } from '../tasks/taskStore'
 import type { PaneView, TaskPhase, TaskState } from '../tasks/taskStore'
 import { BlockOverlay } from './BlockOverlay'
@@ -68,11 +70,26 @@ interface Props {
   onSubmitTask: (taskId: number) => void
   onDismissTask: (taskId: number) => void
   onResolveTask: (taskId: number, accept: boolean) => void
+  /** Persistent bubbles ("Keep chat"): toggle on a draft, send a follow-up
+   *  turn, or delete the whole thread. */
+  onTogglePersistent: (taskId: number) => void
+  onSubmitThreadTurn: (taskId: number, text: string) => void
+  onDeleteThread: (taskId: number) => void
   /** Snapshot the task's first block from the rendered canvas → attach the PNG. */
   onAttachImage: (taskId: number, image: string) => void
   /** Snapshot couldn't be captured (block off-screen / canvas error) — surface it. */
   onSnapshotError?: () => void
   onView: (view: PaneView) => void
+  /** The block tree is being reparsed after a compile (Workspace.loadBlocks in
+   *  flight). Gates the geometry recompute: with the PDF and the block tree
+   *  arriving on separate async pipelines, binning fresh spans against the old
+   *  PDF (or stale spans against the fresh PDF) produces wrong boxes — so hold
+   *  until both are fresh, then recompute + swap once. */
+  blocksReloading?: boolean
+  /** Block overlays are (re)rendering for a freshly compiled PDF — lets the
+   *  toolbar pill stay "Compiling…" until the new page swaps in (compile =
+   *  LaTeX + block render as one state). */
+  onRenderingChange?: (rendering: boolean) => void
 }
 
 /** Preview pane (v0.3 model): the compiled page is centered in the scroll
@@ -115,8 +132,20 @@ export function PaperPane(props: Props): JSX.Element {
   // Bubbles open on demand; a fresh compose task auto-opens exactly once.
   const [openIds, setOpenIds] = useState<number[]>([])
   const autoOpened = useRef<Set<number>>(new Set())
+  // Identity of the (pdf, blocksSig) that `blockRects` was last computed for, so a
+  // render can tell — synchronously, no extra state — whether the geometry on
+  // screen is fresh for the current PDF or still mid-recompute (gates the swap).
+  const geomForPdf = useRef<unknown>(null)
+  const geomForSig = useRef<string>('')
 
-  const { pdf } = usePdfDocument(pdfUrl)
+  const { pdf, loading } = usePdfDocument(pdfUrl)
+  // The PDF actually shown. It lags `pdf` (the freshly loaded doc): we keep the
+  // previous page AND its block overlays on screen, unchanged, through the whole
+  // recompile, then swap the new page and its boxes in together in a single render
+  // (committed with `blockRects` below). So a recompile shows the previous version
+  // intact until everything is ready — never the new PDF before its boxes, never
+  // stale boxes over the new PDF.
+  const [displayPdf, setDisplayPdf] = useState<PDFDocumentProxy | null>(null)
 
   const byId = new Map(pageBlocks.map((b) => [b.id, b]))
   const blocksOf = (blockIds: string[]): PageBlock[] =>
@@ -152,6 +181,12 @@ export function PaperPane(props: Props): JSX.Element {
   }
 
   const captureBlock = (taskId: number): void => {
+    // The snapshot button toggles: a second press on an attached shot removes it
+    // (empty string clears in the reducer) rather than re-capturing.
+    if (state.tasks.find((t) => t.id === taskId)?.image) {
+      props.onAttachImage(taskId, '')
+      return
+    }
     let image: string | null = null
     try {
       image = cropBlockImage(taskId)
@@ -209,12 +244,40 @@ export function PaperPane(props: Props): JSX.Element {
     .map((b) => `${b.id}:${b.span.file}:${b.span.startLine}:${b.span.endLine}`)
     .join('|')
 
-  // Block geometry: attribute every rendered unit (text row, graphic) to its source
-  // block via the synctex BACKWARD map; a block's box is the bbox of its units per
-  // (page, column). Forward-rect EXTENT is never consulted, so a galley/vbox rect
-  // can't inflate a box. One batched `synctex edit` per render.
+  // Geometry is fresh only when the last commit was for THIS pdf + these spans.
+  const geometryFresh = pdf != null && geomForPdf.current === pdf && geomForSig.current === blocksSig
+  // Rendering = a freshly compiled PDF is still loading, the block tree is still
+  // reparsing, or the geometry is mid-recompute — so the held `displayPdf` + its
+  // overlays are still the previous version. Reported up so the toolbar pill stays
+  // "Compiling…" until the swap — the on-screen page is the OLD one until then, so
+  // green "Compiled" would lie.
+  const blocksRendering =
+    pdfUrl != null && (loading || props.blocksReloading === true || (pdf != null && !geometryFresh))
+
+  // Surface the block-render state to the workspace so the compile pill stays
+  // "Compiling…" until the new page swaps in, not just until LaTeX finishes.
+  const onRenderingChange = props.onRenderingChange
   useEffect(() => {
-    if (!pdf) return
+    onRenderingChange?.(blocksRendering)
+  }, [blocksRendering, onRenderingChange])
+
+  // Block geometry: attribute every rendered unit (text row, graphic) to its source block
+  // via the synctex BACKWARD map; a block's box is the bbox of its units per (page,
+  // column). Forward EXTENT is never consulted, so a galley/vbox rect can't inflate a box.
+  // Hold the old page+boxes until BOTH the new PDF and new spans are fresh, then recompute
+  // once and swap atomically (geomForPdf/geomForSig gate the swap; drop the dim).
+  useEffect(() => {
+    // Recompute only when the PDF, the on-disk synctex, and the spans are all from
+    // the SAME compile. `synctexForward` reads the on-disk synctex (always the
+    // LATEST compile); the text/graphics layers come from the React `pdf`; the
+    // spans come from `pageBlocks`. The PDF and the block tree arrive on separate
+    // async pipelines after a compile, so either can lag — binning fresh spans
+    // against the old PDF, or stale spans against the fresh PDF, both map mismatched
+    // regions onto the wrong page → garbage boxes (visible after an accept). Hold
+    // the OLD blockRects + displayPdf until BOTH are fresh (`!loading` =
+    // latest-compile PDF loaded; `!blocksReloading` = latest-compile spans parsed),
+    // then recompute once and swap atomically.
+    if (!pdf || loading || props.blocksReloading) return
     let alive = true
     void (async () => {
       // Text rows + graphics for EVERY page — attribution scans the whole render.
@@ -265,12 +328,31 @@ export function PaperPane(props: Props): JSX.Element {
       setBlockRects(result.boxesById)
       setContentTops(result.contentTopByPage)
       columnsByPage.current = result.columnsByPage // Phase 2 (two-rail bubbles) will consume this
-    })()
+      // Mark the geometry now on screen as fresh for this pdf + these spans (set
+      // before React re-renders, so geometryFresh reads true without a flicker).
+      geomForPdf.current = pdf
+      geomForSig.current = blocksSig
+      // Reveal the new PDF now that its boxes are ready — page + overlays swap in
+      // together, never the page first.
+      setDisplayPdf(pdf)
+    })().catch(() => {
+      // Every async step above is individually catch-guarded, so this only fires
+      // on an unexpected throw. Still complete the swap rather than freeze on the
+      // previous page forever (a stuck "Compiling…" pill): reveal the new PDF with
+      // no overlays (drop the now-mismatched boxes) and mark geometry fresh so the
+      // pill releases. The next compile recomputes the boxes.
+      if (!alive) return
+      setBlockRects(new Map())
+      setContentTops(new Map())
+      geomForPdf.current = pdf
+      geomForSig.current = blocksSig
+      setDisplayPdf(pdf)
+    })
     return () => {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pdf, blocksSig])
+  }, [pdf, blocksSig, loading, props.blocksReloading])
 
   // A fresh compose task opens its bubble once (so it's editable); afterwards
   // the user may collapse it freely and it won't re-open.
@@ -383,6 +465,10 @@ export function PaperPane(props: Props): JSX.Element {
   }
 
   const overlaysFor = (pageNo: number): JSX.Element[] => {
+    // Overlays always render: `blockRects` holds the geometry of the currently
+    // shown `displayPdf` and both swap together (the geometry effect's commit), so
+    // the boxes are never stale for the page beneath them — through a recompile the
+    // previous page keeps its previous boxes until the atomic swap.
     const out: JSX.Element[] = []
     for (const b of pageBlocks) {
       const boxes = blockRects.get(b.id)
@@ -484,7 +570,15 @@ export function PaperPane(props: Props): JSX.Element {
   }
 
   const badgeLabel = (phase: TaskPhase): string =>
-    phase === 'review' ? 'Proposal ready' : phase === 'busy' ? 'Editing…' : phase === 'noop' ? 'No changes' : 'Draft edit'
+    phase === 'review'
+      ? 'Proposal ready'
+      : phase === 'busy'
+        ? 'Editing…'
+        : phase === 'noop'
+          ? 'No changes'
+          : phase === 'thread-idle'
+            ? 'Conversation'
+            : 'Draft edit'
 
   return (
     <div style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: 'var(--surface-canvas)' }}>
@@ -506,7 +600,7 @@ export function PaperPane(props: Props): JSX.Element {
         onPointerDown={onMarqueeDown}
         style={{ flex: 1, overflow: 'auto', scrollbarGutter: 'stable', background: 'var(--surface-canvas)' }}
       >
-        {pdf ? (
+        {displayPdf ? (
           // Centre the PAGE, not the page+rail track. A flex row (justify-content:
           // safe center) holds one item whose width is EXACTLY the page; the rail,
           // badges and connector svg are absolute children that hang off the page's
@@ -524,7 +618,7 @@ export function PaperPane(props: Props): JSX.Element {
             <div data-testid="paper-page" style={{ position: 'relative', width: pageWidth, height: contentH, flex: '0 0 auto' }}>
               <div style={{ position: 'absolute', left: 0, top: PAD, width: pageWidth }}>
                 <PdfPageStack
-                  pdf={pdf}
+                  pdf={displayPdf}
                   scale={zoom}
                   scrollRef={scrollRef}
                   onGeometry={(g, n) => {
@@ -596,7 +690,16 @@ export function PaperPane(props: Props): JSX.Element {
                   const anchor = anchorTops[t.id]
                   if (anchor == null) return null // hide until geometry resolves (BUG-32)
                   const tone = phaseTone(t.phase)
-                  const Icon = t.phase === 'review' ? Check : t.phase === 'busy' ? Sparkles : t.phase === 'noop' ? CircleSlash : PenLine
+                  const Icon =
+                    t.phase === 'review'
+                      ? Check
+                      : t.phase === 'busy'
+                        ? Sparkles
+                        : t.phase === 'noop'
+                          ? CircleSlash
+                          : t.phase === 'thread-idle'
+                            ? MessagesSquare
+                            : PenLine
                   const isOpen = openIds.includes(t.id)
                   const label = badgeLabel(t.phase)
                   return (
@@ -649,6 +752,10 @@ export function PaperPane(props: Props): JSX.Element {
                     <div
                       key={t.id}
                       data-testid="rail-bubble"
+                      // A press inside the bubble must not start the pane's marquee
+                      // (it'd suppress text selection mid-drag) — let the user
+                      // select + copy the conversation text instead.
+                      onPointerDown={(e) => e.stopPropagation()}
                       style={{
                         position: 'absolute',
                         left: railLeft,
@@ -659,29 +766,50 @@ export function PaperPane(props: Props): JSX.Element {
                         transition: 'top var(--dur-base, 200ms) var(--ease-out)'
                       }}
                     >
-                      <TaskCard
-                        task={t}
-                        blocks={blocksOf(t.blockIds)}
-                        expanded
-                        side="right"
-                        adding={state.adding}
-                        onToggleAdding={props.onToggleAdding}
-                        onRemoveBlock={(bid) => props.onRemoveBlock(t.id, bid)}
-                        onActivate={() => props.onActivateTask(t.id)}
-                        refCb={(el) => {
-                          cardEls.current[t.id] = el
-                        }}
-                        onUpdate={(instruction) => props.onUpdateInstruction(t.id, instruction)}
-                        onSubmit={() => props.onSubmitTask(t.id)}
-                        onDismiss={() => {
-                          props.onDismissTask(t.id)
-                          setOpenIds((s) => s.filter((x) => x !== t.id))
-                        }}
-                        onCollapse={() => setOpenIds((s) => s.filter((x) => x !== t.id))}
-                        onResolve={(accept) => props.onResolveTask(t.id, accept)}
-                        onOpenReview={() => setReviewId(t.id)}
-                        onSnapshot={() => captureBlock(t.id)}
-                      />
+                      {t.persistent && t.phase !== 'compose' ? (
+                        <ThreadCard
+                          task={t}
+                          blocks={blocksOf(t.blockIds)}
+                          side="right"
+                          refCb={(el) => {
+                            cardEls.current[t.id] = el
+                          }}
+                          onSubmitTurn={(text) => props.onSubmitThreadTurn(t.id, text)}
+                          onResolve={(accept) => props.onResolveTask(t.id, accept)}
+                          onCollapse={() => setOpenIds((s) => s.filter((x) => x !== t.id))}
+                          onDelete={() => {
+                            props.onDeleteThread(t.id)
+                            setOpenIds((s) => s.filter((x) => x !== t.id))
+                          }}
+                          onOpenReview={() => setReviewId(t.id)}
+                          onSnapshot={() => captureBlock(t.id)}
+                        />
+                      ) : (
+                        <TaskCard
+                          task={t}
+                          blocks={blocksOf(t.blockIds)}
+                          expanded
+                          side="right"
+                          adding={state.adding}
+                          onToggleAdding={props.onToggleAdding}
+                          onRemoveBlock={(bid) => props.onRemoveBlock(t.id, bid)}
+                          onActivate={() => props.onActivateTask(t.id)}
+                          refCb={(el) => {
+                            cardEls.current[t.id] = el
+                          }}
+                          onUpdate={(instruction) => props.onUpdateInstruction(t.id, instruction)}
+                          onSubmit={() => props.onSubmitTask(t.id)}
+                          onDismiss={() => {
+                            props.onDismissTask(t.id)
+                            setOpenIds((s) => s.filter((x) => x !== t.id))
+                          }}
+                          onCollapse={() => setOpenIds((s) => s.filter((x) => x !== t.id))}
+                          onTogglePersistent={() => props.onTogglePersistent(t.id)}
+                          onResolve={(accept) => props.onResolveTask(t.id, accept)}
+                          onOpenReview={() => setReviewId(t.id)}
+                          onSnapshot={() => captureBlock(t.id)}
+                        />
+                      )}
                     </div>
                   )
                 })}

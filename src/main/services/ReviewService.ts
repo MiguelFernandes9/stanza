@@ -46,13 +46,16 @@ export class ReviewService {
     opId: string,
     instruction: string,
     spans: BlockSpan[],
+    subject?: string,
   ): Promise<ReviewProposal | null> {
     const gitW = this.git.worktreeClient(dir)
     const branch = BRANCH_PREFIX + opId
     try {
       if (await gitW.isClean()) return null
       await gitW.switchCreate(branch) // detached HEAD + edits → new branch carrying them
-      await gitW.commitAll(commitSubject(instruction))
+      // Restore ops pass an explicit `restore: …` subject so they read distinctly
+      // in HISTORY; Claude ops fall back to the `claude: <instruction>` default.
+      await gitW.commitAll(subject ?? commitSubject(instruction))
       await gitW.checkoutDetach(await this.git.head()) // free the branch, ready W for reuse
       this.pendingSpans.set(opId, spans)
       return this.proposalFor(opId, branch, instruction)

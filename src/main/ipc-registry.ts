@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
 import type { IpcMainInvokeEvent, WebContents } from 'electron'
+import { randomUUID } from 'node:crypto'
 import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { IpcChannels } from '@shared/ipc'
@@ -7,6 +8,8 @@ import type {
   BlockSpan,
   ClaudeRequest,
   ClaudeResult,
+  ClaudeTurnRequest,
+  ClaudeTurnResult,
   CompileRequest,
   CompileStatus,
   DocumentInfo,
@@ -18,6 +21,9 @@ import type {
   PreviewRequest,
   RecentProject,
   ReviewDecision,
+  ReviewProposal,
+  ThreadRecord,
+  ThreadTurn,
   GlobalSettings,
   DocumentSettings,
   DocumentSettingsResult,
@@ -29,6 +35,7 @@ import { armSettleWatcher, watchSettled } from './infra/FileWatcher'
 import { DefaultProcessRunner } from './infra/ProcessRunner'
 import { GitClient } from './infra/GitClient'
 import { Store, GlobalSettingsStore } from './infra/Store'
+import { appendTurns, patchTurnByOpId, removeThread, upsertThread } from './threadStore'
 import { changedFilesInDiff } from './services/diffSpans'
 import { DocumentService } from './services/DocumentService'
 import { DocumentSession } from './session'
@@ -149,6 +156,13 @@ export function registerIpcHandlers(): void {
     return { diff, files: changedFilesInDiff(diff) }
   })
 
+  // HISTORY "Restore to this version": roll the doc back to `sha` as a normal
+  // whole-doc review proposal (Accept = commit the rollback, Reject = discard).
+  // Null when the doc already sits at that version.
+  ipcMain.handle(IpcChannels.documentRevertTo, (event, sha: string) =>
+    runRestoreOp(sessionFor(event), event.sender, sha),
+  )
+
   ipcMain.handle(IpcChannels.documentFiles, (event): FileEntry[] => {
     const { info } = sessionFor(event)
     return listFiles(info.root, outputPdfRel(info))
@@ -220,10 +234,25 @@ export function registerIpcHandlers(): void {
     return runClaudeOp(doc, event.sender, req)
   })
 
+  ipcMain.handle(IpcChannels.claudeRunTurn, (event, req: ClaudeTurnRequest) =>
+    runClaudeTurn(sessionFor(event), event.sender, req),
+  )
+
   ipcMain.handle(
     IpcChannels.claudeHistory,
     (event): OpRecord[] => store.getProject(sessionFor(event).info.root).ops ?? [],
   )
+
+  ipcMain.handle(
+    IpcChannels.threadsList,
+    (event): ThreadRecord[] => store.getProject(sessionFor(event).info.root).threads ?? [],
+  )
+
+  ipcMain.handle(IpcChannels.threadsDelete, (event, threadId: string) => {
+    const root = sessionFor(event).info.root
+    const threads = store.getProject(root).threads
+    if (threads) store.setProject(root, { threads: removeThread(threads, threadId) })
+  })
 
   ipcMain.handle(IpcChannels.reviewResolve, async (event, decision: ReviewDecision) => {
     const doc = sessionFor(event)
@@ -233,7 +262,10 @@ export function registerIpcHandlers(): void {
     const resolution = await doc.runMainTreeExclusive(() => doc.review.resolve(decision))
     doc.diffPreview.invalidate(decision.opId) // free the op's cached block previews
     if (resolution.committed || !decision.accept) {
+      // An op belongs to EITHER the doc history (ops) or a persistent thread —
+      // patch both; the non-owner is a no-op.
       patchOpRecord(doc.info.root, decision.opId, { accepted: decision.accept })
+      patchThreadTurnAccepted(doc.info.root, decision.opId, decision.accept)
     }
     // A committed accept merges Claude's branch into the user's tree — Claude may
     // have added sections/*.tex, dirs, or renamed files. Re-derive THIS window's
@@ -347,7 +379,7 @@ export function registerIpcHandlers(): void {
         // recompile from the new file. open() honors the override just written.
         const info = await documents.open(root)
         if (info) {
-          sessions.set(event.sender.id, new DocumentSession(info, runner, store))
+          sessions.set(event.sender.id, new DocumentSession(info, runner, store, globalSettings))
           return { doc: info }
         }
         return { doc: null }
@@ -409,7 +441,7 @@ async function loadDoc(
 }
 
 function bindSession(wc: WebContents, info: DocumentInfo): void {
-  const session = new DocumentSession(info, runner, store)
+  const session = new DocumentSession(info, runner, store, globalSettings)
   sessions.set(wc.id, session)
   void session.ensureWorktree() // create/reuse the doc's op worktree (crash-safe)
   // Replace any prior watcher (re-opening a doc in the same window), then watch
@@ -421,9 +453,10 @@ function bindSession(wc: WebContents, info: DocumentInfo): void {
       info.root,
       FILE_WATCH_SETTLE_MS,
       () => {
-        // Skip the app's OWN op-driven churn (the capture branch-dance rewrites
-        // then reverts the edited .tex) — firing here would loadBlocks and blink
-        // the proposal bubble. Genuine external edits (no op in flight) refresh.
+        // Skip the app's OWN op-driven churn (worktree edits + accept/wip-commit)
+        // — firing here would loadBlocks and blink the proposal bubble. Genuine
+        // external edits (no op in flight) refresh. (opActive covers thread turns
+        // too — they run through the same beginOp/endOp.)
         if (!wc.isDestroyed() && !sessions.get(wc.id)?.opActive) wc.send(IpcChannels.documentFilesChanged)
       },
       sidebarWatchIgnore(outputPdfRel(info)),
@@ -506,6 +539,7 @@ async function runClaudeOp(
         note: op.note,
         accepted: null,
         scope: req.spans.length === 0 ? 'doc' : 'blocks',
+        sessionId: doc.sessionId, // tag for the per-project session bus
       })
       // The proposal travels back on this return — the initiating renderer wires it
       // into the busy task. Do NOT also broadcast review:proposal here: that
@@ -517,6 +551,153 @@ async function runClaudeOp(
   } finally {
     setTimeout(() => doc.endOp(), FILE_WATCH_SETTLE_MS + 300)
   }
+}
+
+/** HISTORY "Restore to this version": the SAME worktree-capture pipeline as
+ *  runClaudeOp, but the worktree edits come from `git read-tree`-ing the target
+ *  commit instead of from Claude. The result is a normal whole-doc proposal —
+ *  Accept commits the rollback, Reject discards it — so a restore previews
+ *  before it lands and is itself reversible. Null when the doc is already at
+ *  `sha` (read-tree leaves the worktree clean → capture returns null). No file
+ *  watcher: read-tree is synchronous, there's no external writer to settle. */
+async function runRestoreOp(
+  doc: DocumentSession,
+  wc: WebContents,
+  sha: string,
+): Promise<ReviewProposal | null> {
+  doc.review.assertSpansFree([]) // a restore owns the whole tree (v1 serial execution)
+  doc.beginOp()
+  try {
+    return await doc.runOpExclusive(async () => {
+      await doc.runMainTreeExclusive(() => doc.review.prepare())
+      await doc.ensureWorktree()
+      await doc.review.syncWorktree(doc.worktreeDir)
+
+      // Set the worktree to the target commit's tree, then capture that as the
+      // proposal's edits — its diff vs HEAD undoes every change since `sha`.
+      await doc.git.worktreeClient(doc.worktreeDir).readTreeReset(sha)
+      const subject = await doc.git.subject(sha)
+      const instruction = `Restore to "${subject}"`
+      const opId = randomUUID()
+      const proposal = await doc.review.captureWorktree(
+        doc.worktreeDir,
+        opId,
+        instruction,
+        [],
+        `restore: ${subject}`,
+      )
+      if (proposal) {
+        doc.diffPreview.prime(proposal.opId, proposal.branch, proposal.blocks)
+        appendOpRecord(doc.info.root, {
+          opId,
+          ts: new Date().toISOString(),
+          instruction,
+          note: '',
+          accepted: null,
+          scope: 'doc',
+          sessionId: doc.sessionId, // tag for the per-project session bus
+        })
+        // Surface as a review card via the broadcast path (the same one open-time
+        // crash recovery uses): there's no busy task to thread it through, so this
+        // is the single delivery — the renderer's onReviewProposal → restore-proposal.
+        sendTo(wc, IpcChannels.reviewProposal, proposal)
+      }
+      return proposal
+    })
+  } finally {
+    setTimeout(() => doc.endOp(), FILE_WATCH_SETTLE_MS + 300)
+  }
+}
+
+/** A turn of a persistent conversation bubble — the SAME worktree pipeline as
+ *  runClaudeOp, but on the THREAD's isolated session and persisted to `threads`
+ *  (not `ops`), so threads stay out of the ⌘J doc history and their empty-span
+ *  turns never lock the doc session. */
+async function runClaudeTurn(
+  doc: DocumentSession,
+  wc: WebContents,
+  req: ClaudeTurnRequest,
+): Promise<ClaudeTurnResult> {
+  const claudeReq: ClaudeRequest = { instruction: req.instruction, spans: req.spans, imageDataUrl: req.imageDataUrl }
+  doc.review.assertSpansFree(req.spans)
+  doc.beginOp()
+  try {
+    return await doc.runOpExclusive(async () => {
+      await doc.runMainTreeExclusive(() => doc.review.prepare())
+      await doc.ensureWorktree()
+      await doc.review.syncWorktree(doc.worktreeDir)
+
+      // Resume the thread's session only if it was primed in THIS worktree.
+      // Otherwise re-prime a fresh one: a session's sandbox + baked root are
+      // pinned to its prime dir, so a relocated worktree — or a pre-fix session
+      // primed at the user checkout (no primedWorkdir) — can't be resumed and
+      // would fail "Permission denied on read". Mirrors ClaudeService's doc-session
+      // self-heal (ensureSession re-primes on primedWorkdir mismatch).
+      // The Store record is the authority for the resume id (not the renderer's
+      // req.sessionId, which may be stale after a heal).
+      const rec = (store.getProject(doc.info.root).threads ?? []).find((t) => t.threadId === req.threadId)
+      const resumeId = rec?.primedWorkdir === doc.worktreeDir ? (rec.sessionId ?? null) : null
+
+      const watcher = armSettleWatcher(doc.worktreeDir, { quietMs: 400, capMs: 3000 })
+      let turn: { opId: string; note: string; sessionId: string }
+      try {
+        turn = await doc.claude.runThreadTurn(resumeId, claudeReq, (status) =>
+          sendTo(wc, IpcChannels.claudeStatus, status),
+        )
+        await watcher.settled()
+      } finally {
+        watcher.dispose()
+      }
+
+      // A fresh prime (first turn OR self-heal) yields a new session id — persist
+      // it AND the worktree it was primed in BEFORE capture, so a capture failure
+      // can't orphan it (the next turn must resume the same one). A resumed turn
+      // already has both persisted, so skip.
+      if (resumeId == null) {
+        const ts = new Date().toISOString()
+        const threads = store.getProject(doc.info.root).threads ?? []
+        store.setProject(doc.info.root, {
+          threads: upsertThread(threads, {
+            threadId: req.threadId,
+            sessionId: turn.sessionId,
+            primedWorkdir: doc.worktreeDir,
+            blockIds: req.blockIds,
+            ts,
+          }),
+        })
+      }
+      const proposal = await doc.review.captureWorktree(doc.worktreeDir, turn.opId, req.instruction, req.spans)
+      if (proposal) doc.diffPreview.prime(proposal.opId, proposal.branch, proposal.blocks)
+      persistThreadTurn(doc.info.root, req, turn, proposal)
+      return { opId: turn.opId, note: turn.note, sessionId: turn.sessionId, proposal }
+    })
+  } finally {
+    setTimeout(() => doc.endOp(), FILE_WATCH_SETTLE_MS + 300)
+  }
+}
+
+/** Append a user+agent turn to a thread record, refreshing its session id and
+ *  block anchor. An edit turn (proposal present) tags the agent turn with its
+ *  opId so accept/reject can find it later. */
+function persistThreadTurn(
+  root: string,
+  req: ClaudeTurnRequest,
+  result: { opId: string; note: string; sessionId: string },
+  proposal: ReviewProposal | null,
+): void {
+  const ts = new Date().toISOString()
+  const turns: ThreadTurn[] = [
+    { role: 'user', text: req.instruction, ts },
+    { role: 'agent', text: result.note, ts, ...(proposal ? { opId: result.opId, accepted: null } : {}) },
+  ]
+  const existing = store.getProject(root).threads ?? []
+  const withMeta = upsertThread(existing, {
+    threadId: req.threadId,
+    sessionId: result.sessionId,
+    blockIds: req.blockIds,
+    ts,
+  })
+  store.setProject(root, { threads: appendTurns(withMeta, req.threadId, turns) })
 }
 
 /** Run the priming pipeline with prime:status events and prime:cancel
@@ -569,6 +750,14 @@ function patchOpRecord(root: string, opId: string, patch: Partial<OpRecord>): vo
     op.opId === opId ? { ...op, ...patch } : op,
   )
   store.setProject(root, { ops })
+}
+
+/** Record a thread edit turn's accept/reject. No-op when the op isn't a thread
+ *  turn (it's a doc op instead) — patchTurnByOpId leaves non-owners untouched. */
+function patchThreadTurnAccepted(root: string, opId: string, accepted: boolean): void {
+  const threads = store.getProject(root).threads
+  if (!threads) return
+  store.setProject(root, { threads: patchTurnByOpId(threads, opId, { accepted }) })
 }
 
 /** Post-op result: fresh listing + a new DocumentInfo only when the op

@@ -566,7 +566,15 @@ export function Sidebar({
           <Folder size={15} />
         </span>
         <div style={{ minWidth: 0 }}>
-          <div style={{ font: 'var(--weight-semibold) var(--text-sm)/1.2 var(--font-sans)', color: 'var(--ink-900)' }}>
+          <div
+            style={{
+              font: 'var(--weight-semibold) var(--text-sm)/1.2 var(--font-sans)',
+              color: 'var(--ink-900)',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis'
+            }}
+          >
             {projectName}
           </div>
           <div

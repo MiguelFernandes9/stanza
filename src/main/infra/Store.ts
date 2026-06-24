@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { OpRecord } from '../../shared/ipc/claude'
+import type { ThreadRecord } from '../../shared/ipc/conversation'
 import type { CompileOptions, GlobalSettings } from '../../shared/ipc/settings'
 
 /** Everything Stanza persists about one project, keyed by its root. */
@@ -12,6 +13,9 @@ export interface ProjectRecord {
    *  worktree must be re-primed. */
   primedWorkdir?: string
   ops?: OpRecord[]
+  /** Persistent conversation bubbles ("Keep chat") — each its own session +
+   *  transcript + block anchor, restored when the project reopens. */
+  threads?: ThreadRecord[]
   lastOpened?: string // ISO — recents ordering
   blockCount?: number // recents card detail
   /** Per-document settings: main-file override + compiler options (Lane S). */

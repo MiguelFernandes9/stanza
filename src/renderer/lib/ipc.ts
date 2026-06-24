@@ -4,6 +4,8 @@ import type {
   ClaudeRequest,
   ClaudeResult,
   ClaudeStatus,
+  ClaudeTurnRequest,
+  ClaudeTurnResult,
   CommitInfo,
   CompileRequest,
   CompileResult,
@@ -27,7 +29,8 @@ import type {
   ReviewProposal,
   ReviewResolution,
   SettingsChanged,
-  SourceLocation
+  SourceLocation,
+  ThreadRecord
 } from '@shared/ipc'
 import type { BlockNode } from '@shared/blocks/types'
 
@@ -52,6 +55,10 @@ export const api = {
   documentHistory: () => invoke<CommitInfo[]>(IpcChannels.documentHistory),
   /** The change a commit (by sha) introduced — its diff vs its parent (HISTORY viewer). */
   documentDiffAt: (sha: string) => invoke<HistoryDiff>(IpcChannels.documentDiffAt, sha),
+  /** Restore the document to a commit (by sha) — surfaces as a review proposal
+   *  via review:proposal; null when the doc is already at that version. */
+  documentRevertTo: (sha: string) =>
+    invoke<ReviewProposal | null>(IpcChannels.documentRevertTo, sha),
   documentSave: (req: { relPath: string; content: string }) =>
     invoke<void>(IpcChannels.documentSave, req.relPath, req.content),
   /** Working-tree file content (F4 editor). Contract addition, flagged at gate. */
@@ -91,7 +98,14 @@ export const api = {
     invoke<(SourceLocation | null)[]>(IpcChannels.synctexInverseBatch, pts),
   synctexForward: (span: BlockSpan) => invoke<PdfRect[]>(IpcChannels.synctexForward, span),
   claudeRun: (req: ClaudeRequest) => invoke<ClaudeResult>(IpcChannels.claudeRun, req),
+  /** One turn of a persistent conversation bubble (its own session). */
+  claudeRunTurn: (req: ClaudeTurnRequest) =>
+    invoke<ClaudeTurnResult>(IpcChannels.claudeRunTurn, req),
   claudeHistory: () => invoke<OpRecord[]>(IpcChannels.claudeHistory),
+  /** Persistent bubbles for the open project, restored on workspace open. */
+  threadsList: () => invoke<ThreadRecord[]>(IpcChannels.threadsList),
+  /** Drop a persistent bubble's record (deleted, or its anchor block vanished). */
+  threadsDelete: (threadId: string) => invoke<void>(IpcChannels.threadsDelete, threadId),
   reviewResolve: (d: ReviewDecision) => invoke<ReviewResolution>(IpcChannels.reviewResolve, d),
   reviewList: () => invoke<ReviewProposal[]>(IpcChannels.reviewList),
   /** The marked (latexdiff) render of the complete edit — one item per changed

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import type { CSSProperties, JSX } from 'react'
-import { ArrowUp, Camera, Check, CircleSlash, FileText, Maximize2, Plus, Sparkles, X } from 'lucide-react'
-import { BlockTag, Button, DiffHunk, IconButton, Kbd } from '@renderer/components'
+import { ArrowUp, Camera, Check, CircleSlash, FileText, Maximize2, Pin, Plus, Sparkles, X } from 'lucide-react'
+import { BlockTag, Button, DiffHunk, IconButton, Kbd, Tooltip } from '@renderer/components'
 import type { BlockTagKind } from '@renderer/components'
 import { combinedSpanLabel, spanLabel } from '../paper/paperModel'
 import type { PageBlock } from '../paper/paperModel'
@@ -11,21 +11,35 @@ import { summarizeBlocks } from '@shared/blocks/changes'
 export const RAIL = 316
 export const RAIL_GAP = 22
 
-/** Shared style for the compose-row pill buttons ("+ blocks", "snapshot").
- *  `active` is the pill's on-state (adding mode / image attached). */
-const pillStyle = (active: boolean): CSSProperties => ({
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 4,
-  height: 22,
-  padding: '0 8px',
-  borderRadius: 'var(--radius-pill)',
-  cursor: 'pointer',
-  border: `1px ${active ? 'solid var(--clay-400)' : 'dashed var(--line-ink)'}`,
-  background: active ? 'var(--clay-50)' : 'transparent',
-  color: active ? 'var(--clay-700)' : 'var(--ink-500)',
-  font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-sans)'
-})
+/** The persistent "Keep chat" identity colour (also ThreadCard / thread badges). */
+export const VIOLET = '#6d5bd0'
+
+const PILL_TONES = {
+  clay: { line: 'var(--clay-400)', bg: 'var(--clay-50)', ink: 'var(--clay-700)' },
+  violet: { line: VIOLET, bg: 'rgba(109,91,208,0.12)', ink: '#5a49b0' }
+} as const
+
+/** Shared style for the compose-row pills (+ blocks / snapshot / Keep chat) and
+ *  the thread composer's snapshot pill, so they read as one family: a quiet dashed
+ *  outline when off, a solid filled chip when on. `tone` picks the accent — clay
+ *  for block/snapshot actions, violet for the persistent "Keep chat". */
+export const pillStyle = (active: boolean, tone: keyof typeof PILL_TONES = 'clay'): CSSProperties => {
+  const c = PILL_TONES[tone]
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 4,
+    height: 22,
+    padding: '0 9px',
+    borderRadius: 'var(--radius-pill)',
+    cursor: 'pointer',
+    border: `1px ${active ? `solid ${c.line}` : 'dashed var(--line-ink)'}`,
+    background: active ? c.bg : 'transparent',
+    color: active ? c.ink : 'var(--ink-500)',
+    font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-sans)',
+    transition: 'background 120ms var(--ease-out), border-color 120ms var(--ease-out), color 120ms var(--ease-out)'
+  }
+}
 
 interface Props {
   task: EditTask
@@ -47,6 +61,8 @@ interface Props {
   /** Non-destructive: fold the bubble back to its badge, leaving the task alive.
    *  The header X uses this for busy/review/noop. */
   onCollapse: () => void
+  /** "Keep chat": flip this compose draft into a persistent conversation bubble. */
+  onTogglePersistent: () => void
   onResolve: (accept: boolean) => void
   onOpenReview: () => void
   /** Capture the block as a PNG and attach it to this task's next Run. Absent for
@@ -89,6 +105,7 @@ export function TaskCard({
   onSubmit,
   onDismiss,
   onCollapse,
+  onTogglePersistent,
   onResolve,
   onOpenReview,
   onSnapshot,
@@ -215,17 +232,39 @@ export function TaskCard({
                   : 'Edit with Claude'}
           </span>
           <div style={{ flex: 1 }} />
+          {/* "Keep chat" lives in the header (a pin toggle), next to the X — flip a
+              compose draft into a persistent conversation bubble. Compose-only:
+              once persistent it renders as a ThreadCard. */}
+          {task.phase === 'compose' && blocks.length > 0 && (
+            <Tooltip label="Keep chat" side="bottom">
+              <IconButton
+                size="sm"
+                label="Keep chat"
+                active={!!task.persistent}
+                onClick={onTogglePersistent}
+                style={task.persistent ? { background: 'rgba(109,91,208,0.14)', color: VIOLET } : {}}
+              >
+                <Pin size={13} />
+              </IconButton>
+            </Tooltip>
+          )}
           {/* Edit (compose) X discards the draft — closes everything. Every other
               phase's X only collapses the bubble to its badge; the task lives on
               (busy keeps editing, review keeps its proposal, noop keeps its note).
               Removal for those stays on the explicit Reject/Dismiss buttons. */}
-          <IconButton
-            size="sm"
+          <Tooltip
             label={task.phase === 'compose' ? 'Dismiss' : 'Collapse'}
-            onClick={task.phase === 'compose' ? onDismiss : onCollapse}
+            hint={task.phase === 'compose' ? 'esc' : undefined}
+            side="bottom"
           >
-            <X size={13} />
-          </IconButton>
+            <IconButton
+              size="sm"
+              label={task.phase === 'compose' ? 'Dismiss' : 'Collapse'}
+              onClick={task.phase === 'compose' ? onDismiss : onCollapse}
+            >
+              <X size={13} />
+            </IconButton>
+          </Tooltip>
         </div>
 
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 5, marginBottom: 8 }}>
@@ -269,15 +308,6 @@ export function TaskCard({
           {task.phase === 'compose' && (
             <button onClick={onToggleAdding} style={pillStyle(adding)}>
               <Plus size={11} /> blocks
-            </button>
-          )}
-          {task.phase === 'compose' && onSnapshot && blocks.length > 0 && (
-            <button
-              onClick={onSnapshot}
-              title={task.image ? 'Snapshot attached — click to retake' : "Attach a snapshot of the block's rendered output"}
-              style={pillStyle(!!task.image)}
-            >
-              {task.image ? <Check size={11} /> : <Camera size={11} />} snapshot
             </button>
           )}
         </div>
@@ -325,6 +355,18 @@ export function TaskCard({
                   padding: '3px 0'
                 }}
               />
+              {onSnapshot && blocks.length > 0 && (
+                <Tooltip label={task.image ? 'Remove snapshot' : 'Attach snapshot'} side="top">
+                  <button
+                    type="button"
+                    onClick={onSnapshot}
+                    aria-label={task.image ? 'Remove snapshot' : 'Attach snapshot'}
+                    style={{ ...pillStyle(!!task.image), height: 30 }}
+                  >
+                    {task.image ? <Check size={12} /> : <Camera size={12} />}
+                  </button>
+                </Tooltip>
+              )}
               <Button size="sm" variant="primary" disabled={!task.instruction.trim()} onClick={onSubmit} iconLeft={<ArrowUp size={13} />}>
                 Run
               </Button>
