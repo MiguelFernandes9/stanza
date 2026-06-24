@@ -475,11 +475,13 @@ export function PaperPane(props: Props): JSX.Element {
   })
 
   // F5: when a bubble opens, scroll it fully into horizontal view. The rail hangs
-  // off the page's right edge and is otherwise reachable only by manual scroll
-  // (BUG-46). Horizontal ONLY — the flash/outline effects own scrollTop; nudging
-  // it here reintroduced the slide jitter (M3-2). Each id is revealed once per
-  // open session (pruned on close, so reopening re-reveals); wait for tops[id] so
-  // the bubble is positioned before we measure it.
+  // off the page's edge and is otherwise reachable only by manual scroll (BUG-46)
+  // — a RIGHT-rail bubble overflows the pane's right, a LEFT-rail one (two-column
+  // left column) the pane's left, so scroll toward whichever side it spills.
+  // Horizontal ONLY — the flash/outline effects own scrollTop; nudging it here
+  // reintroduced the slide jitter (M3-2). Each id is revealed once per open
+  // session (pruned on close, so reopening re-reveals); wait for tops[id] so the
+  // bubble is positioned before we measure it.
   const revealedRef = useRef<Set<number>>(new Set())
   useEffect(() => {
     for (const id of [...revealedRef.current]) if (!openIds.includes(id)) revealedRef.current.delete(id)
@@ -490,8 +492,12 @@ export function PaperPane(props: Props): JSX.Element {
       const bubble = cardEls.current[id]?.closest('[data-testid="rail-bubble"]') as HTMLElement | null
       if (!bubble) continue
       revealedRef.current.add(id)
-      const overflow = bubble.getBoundingClientRect().right - el.getBoundingClientRect().right
-      if (overflow > 0) el.scrollBy({ left: overflow + RAIL_GUTTER, behavior: 'smooth' })
+      const br = bubble.getBoundingClientRect()
+      const er = el.getBoundingClientRect()
+      const rightOver = br.right - er.right
+      const leftOver = er.left - br.left
+      if (rightOver > 0) el.scrollBy({ left: rightOver + RAIL_GUTTER, behavior: 'smooth' })
+      else if (leftOver > 0) el.scrollBy({ left: -(leftOver + RAIL_GUTTER), behavior: 'smooth' })
     }
   }, [openIds, tops])
 
@@ -509,6 +515,24 @@ export function PaperPane(props: Props): JSX.Element {
     0
   )
   const contentH = Math.max(pageStackH + PAD * 2, bubbleBottom + PAD)
+
+  // Two-column docs build a track wider than the page (a rail each side), so flex
+  // `safe center` left-aligns it — the empty left band, not the page, would land
+  // centred. Re-centre the PAGE in the viewport by seeding scrollLeft once per
+  // (two-col, page width, zoom): a signature guard so a new doc / zoom re-centres
+  // but manual h-scroll is never overridden. Single-column has no overflow → flex
+  // centres it and this no-ops.
+  const hCenterSig = useRef('')
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || !geo) return
+    const sig = `${twoCol}:${Math.round(pageWidth)}:${zoom}`
+    if (hCenterSig.current === sig) return
+    hCenterSig.current = sig
+    if (twoCol && centerW > el.clientWidth) {
+      el.scrollLeft = Math.max(0, originX + pageWidth / 2 - el.clientWidth / 2)
+    }
+  }, [geo, twoCol, pageWidth, zoom, centerW, originX])
 
   const toggleOpen = (taskId: number): void => {
     setOpenIds((s) => (s.includes(taskId) ? s.filter((x) => x !== taskId) : [...s, taskId]))
