@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -29,6 +29,10 @@ export class DocumentSession {
    *  the checkout) never waits on a running op (spec §11). Stable path per root
    *  so the primed session resumes across app launches. */
   readonly worktreeDir: string
+  /** This window's session id for the per-project session bus: every op it runs is
+   *  tagged with it, and the cross-session digest excludes it. One per window/session
+   *  (in-memory; a reopened project is legitimately a new session). */
+  readonly sessionId = randomUUID()
   /** Mutable: a structural file op that renames/deletes a .tex recomputes
    *  it (DocumentService.open) so document:current and later ops see the
    *  new layout. The root never changes, so git/claude/files stay valid. */
@@ -87,7 +91,7 @@ export class DocumentSession {
     this.compiler.setOptions(store.getProject(info.root).compile ?? {})
     this.git = new GitClient(runner, info.root)
     this.review = new ReviewService(this.git)
-    this.claude = new ClaudeService(runner, store, globalSettings, info, this.worktreeDir)
+    this.claude = new ClaudeService(runner, store, globalSettings, info, this.worktreeDir, undefined, this.sessionId)
     this.files = new FileService(info.root, this.git)
     this.snippets = new SnippetCompiler(runner, info.root)
     this.diffPreview = new DiffPreviewService(this.git, this.snippets, info)

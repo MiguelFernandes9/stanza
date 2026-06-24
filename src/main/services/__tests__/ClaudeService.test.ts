@@ -119,6 +119,37 @@ describe('ClaudeService.runOp', () => {
     expect(runner.calls[0]!.args).not.toContain('--effort')
   })
 
+  test('injects a digest of OTHER sessions accepted ops into the op prompt (bus)', async () => {
+    store.setProject('/proj', {
+      ops: [
+        { opId: 'o1', ts: '2026-06-24T10:00:00.000Z', instruction: 'rewrite the intro', note: 'shortened it', accepted: true, scope: 'doc', sessionId: 'other' },
+      ],
+    })
+    const runner = new MockRunner(() => claudeJson('done'))
+    const service = new ClaudeService(runner, store, globalSettings, doc, undefined, undefined, 'me')
+
+    await service.runOp({ instruction: 'fix typos', spans: [] }, () => {})
+
+    const opPromptText = runner.calls[1]!.args.at(-1)! // resume call, last arg = prompt
+    expect(opPromptText).toContain('Other Stanza sessions')
+    expect(opPromptText).toContain('rewrite the intro')
+    expect(opPromptText).toContain('Instruction: fix typos') // own instruction still present
+  })
+
+  test('does NOT inject this session own ops (already in its context)', async () => {
+    store.setProject('/proj', {
+      ops: [
+        { opId: 'o1', ts: '2026-06-24T10:00:00.000Z', instruction: 'mine', note: 'did it', accepted: true, scope: 'doc', sessionId: 'me' },
+      ],
+    })
+    const runner = new MockRunner(() => claudeJson('done'))
+    const service = new ClaudeService(runner, store, globalSettings, doc, undefined, undefined, 'me')
+
+    await service.runOp({ instruction: 'next', spans: [] }, () => {})
+
+    expect(runner.calls[1]!.args.at(-1)!).not.toContain('Other Stanza sessions')
+  })
+
   test('ops run in a custom workDir (the op worktree), primed + resumed THERE', async () => {
     const runner = new MockRunner(() => claudeJson('ok'))
     const service = new ClaudeService(runner, store, globalSettings, doc, '/tmp/stanza-wt/abc')

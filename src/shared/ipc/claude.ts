@@ -32,4 +32,8 @@ export interface OpRecord {
    *  bubbles. Optional for back-compat: records written before this field default
    *  to `doc` on read. */
   scope?: 'doc' | 'blocks'
+  /** The Stanza session (window) that ran this op — the per-project session bus
+   *  tags each op so another session can be shown what OTHERS changed (and exclude
+   *  its own). Optional/back-compat: untagged legacy ops are skipped by the digest. */
+  sessionId?: string
 }

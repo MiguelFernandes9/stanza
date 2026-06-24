@@ -38,6 +38,25 @@ describe('DocumentSession', () => {
     expect(session.files).toBeDefined()
   })
 
+  test('session bus: a session injects ANOTHER session accepted ops into its op prompt', async () => {
+    const runner = new MockRunner()
+    const a = new DocumentSession(doc, runner, store, globalSettings)
+    const b = new DocumentSession(doc, runner, store, globalSettings)
+    expect(a.sessionId).not.toBe(b.sessionId) // one id per window
+
+    // Session A made an accepted change (as ipc-registry records it, tagged with A).
+    store.setProject(doc.root, {
+      ops: [{ opId: 'o', ts: '2026-06-24T10:00:00.000Z', instruction: 'A rewrote the intro', note: 'did A', accepted: true, scope: 'doc', sessionId: a.sessionId }],
+    })
+
+    // Session B runs an op → its prompt carries A's change (read-on-prompt hook).
+    await b.claude.runOp({ instruction: 'B fixes typos', spans: [] }, () => {})
+    const prompt = runner.calls.at(-1)!.args.at(-1)!
+    expect(prompt).toContain('Other Stanza sessions')
+    expect(prompt).toContain('A rewrote the intro')
+    expect(prompt).toContain('Instruction: B fixes typos')
+  })
+
   test('opActive counts begin/end so overlapping op churn stays muted', () => {
     const session = new DocumentSession(doc, new MockRunner(), store, globalSettings)
     expect(session.opActive).toBe(false)
