@@ -82,4 +82,50 @@ describe('DefaultProcessRunner', () => {
       runner.run({ cmd: 'definitely-not-a-real-binary-xyz', args: [], cwd }),
     ).rejects.toThrow()
   })
+
+  test('caps runaway output at maxBytes, reports truncated, kills the child', async () => {
+    // A child that floods stdout then stays alive. Without a cap this is the
+    // path that grows one JS string past V8's ~512MB limit and throws
+    // `RangeError: Invalid string length` inside the data handler, crashing
+    // the main process. With the cap it must resolve quickly and truncate.
+    const started = Date.now()
+    const result = await runner.run({
+      cmd: 'node',
+      args: [
+        '-e',
+        'const b=Buffer.alloc(1<<20,120); for(let i=0;i<64;i++) process.stdout.write(b); setInterval(()=>{},1e9)',
+      ],
+      cwd,
+      maxBytes: 1 << 20, // 1 MiB
+      timeoutMs: 5000,
+    })
+    expect(result.truncated).toBe(true)
+    // Bounded near the cap (one in-flight chunk may push slightly over before
+    // the kill lands); never the full 64 MiB the child tried to emit.
+    expect(Buffer.byteLength(result.stdout)).toBeLessThan(4 << 20)
+    expect(result.timedOut).toBe(false) // killed by the cap, not the timeout
+    expect(Date.now() - started).toBeLessThan(4000)
+  })
+
+  test('decodes multibyte UTF-8 split across chunk boundaries without corruption', async () => {
+    // '€' is 3 bytes; a ~300KB payload spans many pipe chunks whose boundaries
+    // fall mid-character. Decoding each Buffer independently (old `stdout +=
+    // chunk`) yields U+FFFD; decoding the concatenated bytes once is clean.
+    const count = 100_000
+    const result = await runner.run({
+      cmd: 'node',
+      args: ['-e', `process.stdout.write('\\u20AC'.repeat(${count}))`],
+      cwd,
+    })
+    expect(result.code).toBe(0)
+    expect(result.truncated).toBe(false)
+    expect(result.stdout).not.toContain('�')
+    expect(result.stdout.length).toBe(count)
+  })
+
+  test('does not truncate output that fits under the cap', async () => {
+    const result = await runner.run({ cmd: 'echo', args: ['hello'], cwd })
+    expect(result.truncated).toBe(false)
+    expect(result.stdout).toBe('hello\n')
+  })
 })
