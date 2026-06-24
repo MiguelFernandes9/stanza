@@ -39,8 +39,9 @@ export interface GlobalSettings {
    *  model consider more history. */
   busCommitLimit?: number
   /** How many forks (parallel edits) may run their Claude turn at once, across
-   *  all of this document's windows. Each fork = one worktree + one CLI process,
-   *  so this bounds memory/PTY load. Unset → 4. */
+   *  all of this document's windows. Covers both one-shot change bubbles AND
+   *  persistent per-block chats. Each fork = one worktree + one CLI process, so
+   *  this bounds memory/PTY load. Unset → 12. */
   forkConcurrency?: number
 }
 

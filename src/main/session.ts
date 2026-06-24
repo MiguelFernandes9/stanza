@@ -89,7 +89,7 @@ export class DocumentSession {
     this.compiler.setOptions(store.getProject(info.root).compile ?? {})
     this.git = new GitClient(runner, info.root)
     this.review = new ReviewService(this.git)
-    this.forks = new ForkManager(this.git, forkBase, globalSettings.get().forkConcurrency ?? 4)
+    this.forks = new ForkManager(this.git, forkBase, globalSettings.get().forkConcurrency ?? 12)
     // The bus digest reads the document repo's recent commits fresh per op (the
     // shared, always-live "what changed" source); `this.git` targets info.root.
     // Each fork runs Claude in its OWN worktree (passed per call to runForkTurn),
