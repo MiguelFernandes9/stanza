@@ -21,25 +21,59 @@ export const CARD_GAP = 14
 export const BADGE = 28
 
 export interface PaneLayout {
-  /** Page's right edge, measured from the page's own left (x = 0). The page is
-   *  the centred unit, so there is no `pageLeft`; badges park at this edge. */
+  /** Left inset of the page within the centred box. 0 for single-column; for
+   *  two-column it is `GAPX + RAIL + RAIL_GUTTER` — a mirror of the right extent,
+   *  so the centred box is symmetric and the page stays centred (M2-5) while the
+   *  left rail lands at x ≥ 0 (reachable, no negative scroll). */
+  originX: number
+  /** Page's left edge (= originX). Left badges park here; the left rail is off it. */
+  pageLeftX: number
+  /** Page's right edge (originX + pageW). Right badges park here. */
   pageRightX: number
-  /** Left edge of the right rail (where bubbles sit), off the page's right. */
+  /** Left edge of the RIGHT rail (where right-column / full-width bubbles sit). */
   railLeft: number
-  /** Page + gap + rail span. Sizes the connector svg's coordinate box so a
-   *  bezier can reach from the page edge into the rail — NOT a centred track
-   *  (the page alone is centred; the rail overlays to its right). */
+  /** Left edge of the LEFT rail (two-column left-column bubbles). */
+  leftRailLeft: number
+  /** Right edge of the left rail — the left bubble's near edge / connector end. */
+  leftRailRight: number
+  /** Right badge left (straddles the page's right edge). */
+  rightBadgeLeft: number
+  /** Left badge left (straddles the page's left edge). */
+  leftBadgeLeft: number
+  /** Right extent: page + gap + rail. Sizes the connector svg coordinate box. */
   cW: number
+  /** Width of the centred flow child. = pageW for single-column (page-only
+   *  centring, M2-5); the symmetric two-rail track for two-column. */
+  centerW: number
 }
 
-/** Layout from the page width alone — no container measure, so it can't go
- *  stale on a resize (M2-5). The page occupies [0, pageW]; the rail follows
- *  after GAPX; cW spans both so the connector svg can bridge them. */
-export function paneLayout(pageW: number): PaneLayout {
-  const pageRightX = pageW
+/** Pane geometry from the page width and whether the doc is two-column — no
+ *  container measure, so it can't go stale on a resize (M2-5). Single-column:
+ *  the page occupies [0, pageW], the (right) rail follows after GAPX — identical
+ *  to the pre-two-column layout. Two-column: the page is inset by `originX` (a
+ *  mirror of the right rail + gutter), so the centred box is symmetric (page
+ *  stays centred) and the LEFT rail mirrors the right at x ≥ 0. */
+export function paneLayout(pageW: number, twoCol = false): PaneLayout {
+  const originX = twoCol ? GAPX + RAIL + RAIL_GUTTER : 0
+  const pageLeftX = originX
+  const pageRightX = originX + pageW
   const railLeft = pageRightX + GAPX
+  const leftRailRight = pageLeftX - GAPX
+  const leftRailLeft = leftRailRight - RAIL
   const cW = railLeft + RAIL
-  return { pageRightX, railLeft, cW }
+  const centerW = twoCol ? originX + pageW + (GAPX + RAIL + RAIL_GUTTER) : pageW
+  return {
+    originX,
+    pageLeftX,
+    pageRightX,
+    railLeft,
+    leftRailLeft,
+    leftRailRight,
+    rightBadgeLeft: pageRightX - 13,
+    leftBadgeLeft: pageLeftX - 15,
+    cW,
+    centerW,
+  }
 }
 
 /** Scroll-container `top` that lands a PDF box (`page`, `y` in PDF pt) about a
