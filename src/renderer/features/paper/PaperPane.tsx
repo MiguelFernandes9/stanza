@@ -556,11 +556,15 @@ export function PaperPane(props: Props): JSX.Element {
       if (!boxes) continue
       // A straddling block gets an overlay (hit-area + pill) on every page it
       // touches; the wash and the rail badge anchor from geometry, no DOM ref.
-      for (const rect of boxes) {
+      for (const [ri, rect] of boxes.entries()) {
         if (rect.page !== pageNo) continue
         out.push(
+          // A block can have MORE than one box per (page, column) — a column-spanning
+          // continuation and #142/#144's displaced-content split both do. Key by the box
+          // INDEX too, else two collide on `id@page@col` and React duplicates/omits them
+          // (the footnote massive-box / box-per-line render artifact).
           <BlockOverlay
-            key={`${b.id}@${rect.page}@${rect.col ?? 'full'}`}
+            key={`${b.id}@${rect.page}@${rect.col ?? 'full'}@${ri}`}
             block={b}
             rect={{ page: rect.page, x: rect.x * zoom, y: rect.y * zoom, width: rect.width * zoom, height: rect.height * zoom }}
             mark={marks[b.id] ?? null}

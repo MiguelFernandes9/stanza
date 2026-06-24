@@ -774,10 +774,18 @@ export function binBlocks(
       }
       if (clusters.size < 2) { rebuilt.push(b); continue }
       // Build each cluster's box with the same extent-fill as the main loop (a dropped
-      // footnote/title row is covered), but clip=false: clusters were gathered column-
-      // agnostically, so the gutter clip would cut a full-width title or an edge footnote.
+      // footnote/title row is covered). Partition each y-cluster by COLUMN too: a
+      // two-column block (body continuing l→r, or a paragraph with a displaced footnote)
+      // puts both columns' rows in one cluster, whose raw bbox would be a full-page box
+      // spanning the gutter (the 2-col footnote massive box). Build a CLIPPED box per
+      // column; a genuinely full-width run (a centred \maketitle title) is one 'full'
+      // column and stays UNCLIPPED — so main_v2's front-matter title/footnote is untouched.
       const fwd = lineRects(id)
-      for (const cu of clusters.values()) rebuilt.push(buildBox(fwd, b.page, b.col ?? 'full', cu, false))
+      for (const cu of clusters.values()) {
+        const byColC = new Map<PdfCol, AttributedUnit[]>()
+        for (const u of cu) { const c = colOfUnit(u); const a = byColC.get(c); if (a) a.push(u); else byColC.set(c, [u]) }
+        for (const [col, ccu] of byColC) rebuilt.push(buildBox(fwd, b.page, col, ccu, col !== 'full'))
+      }
       split = true
     }
     if (split) { rebuilt.sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x); boxesById.set(id, rebuilt) }
