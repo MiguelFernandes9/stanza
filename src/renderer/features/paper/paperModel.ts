@@ -752,43 +752,45 @@ export function binBlocks(
   for (const [id, bs] of boxesById) for (const b of bs) allBoxes.push({ id, b })
   for (const [id, bs] of boxesById) {
     const us = byBlock.get(id)
-    if (!us) continue
-    let split = false
+    if (!us || !bs.length) continue
+    const fwd = lineRects(id)
+    // Box the block's units ONCE per (page, column) — each unit lands in exactly one cell, so
+    // a 2-column continuation (body l→r) or a paragraph with a page-bottom footnote can't be
+    // re-boxed under two overlapping boxes (the duplicate/gap class the per-box pass hit). For
+    // each cell, if another block's box sits strictly INSIDE it, the block renders in two
+    // far-apart regions of that column (a \maketitle title at the top, its \thanks footnote at
+    // the bottom, the body between) — split it by the intervening boxes, one box per cluster.
+    // Clip per column; a genuinely full-width 'full' run (a centred title) stays unclipped, so
+    // main_v2's front-matter title/footnote is untouched.
+    const byCell = new Map<string, AttributedUnit[]>()
+    for (const u of us) {
+      const key = `${u.page}|${colOfUnit(u)}`
+      const a = byCell.get(key); if (a) a.push(u); else byCell.set(key, [u])
+    }
+    let changed = false
     const rebuilt: PdfRect[] = []
-    for (const b of bs) {
+    for (const [key, cu] of byCell) {
+      const bar = key.indexOf('|')
+      const page = Number(key.slice(0, bar))
+      const col = key.slice(bar + 1) as PdfCol
+      const cellBox = buildBox(fwd, page, col, cu, col !== 'full')
       const bands = allBoxes
-        .filter(({ id: oid, b: o }) => oid !== id && o.page === b.page &&
-          o.x < b.x + b.width && b.x < o.x + o.width &&
-          o.y > b.y + 2 && o.y + o.height < b.y + b.height - 2)
+        .filter(({ id: oid, b: o }) => oid !== id && o.page === page &&
+          o.x < cellBox.x + cellBox.width && cellBox.x < o.x + o.width &&
+          o.y > cellBox.y + 2 && o.y + o.height < cellBox.y + cellBox.height - 2)
         .map(({ b: o }) => ({ top: o.y, bottom: o.y + o.height }))
         .sort((p, q) => p.top - q.top)
-      // Gather b's units by VERTICAL overlap with the box, not x/column — the box x was
-      // clipped to its column (a full-width title in an 'l' box is cut at the gutter) and the
-      // l/r fold can have re-homed a gutter-crossing row, so neither x nor colOfUnit is a
-      // faithful membership test. The box y-extent is untouched by the clip, so it is.
-      const cellUnits = bands.length ? us.filter((u) => u.page === b.page && u.yTop < b.y + b.height && b.y < u.yBottom) : []
+      if (!bands.length) { rebuilt.push(cellBox); continue }
       const clusters = new Map<number, AttributedUnit[]>()
-      for (const u of cellUnits) {
-        const k = bands.filter((band) => band.bottom <= u.yTop).length // intervening boxes fully above this unit
+      for (const u of cu) {
+        const k = bands.filter((band) => band.bottom <= u.yTop).length
         const a = clusters.get(k); if (a) a.push(u); else clusters.set(k, [u])
       }
-      if (clusters.size < 2) { rebuilt.push(b); continue }
-      // Build each cluster's box with the same extent-fill as the main loop (a dropped
-      // footnote/title row is covered). Partition each y-cluster by COLUMN too: a
-      // two-column block (body continuing l→r, or a paragraph with a displaced footnote)
-      // puts both columns' rows in one cluster, whose raw bbox would be a full-page box
-      // spanning the gutter (the 2-col footnote massive box). Build a CLIPPED box per
-      // column; a genuinely full-width run (a centred \maketitle title) is one 'full'
-      // column and stays UNCLIPPED — so main_v2's front-matter title/footnote is untouched.
-      const fwd = lineRects(id)
-      for (const cu of clusters.values()) {
-        const byColC = new Map<PdfCol, AttributedUnit[]>()
-        for (const u of cu) { const c = colOfUnit(u); const a = byColC.get(c); if (a) a.push(u); else byColC.set(c, [u]) }
-        for (const [col, ccu] of byColC) rebuilt.push(buildBox(fwd, b.page, col, ccu, col !== 'full'))
-      }
-      split = true
+      if (clusters.size < 2) { rebuilt.push(cellBox); continue }
+      for (const ccu of clusters.values()) rebuilt.push(buildBox(fwd, page, col, ccu, col !== 'full'))
+      changed = true
     }
-    if (split) { rebuilt.sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x); boxesById.set(id, rebuilt) }
+    if (changed) { rebuilt.sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x); boxesById.set(id, rebuilt) }
   }
 
   const contentTopByPage = new Map<number, number>()
