@@ -646,70 +646,6 @@ export function binBlocks(
     boxesById.set(id, boxes)
   }
 
-  // Spatial orphan pass. A rendered text row that synctex maps NOWHERE — null inverse AND no
-  // forward rect (a math-heavy tail like "...the temporal sinusoid.") — is left unattributed
-  // and unboxed. Its only signal is position: it is the dropped tail of the block whose box
-  // sits directly above it in the same column. Attach each such row to that box (extend it
-  // down) when contiguous (within MAX_LINE_GAP). But cluster the orphans into same-column
-  // runs first and attach only SMALL runs: a LONG run is the BibTeX references (every line
-  // synctex-null) — attaching it would chain the whole bibliography into the conclusion box
-  // above it. References have no source block, so a long null run is left unboxed.
-  const placed: PdfRect[] = []
-  for (const bs of boxesById.values()) for (const b of bs) placed.push(b)
-  const covered = (u: AttributedUnit): boolean =>
-    placed.some((b) => b.page === u.page && b.x - 2 <= u.xLeft && u.xRight <= b.x + b.width + 2 && b.y - 2 <= u.yTop && u.yBottom <= b.y + b.height + 2)
-  const orphanCol = (u: AttributedUnit): PdfCol =>
-    !docGutter ? 'full' : (u.xLeft + u.xRight) / 2 <= docGutter.gx ? 'l' : 'r'
-  const orphans = units
-    .filter((u) => !u.blockId && u.yBottom - u.yTop <= LINE_MAX && inBand(u.yTop, u.yBottom) && !covered(u))
-    .sort((a, b) => a.page - b.page || (orphanCol(a) < orphanCol(b) ? -1 : orphanCol(a) > orphanCol(b) ? 1 : 0) || a.yTop - b.yTop)
-  // contiguous same-page same-column runs
-  const runs: AttributedUnit[][] = []
-  for (const u of orphans) {
-    const last = runs[runs.length - 1]
-    const prev = last?.[last.length - 1]
-    if (prev && prev.page === u.page && orphanCol(prev) === orphanCol(u) && u.yTop - prev.yBottom <= MAX_LINE_GAP) last!.push(u)
-    else runs.push([u])
-  }
-  // The bibliography block to claim a long null run for: the one whose forward galley
-  // anchors the earliest page. Its .bbl rows are synctex-null, so they only ever surface
-  // here as a long null run; box them per cell instead of leaving them unselectable.
-  let bibClaim: { id: string; anchorPage: number } | null = null
-  for (const id of bibliographyIds) {
-    const rects = regionsById.get(id)
-    if (!rects || !rects.length) continue
-    const anchorPage = Math.min(...rects.map((r) => r.page))
-    if (!bibClaim || anchorPage < bibClaim.anchorPage) bibClaim = { id, anchorPage }
-  }
-  const ORPHAN_RUN_MAX = 3
-  for (const run of runs) {
-    if (run.length > ORPHAN_RUN_MAX) {
-      // A long null run that renders at/after a bibliography block (its galley anchors a
-      // page; the list often spills back one column into the previous page) IS the
-      // reference list — box it for that block (one box per cell). Otherwise it is a
-      // source-less math tail: leave it unboxed, as before.
-      if (bibClaim && run[0]!.page >= bibClaim.anchorPage - 1) {
-        let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity
-        for (const u of run) { x = Math.min(x, u.xLeft); y = Math.min(y, u.yTop); right = Math.max(right, u.xRight); bottom = Math.max(bottom, u.yBottom) }
-        const box: PdfRect = { page: run[0]!.page, x, y, width: right - x, height: bottom - y, col: orphanCol(run[0]!) }
-        const merged = [...(boxesById.get(bibClaim.id) ?? []), box].sort((a, b) => a.page - b.page || a.x - b.x)
-        boxesById.set(bibClaim.id, merged)
-        placed.push(box)
-      }
-      continue
-    }
-    for (const u of run) {
-      let best: PdfRect | null = null
-      let bestGap = MAX_LINE_GAP
-      for (const b of placed) {
-        if (b.page !== u.page || !(b.x < u.xRight && u.xLeft < b.x + b.width)) continue
-        const gap = u.yTop - (b.y + b.height)
-        if (gap >= -2 && gap < bestGap) { bestGap = gap; best = b }
-      }
-      if (best) best.height = Math.max(best.height, u.yBottom - best.y)
-    }
-  }
-
   // Env single-object dominance. A figure / listing / table is ONE rendered object — it
   // does not scatter across non-adjacent pages. lstlisting/verbatim synctex is unreliable
   // and can plant a phantom forward rect on a neighbouring page that catches a stray row,
@@ -811,6 +747,72 @@ export function binBlocks(
     const foldDroppedCol = [...byCell.keys()].some((k) => { const c = k.slice(k.indexOf('|') + 1); return c !== 'full' && !boxCols.has(c as PdfCol) })
     if ((changed || foldDroppedCol) && selfOverlaps(rebuilt) <= selfOverlaps(bs)) {
       rebuilt.sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x); boxesById.set(id, rebuilt)
+    }
+  }
+
+  // Spatial orphan pass. A rendered text row that synctex maps NOWHERE — null inverse AND no
+  // forward rect (a paragraph's dropped last wrapped line like "...high-value sectors.", or a
+  // math-heavy tail) — is left unattributed and unboxed. Its only signal is position: it is the
+  // dropped tail of the block whose box sits directly above it in the same column. Attach each
+  // such row to that box (extend it down) when contiguous (within MAX_LINE_GAP). But cluster the
+  // orphans into same-column runs first and attach only SMALL runs: a LONG run is the BibTeX
+  // references (every line synctex-null) — attaching it would chain the whole bibliography into
+  // the conclusion box above it. References have no source block, so a long null run is unboxed.
+  // RUNS LAST, after the displaced-split rebuilds boxes from units — the split's per-unit rebuild
+  // can't see a null row, so this extension must be the final word on box extent or it is lost.
+  const placed: PdfRect[] = []
+  for (const bs of boxesById.values()) for (const b of bs) placed.push(b)
+  const covered = (u: AttributedUnit): boolean =>
+    placed.some((b) => b.page === u.page && b.x - 2 <= u.xLeft && u.xRight <= b.x + b.width + 2 && b.y - 2 <= u.yTop && u.yBottom <= b.y + b.height + 2)
+  const orphanCol = (u: AttributedUnit): PdfCol =>
+    !docGutter ? 'full' : (u.xLeft + u.xRight) / 2 <= docGutter.gx ? 'l' : 'r'
+  const orphans = units
+    .filter((u) => !u.blockId && u.yBottom - u.yTop <= LINE_MAX && inBand(u.yTop, u.yBottom) && !covered(u))
+    .sort((a, b) => a.page - b.page || (orphanCol(a) < orphanCol(b) ? -1 : orphanCol(a) > orphanCol(b) ? 1 : 0) || a.yTop - b.yTop)
+  // contiguous same-page same-column runs
+  const runs: AttributedUnit[][] = []
+  for (const u of orphans) {
+    const last = runs[runs.length - 1]
+    const prev = last?.[last.length - 1]
+    if (prev && prev.page === u.page && orphanCol(prev) === orphanCol(u) && u.yTop - prev.yBottom <= MAX_LINE_GAP) last!.push(u)
+    else runs.push([u])
+  }
+  // The bibliography block to claim a long null run for: the one whose forward galley
+  // anchors the earliest page. Its .bbl rows are synctex-null, so they only ever surface
+  // here as a long null run; box them per cell instead of leaving them unselectable.
+  let bibClaim: { id: string; anchorPage: number } | null = null
+  for (const id of bibliographyIds) {
+    const rects = regionsById.get(id)
+    if (!rects || !rects.length) continue
+    const anchorPage = Math.min(...rects.map((r) => r.page))
+    if (!bibClaim || anchorPage < bibClaim.anchorPage) bibClaim = { id, anchorPage }
+  }
+  const ORPHAN_RUN_MAX = 3
+  for (const run of runs) {
+    if (run.length > ORPHAN_RUN_MAX) {
+      // A long null run that renders at/after a bibliography block (its galley anchors a
+      // page; the list often spills back one column into the previous page) IS the
+      // reference list — box it for that block (one box per cell). Otherwise it is a
+      // source-less math tail: leave it unboxed, as before.
+      if (bibClaim && run[0]!.page >= bibClaim.anchorPage - 1) {
+        let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity
+        for (const u of run) { x = Math.min(x, u.xLeft); y = Math.min(y, u.yTop); right = Math.max(right, u.xRight); bottom = Math.max(bottom, u.yBottom) }
+        const box: PdfRect = { page: run[0]!.page, x, y, width: right - x, height: bottom - y, col: orphanCol(run[0]!) }
+        const merged = [...(boxesById.get(bibClaim.id) ?? []), box].sort((a, b) => a.page - b.page || a.x - b.x)
+        boxesById.set(bibClaim.id, merged)
+        placed.push(box)
+      }
+      continue
+    }
+    for (const u of run) {
+      let best: PdfRect | null = null
+      let bestGap = MAX_LINE_GAP
+      for (const b of placed) {
+        if (b.page !== u.page || !(b.x < u.xRight && u.xLeft < b.x + b.width)) continue
+        const gap = u.yTop - (b.y + b.height)
+        if (gap >= -2 && gap < bestGap) { bestGap = gap; best = b }
+      }
+      if (best) best.height = Math.max(best.height, u.yBottom - best.y)
     }
   }
 
