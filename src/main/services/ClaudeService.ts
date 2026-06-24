@@ -88,6 +88,30 @@ export class ClaudeService {
     return result
   }
 
+  /** Run one turn of a FORK in its OWN `workDir`: prime a fresh session when
+   *  `sessionId` is null (an ephemeral edit, or a chat's first turn), else resume
+   *  it. No queue here — the ForkManager serializes a fork's own turns and bounds
+   *  global concurrency, and the fork owns the returned session id. This is the
+   *  stateless primitive the parallel pipeline runs; runOp/runThreadTurn are the
+   *  pre-fork callers, removed once ipc-registry is cut over. */
+  async runForkTurn(
+    workDir: string,
+    sessionId: string | null,
+    req: ClaudeRequest,
+    onStatus: (s: ClaudeStatus) => void,
+  ): Promise<{ opId: string; note: string; sessionId: string }> {
+    const opId = randomUUID()
+    onStatus({ opId, state: 'priming' })
+    try {
+      const sid = sessionId ?? (await this.primeSession(workDir))
+      const done = await this.runResume(workDir, opId, sid, req, onStatus)
+      return { ...done, sessionId: sid }
+    } catch (err) {
+      onStatus({ opId, state: 'failed', detail: String(err) })
+      throw err
+    }
+  }
+
   private async execute(
     opId: string,
     req: ClaudeRequest,
@@ -95,7 +119,7 @@ export class ClaudeService {
   ): Promise<{ opId: string; note: string }> {
     try {
       const sessionId = await this.ensureSession()
-      return await this.runResume(opId, sessionId, req, onStatus)
+      return await this.runResume(this.workDir, opId, sessionId, req, onStatus)
     } catch (err) {
       onStatus({ opId, state: 'failed', detail: String(err) })
       throw err
@@ -109,8 +133,8 @@ export class ClaudeService {
     onStatus: (s: ClaudeStatus) => void,
   ): Promise<{ opId: string; note: string; sessionId: string }> {
     try {
-      const sessionId = threadSessionId ?? (await this.primeThreadSession())
-      const done = await this.runResume(opId, sessionId, req, onStatus)
+      const sessionId = threadSessionId ?? (await this.primeSession(this.workDir))
+      const done = await this.runResume(this.workDir, opId, sessionId, req, onStatus)
       return { ...done, sessionId }
     } catch (err) {
       onStatus({ opId, state: 'failed', detail: String(err) })
@@ -128,6 +152,7 @@ export class ClaudeService {
    *  second --add-dir and removed once the op returns. Living here, not in
    *  execute(), means a persistent thread bubble can attach a fresh render too. */
   private async runResume(
+    workDir: string,
     opId: string,
     sessionId: string,
     req: ClaudeRequest,
@@ -137,7 +162,7 @@ export class ClaudeService {
     try {
       onStatus({ opId, state: 'running' })
       if (req.imageDataUrl) shotPath = writeShot(opId, req.imageDataUrl)
-      const args = ['-p', '--resume', sessionId, '--add-dir', this.workDir]
+      const args = ['-p', '--resume', sessionId, '--add-dir', workDir]
       if (shotPath) args.push('--add-dir', dirname(shotPath))
       // Read-on-prompt hook: prepend a digest of recent edits — the document's git
       // history (read fresh from disk, so it's live across every app instance and
@@ -147,7 +172,7 @@ export class ClaudeService {
       const commits = await this.recentCommits(limit).catch((): CommitInfo[] => [])
       const digest = formatSessionDigest(commits, this.activeOps.othersFor(this.doc.root, this.sessionId), limit)
       args.push('--output-format', 'json', '--permission-mode', 'acceptEdits', opPrompt(req, shotPath, digest ?? undefined))
-      const proc = await this.claude(args)
+      const proc = await this.claudeIn(workDir, args)
       assertCompleted(proc, this.timeoutMs)
       const note = extractNote(proc.stdout)
       onStatus({ opId, state: 'done' })
@@ -157,22 +182,25 @@ export class ClaudeService {
     }
   }
 
-  /** Prime a fresh, isolated session for a new thread IN `workDir` (Claude's
-   *  sandbox is pinned to the primed dir, and turns resume there). Unlike
-   *  ensureSession this does NOT touch ProjectRecord.sessionId (the doc session)
-   *  — the id is owned by the thread record. */
-  private async primeThreadSession(): Promise<string> {
+  /** Prime a fresh, isolated session IN `workDir` (Claude's sandbox is pinned to
+   *  the primed dir, and turns resume there). Does NOT touch ProjectRecord — the
+   *  returned id is owned by the caller (a thread record, or a fork). */
+  async primeSession(workDir: string, signal?: AbortSignal): Promise<string> {
     const sessionId = randomUUID()
-    const proc = await this.claude([
-      '-p',
-      '--session-id',
-      sessionId,
-      '--add-dir',
-      this.workDir,
-      '--output-format',
-      'json',
-      primePrompt(this.doc, this.workDir),
-    ])
+    const proc = await this.claudeIn(
+      workDir,
+      [
+        '-p',
+        '--session-id',
+        sessionId,
+        '--add-dir',
+        workDir,
+        '--output-format',
+        'json',
+        primePrompt(this.doc, workDir),
+      ],
+      signal,
+    )
     assertCompleted(proc, this.timeoutMs)
     return sessionId
   }
@@ -195,7 +223,8 @@ export class ClaudeService {
 
   private async primeNewSession(signal?: AbortSignal): Promise<string> {
     const sessionId = randomUUID()
-    const proc = await this.claude(
+    const proc = await this.claudeIn(
+      this.workDir,
       [
         '-p',
         '--session-id',
@@ -213,11 +242,11 @@ export class ClaudeService {
     return sessionId
   }
 
-  private claude(args: string[], signal?: AbortSignal): Promise<ProcResult> {
+  private claudeIn(workDir: string, args: string[], signal?: AbortSignal): Promise<ProcResult> {
     return this.runner.run({
       cmd: process.env.STANZA_CLAUDE_BIN ?? 'claude',
       args: [...this.modelFlags(), ...args],
-      cwd: this.workDir,
+      cwd: workDir,
       timeoutMs: this.timeoutMs,
       env: claudeEnv(),
       ...(signal ? { signal } : {}),

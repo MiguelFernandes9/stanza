@@ -535,3 +535,78 @@ describe('ClaudeService.runThreadTurn (persistent bubble)', () => {
     expect(runner.calls).toHaveLength(2)
   })
 })
+
+describe('ClaudeService.runForkTurn (stateless per-fork primitive)', () => {
+  test('primes a fresh session in the given workDir, resumes there, returns its id', async () => {
+    const runner = new MockRunner(() => claudeJson('done'))
+    const service = new ClaudeService(runner, store, globalSettings, doc)
+    const wd = '/tmp/stanza-wt/doc/fork-a'
+
+    const { note, sessionId } = await service.runForkTurn(
+      wd,
+      null,
+      { instruction: 'tighten the intro', spans: [] },
+      () => {},
+    )
+
+    expect(runner.calls).toHaveLength(2) // prime + resume
+    const prime = runner.calls[0]!
+    expect(prime.cwd).toBe(wd) // ran IN the fork's worktree, not doc.root
+    expect(prime.args.slice(0, 2)).toEqual(['-p', '--session-id'])
+    expect(prime.args.slice(3, 5)).toEqual(['--add-dir', wd])
+    const resume = runner.calls[1]!
+    expect(resume.cwd).toBe(wd)
+    expect(resume.args.slice(0, 3)).toEqual(['-p', '--resume', sessionId])
+    expect(sessionId).toBe(prime.args[2]) // returns the id it primed
+    expect(note).toBe('done')
+  })
+
+  test('resumes a given session id without priming', async () => {
+    const runner = new MockRunner(() => claudeJson('ok'))
+    const service = new ClaudeService(runner, store, globalSettings, doc)
+
+    const { sessionId } = await service.runForkTurn(
+      '/tmp/stanza-wt/doc/fork-b',
+      'sess-123',
+      { instruction: 'next', spans: [] },
+      () => {},
+    )
+
+    expect(runner.calls).toHaveLength(1) // no prime
+    expect(runner.calls[0]!.args.slice(0, 3)).toEqual(['-p', '--resume', 'sess-123'])
+    expect(sessionId).toBe('sess-123')
+  })
+
+  test('emits priming → running → done', async () => {
+    const runner = new MockRunner(() => claudeJson('ok'))
+    const service = new ClaudeService(runner, store, globalSettings, doc)
+    const states: string[] = []
+
+    await service.runForkTurn('/tmp/wt', 'sess', { instruction: 'z', spans: [] }, (s) =>
+      states.push(s.state),
+    )
+
+    expect(states).toEqual(['priming', 'running', 'done'])
+  })
+
+  test('never persists a session to the project store (ephemeral by default)', async () => {
+    const runner = new MockRunner(() => claudeJson('ok'))
+    const service = new ClaudeService(runner, store, globalSettings, doc)
+
+    await service.runForkTurn('/tmp/wt', null, { instruction: 'q', spans: [] }, () => {})
+
+    expect(store.getProject('/proj').sessionId).toBeUndefined()
+  })
+
+  test('primeSession primes a fresh session in workDir and returns its id', async () => {
+    const runner = new MockRunner(() => claudeJson('primed'))
+    const service = new ClaudeService(runner, store, globalSettings, doc)
+
+    const id = await service.primeSession('/tmp/stanza-wt/doc/fork-c')
+
+    expect(id).toMatch(UUID_RE)
+    expect(runner.calls[0]!.cwd).toBe('/tmp/stanza-wt/doc/fork-c')
+    expect(runner.calls[0]!.args.slice(0, 2)).toEqual(['-p', '--session-id'])
+    expect(runner.calls[0]!.args[2]).toBe(id)
+  })
+})
