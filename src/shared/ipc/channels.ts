@@ -16,6 +16,7 @@ export const IpcChannels = {
   compileRun: 'compile:run',          // invoke CompileRequest → CompileResult
   compileStatus: 'compile:status',    // main→renderer event: CompileStatus
   synctexInverse: 'synctex:inverse',  // invoke InversePoint → SourceLocation | null
+  synctexInverseBatch: 'synctex:inverse-batch', // invoke InversePoint[] → (SourceLocation|null)[]
   synctexForward: 'synctex:forward',  // invoke BlockSpan → PdfRect[]
   claudeRun: 'claude:run',            // invoke ClaudeRequest → ClaudeResult
   claudeRunTurn: 'claude:runTurn',    // invoke ClaudeTurnRequest → ClaudeTurnResult (persistent thread bubble)

@@ -4,7 +4,7 @@ import type { TaskPhase } from '../tasks/taskStore'
 import type { TextRow } from './pdfTextRows'
 import type { GraphicBox } from './pdfGraphics'
 import type { ColumnLayout } from './columnLayout'
-import { columnLayoutByPage, columnOf } from './columnLayout'
+import { columnLayoutByPage, columnOf, dominantGutter } from './columnLayout'
 import { isMathEnvName } from '../../../shared/blocks/container'
 
 /** Selection state a task stamps on a block — drives the edge bar, the
@@ -165,17 +165,25 @@ function gapBelow(box: PdfRect, neighbors: PdfRect[]): number {
   return gap
 }
 
+/** Hairline gap (PDF pt) left between a padded box and its nearest neighbour so two
+ *  adjacent selected blocks render as DISTINCT units. A whole-section selection draws
+ *  one wash box per member (heading + each paragraph); contiguous members are only a
+ *  few pt apart, so without this gap their same-tone fills tile into one continuous
+ *  mass that reads as a single giant block (a section's heading + first paragraph). */
+const SELECT_BOX_GAP = 3
+
 /** Grow a box by `pad` on every side (PDF pt, scaled with the page at render)
  *  so the bounds frame the text instead of cutting into glyphs (BUG-13) — but
  *  never let the VERTICAL pad cross into a neighbouring block: each side is
- *  capped at half the gap to the nearest neighbour above/below, so two
- *  adjacent padded boxes meet without overlapping (a float placed flush under
- *  a paragraph no longer covers its last line, BUG-19). Horizontal pad is
- *  always full. The origin is clamped to 0 so a block near the page edge
- *  doesn't pad off-canvas. Pass `[]` for the original symmetric pad. */
+ *  capped so a SELECT_BOX_GAP hairline remains to the nearest neighbour
+ *  above/below, so two adjacent padded boxes stay visually distinct and never
+ *  overlap (a float flush under a paragraph no longer covers its last line, and a
+ *  section's member wash boxes don't merge into one mass — BUG-19). Horizontal pad
+ *  is always full. The origin is clamped to 0 so a block near the page edge doesn't
+ *  pad off-canvas. Pass `[]` for the original symmetric pad. */
 export function padBoxClamped(box: PdfRect, pad: number, neighbors: PdfRect[]): PdfRect {
-  const topPad = Math.min(pad, gapAbove(box, neighbors) / 2)
-  const botPad = Math.min(pad, gapBelow(box, neighbors) / 2)
+  const topPad = Math.min(pad, Math.max(0, (gapAbove(box, neighbors) - SELECT_BOX_GAP) / 2))
+  const botPad = Math.min(pad, Math.max(0, (gapBelow(box, neighbors) - SELECT_BOX_GAP) / 2))
   return {
     page: box.page,
     x: Math.max(0, box.x - pad),
@@ -278,6 +286,18 @@ const INK_KEEP_FRAC = 0.2
  *  coincidence at a page edge isn't mistaken for a block flowing across the break. */
 const MIN_CONTINUATION_INK = 6
 
+/** Max height (pt) of a forward synctex rect that counts as one rendered LINE. A block's
+ *  line rects are its EXACT extent — used to complete a box where pdf.js dropped rows and
+ *  to box a block whose rows all mis-attributed. A taller rect is a galley/vbox locator
+ *  and is ignored (it would re-inflate the box). ~2 body lines. */
+const LINE_MAX = 24
+
+/** Min x-inset (pt) past a region's left edge for an orphan row to read as that block's
+ *  indented FIRST line rather than the trailing tail of the block above it — the one
+ *  signal that tells a LEADING dropped line from a trailing one when both are equally
+ *  contiguous. A `\parindent` is ~15pt; 6pt clears sub-pt column-edge drift. */
+const PARA_INDENT_MIN = 6
+
 /** The document's body text-area vertical band `{top, bottom}` (PDF pt),
  *  inferred from the pdf.js text rows of EVERY page overlaid: the body is the
  *  single contiguous baseline cluster, while running heads and page-number
@@ -343,9 +363,361 @@ export interface BinnedContent {
   /** Per-page column geometry (gutter + bands) the boxes were binned against —
    *  Phase 2's two-rail layout reads this to place bubbles per column. */
   columnsByPage: Map<number, ColumnLayout>
-  /** Units inside ≥2 blocks' regions — the galley collisions the caller resolves
-   *  authoritatively via the synctex backward map (empty in the common case). */
+  /** Units inside ≥2 blocks' regions — the galley collisions the legacy forward-rect
+   *  binner reports for backward-map resolution. Always `[]` from `binBlocks` (the
+   *  backward map IS the attribution there). */
   contested: ContestedUnit[]
+}
+
+/** A rendered unit (a text row or a graphic) the caller has already attributed to its
+ *  block via the synctex BACKWARD map: `synctex edit` on the unit's point → source line
+ *  → `blockForSourceLine`. `blockId` is null when unmapped (furniture / a gap). */
+export interface AttributedUnit {
+  page: number
+  xLeft: number
+  yTop: number
+  xRight: number
+  yBottom: number
+  blockId: string | null
+}
+
+/** Build every block's box from its attributed units: the bbox per (page, column).
+ *  Forward-rect EXTENT is never consulted, so galley/vbox rects, cross-page spill and
+ *  tikz/math noise cannot inflate a box — no regions / tightest-span / isTallRect /
+ *  contested / continuation / per-kind gate. Units are pre-attributed by INDEX (not a
+ *  positional key), so dense graphics never collide with a row. A `fullWidthIds` block
+ *  (a `*` float) is one `full` box per page, never column-split. `rowsByPage` is used
+ *  only to detect the column layout. Pure. */
+export function binBlocks(
+  units: AttributedUnit[],
+  rowsByPage: Map<number, TextRow[]>,
+  fullWidthIds: Set<string> = new Set(),
+  // Forward synctex rects per block (its coarse REGION). Backward-map ownership, gated
+  // by forward region: a unit is attributed only if it lands on a page+x-band the block
+  // actually occupies — rejecting a running header or repeated content whose source line
+  // maps into the block but renders where the block doesn't. A block with no forward
+  // rects (forward missed) is not gated.
+  regionsById: Map<string, PdfRect[]> = new Map()
+): BinnedContent {
+  const columnsByPage = columnLayoutByPage(rowsByPage)
+
+  // The column gutter is a DOCUMENT constant in a two-column paper. Detected per-page it is
+  // fooled by a page whose ONLY two-column structure is a TABLE's internal columns (a short
+  // last page with no real right column): that narrow, off-centre gutter then both clips the
+  // body boxes to half width and mis-splits their rows. Take the height-weighted median
+  // gutter across ALL pages, so the real body gutter (the tall majority) wins and a table's
+  // is a minority. Used for the row split below AND the column clip in the box loop.
+  const docGutter = dominantGutter({ bands: [...columnsByPage.values()].flatMap((l) => l.bands) })
+
+  // Split a text unit that spans the gutter into a left half and a right half. pdf.js merges
+  // a left-column line and a right-column line on a shared baseline into ONE gutter-crossing
+  // row when its per-page gutter detector fails (a figure-topped page), and that row then
+  // lands in one block and steals the other column's line. Splitting at the gutter, with the
+  // forward-containment override below re-homing each half to the block whose line rect
+  // contains it, undoes the merge. Box-neutral for a genuine full-width row: both halves
+  // re-home to the SAME block and union back. Only text-height units split — a graphic whole.
+  if (docGutter)
+    units = units.flatMap((u) =>
+      u.yBottom - u.yTop <= LINE_MAX && u.xLeft < docGutter.left && u.xRight > docGutter.right
+        ? [{ ...u, xRight: docGutter.left }, { ...u, xLeft: docGutter.right }]
+        : [u]
+    )
+
+  const band = contentBand(rowsByPage)
+  const inBand = (yTop: number, yBottom: number): boolean =>
+    !band || (yBottom >= band.top - BAND_EPS && yTop <= band.bottom + BAND_EPS)
+  const gating = regionsById.size > 0
+  const inRegion = (u: AttributedUnit): boolean => {
+    if (!gating) return true // no forward info supplied (unit tests) → don't gate
+    const rects = regionsById.get(u.blockId!)
+    // No forward rects ⇒ synctex found this block NOWHERE in the compiled PDF — it's from
+    // a project .tex file that isn't part of this build (a multi-file project compiles ONE
+    // main file). A row that wrongly backward-maps to such a block is a cross-file synctex
+    // slip; reject it so it can't draw a phantom box over the real (compiled) block.
+    if (!rects || !rects.length) return false
+    for (const r of rects)
+      if (r.page === u.page && r.x < u.xRight && u.xLeft < r.x + r.width &&
+          r.y - MAX_LINE_GAP < u.yBottom && u.yTop < r.y + r.height + MAX_LINE_GAP) return true
+    return false
+  }
+
+  // A unit's column: a `*` float is always `full`; a non-float TEXT block on a
+  // two-column page is l/r (columnOf's `full` for a gutter-spanning line or a single
+  // band beside a float is snapped by centre — column is a block-on-page property, not
+  // a per-line one); a single-column page is `full`.
+  const colOfUnit = (u: AttributedUnit): PdfCol => {
+    if (fullWidthIds.has(u.blockId!)) return 'full'
+    const layout = columnsByPage.get(u.page)
+    const c = layout ? columnOf(layout, u) : 'full'
+    if (c !== 'full') return c
+    // Snap a gutter-spanning / single-band unit by the DOC gutter, not the per-page one —
+    // on a table-only last page the per-page gutter is the table's internal column boundary
+    // (off-centre), which would misclassify the body and fight the doc-gutter column clip.
+    return docGutter ? ((u.xLeft + u.xRight) / 2 <= docGutter.gx ? 'l' : 'r') : 'full'
+  }
+
+  // A forward rect that 2+ DISTINCT blocks report identically is a shared galley locator
+  // (synctex returns the same \maketitle box for \title, \author and \abstract; or one
+  // vbox for several blocks) — non-informative, so it must not define any box. Count each
+  // line-rect's (page,x,y,h) key across blocks and drop keys owned by more than one.
+  const rectKey = (page: number, r: PdfRect): string =>
+    `${page}:${Math.round(r.x)}:${Math.round(r.y)}:${Math.round(r.height)}`
+  const keyOwners = new Map<string, number>()
+  for (const [, rs] of regionsById) {
+    const seen = new Set<string>()
+    for (const r of rs) {
+      if (r.width <= 0 || r.height <= 0 || r.height > LINE_MAX || !inBand(r.y, r.y + r.height)) continue
+      const k = rectKey(r.page, r)
+      if (!seen.has(k)) { seen.add(k); keyOwners.set(k, (keyOwners.get(k) ?? 0) + 1) }
+    }
+  }
+
+  // Rendered ink (every unit, with its column) per page, to reject PHANTOM forward rects:
+  // synctex hands a block extent BELOW where text actually rendered (trailing \par glue, a
+  // vbox slug), so a fill that trusted it ended the box a line or three past the last real
+  // row. A forward rect counts only if a rendered unit IN ITS OWN COLUMN overlaps it — real
+  // same-column ink, not synctex's idea of it, and not a gutter-spanning merged row (those
+  // back a single-column rect spuriously, which is what overran the box on figure pages).
+  const unitsByPage = new Map<number, { u: AttributedUnit; col: PdfCol }[]>()
+  for (const u of units) { const c = colOfUnit(u); const a = unitsByPage.get(u.page); if (a) a.push({ u, col: c }); else unitsByPage.set(u.page, [{ u, col: c }]) }
+  const inkBacked = (page: number, col: PdfCol, r: PdfRect): boolean => {
+    const us = unitsByPage.get(page)
+    if (!us) return false
+    // STRICT vertical overlap (no slack): a phantom rect sits in the gap just past the last
+    // real row, so any slack would let it touch that row and pass.
+    for (const { u, col: uc } of us) if (uc === col && u.xLeft < r.x + r.width && r.x < u.xRight && u.yTop < r.y + r.height && r.y < u.yBottom) return true
+    return false
+  }
+
+  // A block's forward LINE-height rects (≤ LINE_MAX) tagged with column — its EXACT
+  // rendered extent. Galley/vbox (tall) rects, shared-galley rects, and phantom (ink-less)
+  // rects are excluded so they never re-inflate a box, duplicate one, or overrun the text.
+  interface FwdLine { page: number; col: PdfCol; x: number; y: number; right: number; bottom: number }
+  const lineRects = (id: string): FwdLine[] => {
+    const out: FwdLine[] = []
+    for (const r of regionsById.get(id) ?? []) {
+      if (!(r.width > 0 && r.height > 0 && r.height <= LINE_MAX && inBand(r.y, r.y + r.height)) || (keyOwners.get(rectKey(r.page, r)) ?? 0) > 1) continue
+      const col = colOfUnit({ page: r.page, xLeft: r.x, yTop: r.y, xRight: r.x + r.width, yBottom: r.y + r.height, blockId: id })
+      if (!inkBacked(r.page, col, r)) continue
+      out.push({ page: r.page, col, x: r.x, y: r.y, right: r.x + r.width, bottom: r.y + r.height })
+    }
+    return out
+  }
+
+  // Forward-containment override. The inverse map is off-by-one at a galley boundary: the
+  // text line just before a display equation maps to the equation's \begin line, so the
+  // equation's box STEALS the paragraph's last line. But the paragraph's own forward LINE
+  // rect sits exactly on that line while the equation's does not. So when a unit's backward
+  // block has NO line rect containing it yet another block's line rect does, reassign it to
+  // that block. Galley rows (no line rect contains them) keep their backward owner — this
+  // only corrects, never invents.
+  const fwdOwners = new Map<number, { id: string; x: number; y: number; right: number; bottom: number }[]>()
+  for (const [id, rs] of regionsById)
+    for (const r of rs) {
+      if (r.width <= 0 || r.height <= 0 || r.height > LINE_MAX || !inBand(r.y, r.y + r.height) || (keyOwners.get(rectKey(r.page, r)) ?? 0) > 1) continue
+      const e = { id, x: r.x, y: r.y, right: r.x + r.width, bottom: r.y + r.height }
+      const a = fwdOwners.get(r.page); if (a) a.push(e); else fwdOwners.set(r.page, [e])
+    }
+  for (const u of units) {
+    if (!u.blockId) continue
+    const os = fwdOwners.get(u.page); if (!os) continue
+    const cx = (u.xLeft + u.xRight) / 2, cy = (u.yTop + u.yBottom) / 2
+    let self = false, other: string | null = null, otherH = Infinity
+    for (const o of os) {
+      if (!(o.x - 2 <= cx && cx <= o.right + 2 && o.y - 2 <= cy && cy <= o.bottom + 2)) continue
+      if (o.id === u.blockId) { self = true; break }
+      const h = o.bottom - o.y; if (h < otherH) { otherH = h; other = o.id }
+    }
+    if (!self && other) u.blockId = other
+  }
+
+  // A block's box per (page, column) is the UNION of its attributed units — NOT split by
+  // vertical gaps (pdf.js drops rows mid-paragraph; a figure's image+caption sit a gap
+  // apart yet are one box). The forward-region gate already excludes off-block strays.
+  const byBlock = new Map<string, AttributedUnit[]>()
+  for (const u of units) {
+    if (!u.blockId || !inBand(u.yTop, u.yBottom) || !inRegion(u)) continue
+    const a = byBlock.get(u.blockId)
+    if (a) a.push(u); else byBlock.set(u.blockId, [u])
+  }
+  const ink = (arr: AttributedUnit[]): number => arr.reduce((s, u) => s + Math.max(1, u.yBottom - u.yTop), 0)
+  const boxesById = new Map<string, PdfRect[]>()
+  for (const [id, us] of byBlock) {
+    const fwd = lineRects(id)
+    const byPage = new Map<number, AttributedUnit[]>()
+    for (const u of us) { const a = byPage.get(u.page); if (a) a.push(u); else byPage.set(u.page, [u]) }
+    const boxes: PdfRect[] = []
+    for (const [page, pu] of byPage) {
+      const byCol = new Map<PdfCol, AttributedUnit[]>()
+      for (const u of pu) { const c = colOfUnit(u); const a = byCol.get(c); if (a) a.push(u); else byCol.set(c, [u]) }
+      // l AND r units that OVERLAP vertically are a per-unit mis-classification (a wide
+      // row straddling the gutter), not an l→r continuation — fold into the dominant
+      // column. A genuine continuation (left-bottom → right-top) is vertically disjoint.
+      const L = byCol.get('l'); const R = byCol.get('r')
+      if (L && R) {
+        const lY0 = Math.min(...L.map((u) => u.yTop)), lY1 = Math.max(...L.map((u) => u.yBottom))
+        const rY0 = Math.min(...R.map((u) => u.yTop)), rY1 = Math.max(...R.map((u) => u.yBottom))
+        if (lY0 < rY1 && rY0 < lY1) {
+          const keep = ink(L) >= ink(R) ? 'l' : 'r'
+          byCol.delete('l'); byCol.delete('r'); byCol.set(keep, [...L, ...R])
+        }
+      }
+      const g = docGutter
+      for (const [col, cu] of byCol) {
+        let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity
+        for (const u of cu) { x = Math.min(x, u.xLeft); y = Math.min(y, u.yTop); right = Math.max(right, u.xRight); bottom = Math.max(bottom, u.yBottom) }
+        // Extent fill: grow the box's Y to the block's forward line rects in this column that
+        // are CONTIGUOUS with it (within MAX_LINE_GAP), iterating to closure — fills rows
+        // pdf.js dropped / mis-attributed so the box covers where the block really is. Grow X
+        // to the rect's BACKING rendered units (real content), NOT the rect's own x: an
+        // lstlisting / tikz forward rect can carry a bogus off-page negative x that would
+        // balloon the box left. X matters when only an INDENTED first line was attributed and
+        // the synctex-null body lines (reaching the margin) would otherwise sit left of the box.
+        const cand = fwd.filter((r) => r.page === page && (r.col === col || col === 'full' || r.col === 'full'))
+        const pageUnits = unitsByPage.get(page) ?? []
+        const used = new Array<boolean>(cand.length).fill(false)
+        for (let grew = true; grew;) {
+          grew = false
+          for (let k = 0; k < cand.length; k++) {
+            const r = cand[k]!
+            if (used[k] || r.y > bottom + MAX_LINE_GAP || r.bottom < y - MAX_LINE_GAP) continue
+            y = Math.min(y, r.y); bottom = Math.max(bottom, r.bottom)
+            for (const { u, col: uc } of pageUnits)
+              if ((uc === col || col === 'full' || uc === 'full') && u.xLeft < r.right && r.x < u.xRight && u.yTop < r.bottom && r.y < u.yBottom) { x = Math.min(x, u.xLeft); right = Math.max(right, u.xRight) }
+            used[k] = true; grew = true
+          }
+        }
+        // Clip a column box to its column so a mis-measured full-width row can't widen it
+        // across the gutter into the other column's blocks.
+        if (g && col === 'l') right = Math.min(right, g.right)
+        else if (g && col === 'r') x = Math.max(x, g.left)
+        boxes.push({ page, x, y, width: right - x, height: bottom - y, col })
+      }
+    }
+    boxes.sort((a, b) => a.page - b.page || a.x - b.x)
+    if (boxes.length) boxesById.set(id, boxes)
+  }
+
+  // Per-(page,column) forward fallback: a block renders in some (page,column) — it has
+  // forward LINE rects there — but got NO box there. Two cases: (a) the block has no box at
+  // all (a heading / single-line para whose rows all mis-attributed); (b) the block boxes
+  // one cell but its rows in ANOTHER cell are synctex-null — a paragraph continuing across a
+  // page break whose tail rows map nowhere. Either way, add a box for each UNBOXED cell from
+  // its LARGEST contiguous run of forward rects (the dominant run; synctex forward is often
+  // scattered, so a full bbox would balloon over the page).
+  const nullUnits = units.filter((u) => !u.blockId)
+  const nullBacked = (r: FwdLine): boolean =>
+    nullUnits.some((u) => u.page === r.page && u.xLeft < r.right && r.x < u.xRight && u.yTop < r.bottom && r.y < u.yBottom)
+  for (const id of regionsById.keys()) {
+    const existing = boxesById.get(id) ?? []
+    const have = new Set(existing.map((b) => `${b.page}|${b.col}`))
+    const maxPage = existing.length ? Math.max(...existing.map((b) => b.page)) : 0
+    const byCell = new Map<string, FwdLine[]>()
+    for (const r of lineRects(id)) {
+      const k = `${r.page}|${r.col}`
+      if (have.has(k)) continue
+      // A block that ALREADY has a box only gains a new cell that (1) is its OWN synctex-null
+      // rows (a continuation, not another block's text coincidentally under a stray forward
+      // rect) and (2) flows FORWARD — same page or later. A continuation never lands on an
+      // EARLIER page; a forward rect that does is phantom (the listing's spurious prior-page
+      // box, where its rect coincided with another listing's null code). A block with NO box
+      // yet keeps the looser rule: its mis-attributed heading/line row may be a neighbour's.
+      if (existing.length && (!nullBacked(r) || r.page < maxPage)) continue
+      const a = byCell.get(k); if (a) a.push(r); else byCell.set(k, [r])
+    }
+    if (!byCell.size) continue
+    const boxes: PdfRect[] = [...existing]
+    for (const [, rs] of byCell) {
+      rs.sort((a, b) => a.y - b.y)
+      let best: { x: number; y: number; right: number; bottom: number; ink: number } | null = null
+      let cur: { x: number; y: number; right: number; bottom: number; ink: number } | null = null
+      for (const r of rs) {
+        if (!cur || r.y - cur.bottom > MAX_LINE_GAP) { cur = { x: r.x, y: r.y, right: r.right, bottom: r.bottom, ink: 0 } }
+        cur.x = Math.min(cur.x, r.x); cur.y = Math.min(cur.y, r.y); cur.right = Math.max(cur.right, r.right); cur.bottom = Math.max(cur.bottom, r.bottom); cur.ink += r.bottom - r.y
+        if (!best || cur.ink > best.ink) best = cur
+      }
+      if (best) boxes.push({ page: rs[0]!.page, x: best.x, y: best.y, width: best.right - best.x, height: best.bottom - best.y, col: rs[0]!.col })
+    }
+    boxes.sort((a, b) => a.page - b.page || a.x - b.x)
+    boxesById.set(id, boxes)
+  }
+
+  // Spatial orphan pass. A rendered text row that synctex maps NOWHERE — null inverse AND no
+  // forward rect (a math-heavy tail like "...the temporal sinusoid.") — is left unattributed
+  // and unboxed. Its only signal is position: it is the dropped tail of the block whose box
+  // sits directly above it in the same column. Attach each such row to that box (extend it
+  // down) when contiguous (within MAX_LINE_GAP). But cluster the orphans into same-column
+  // runs first and attach only SMALL runs: a LONG run is the BibTeX references (every line
+  // synctex-null) — attaching it would chain the whole bibliography into the conclusion box
+  // above it. References have no source block, so a long null run is left unboxed.
+  const placed: PdfRect[] = []
+  for (const bs of boxesById.values()) for (const b of bs) placed.push(b)
+  const covered = (u: AttributedUnit): boolean =>
+    placed.some((b) => b.page === u.page && b.x - 2 <= u.xLeft && u.xRight <= b.x + b.width + 2 && b.y - 2 <= u.yTop && u.yBottom <= b.y + b.height + 2)
+  const orphanCol = (u: AttributedUnit): PdfCol =>
+    !docGutter ? 'full' : (u.xLeft + u.xRight) / 2 <= docGutter.gx ? 'l' : 'r'
+  const orphans = units
+    .filter((u) => !u.blockId && u.yBottom - u.yTop <= LINE_MAX && inBand(u.yTop, u.yBottom) && !covered(u))
+    .sort((a, b) => a.page - b.page || (orphanCol(a) < orphanCol(b) ? -1 : orphanCol(a) > orphanCol(b) ? 1 : 0) || a.yTop - b.yTop)
+  // contiguous same-page same-column runs
+  const runs: AttributedUnit[][] = []
+  for (const u of orphans) {
+    const last = runs[runs.length - 1]
+    const prev = last?.[last.length - 1]
+    if (prev && prev.page === u.page && orphanCol(prev) === orphanCol(u) && u.yTop - prev.yBottom <= MAX_LINE_GAP) last!.push(u)
+    else runs.push([u])
+  }
+  const ORPHAN_RUN_MAX = 3
+  for (const run of runs) {
+    if (run.length > ORPHAN_RUN_MAX) continue // a references column — leave unboxed
+    for (const u of run) {
+      let best: PdfRect | null = null
+      let bestGap = MAX_LINE_GAP
+      for (const b of placed) {
+        if (b.page !== u.page || !(b.x < u.xRight && u.xLeft < b.x + b.width)) continue
+        const gap = u.yTop - (b.y + b.height)
+        if (gap >= -2 && gap < bestGap) { bestGap = gap; best = b }
+      }
+      if (best) best.height = Math.max(best.height, u.yBottom - best.y)
+    }
+  }
+
+  // Env single-object dominance. A figure / listing / table is ONE rendered object — it
+  // does not scatter across non-adjacent pages. lstlisting/verbatim synctex is unreliable
+  // and can plant a phantom forward rect on a neighbouring page that catches a stray row,
+  // giving the env a real box plus a spurious one-line box on the wrong page ("two blocks").
+  // Keep the env's DOMINANT page (most box ink); drop a page whose ink is a small fraction
+  // of it. A genuine multi-page env — a longtable split ~evenly — keeps both pages, since
+  // neither is a small fraction. (Env-ness from the id's `envN` segment.)
+  const ENV_RE = /(^|\/)env\d+(#|$)/
+  const allB: { id: string; b: PdfRect }[] = []
+  for (const [id, bs] of boxesById) for (const b of bs) allB.push({ id, b })
+  const overlapsOther = (id: string, b: PdfRect): boolean =>
+    allB.some(({ id: oid, b: o }) => oid !== id && o.page === b.page &&
+      Math.min(b.x + b.width, o.x + o.width) - Math.max(b.x, o.x) > 8 &&
+      Math.min(b.y + b.height, o.y + o.height) - Math.max(b.y, o.y) > 8)
+  for (const [id, bs] of boxesById) {
+    if (!ENV_RE.test(id) || bs.length < 2) continue
+    const inkByPage = new Map<number, number>()
+    for (const b of bs) inkByPage.set(b.page, (inkByPage.get(b.page) ?? 0) + b.height)
+    if (inkByPage.size < 2) continue
+    const domPage = [...inkByPage.entries()].sort((a, b) => b[1] - a[1])[0]![0]
+    const domInk = inkByPage.get(domPage)!
+    // Always keep the dominant page. Keep another page only if it is a SUBSTANTIAL part
+    // (>= 25 % ink, so a longtable split keeps both) AND it does not overlap another block's
+    // box — a phantom env box landing on a neighbour's content (a tikz rect mis-mapped onto
+    // the listing) is dropped even when its ink is substantial.
+    const kept = bs.filter((b) => b.page === domPage || ((inkByPage.get(b.page) ?? 0) >= 0.25 * domInk && !overlapsOther(id, b)))
+    if (kept.length && kept.length !== bs.length) boxesById.set(id, kept)
+  }
+
+  const contentTopByPage = new Map<number, number>()
+  for (const arr of boxesById.values())
+    for (const b of arr) {
+      const cur = contentTopByPage.get(b.page)
+      if (cur === undefined || b.y < cur) contentTopByPage.set(b.page, b.y)
+    }
+  return { boxesById, contentTopByPage, columnsByPage, contested: [] }
 }
 
 /** Build every block's box from what it RENDERED (glyph rows + graphic bboxes).
@@ -415,12 +787,22 @@ export function binContentToBlocks(
   // no distinctive ink, collects nothing, and yields no box — dissolving the
   // float-only cleanRects / floatRenderPage machinery into one ink-grounded rule.
   interface Region { id: string; page: number; col: PdfCol; top: number; bottom: number; xLeft: number; xRight: number }
+  // A band-tall synctex rect (≥90% of a real page's content height) that COEXISTS with
+  // smaller in-band rects of the SAME block on the SAME page is a whole-column galley
+  // locator — a \begin/macro forward-mapped to the full text height, while the small
+  // rects are the real per-line content. Kept, the galley anchors a column-tall region
+  // that wins rows far from the block's ink: a giant, misplaced box overlapping and
+  // starving its neighbours. Drop it. A LONE tall rect (a block that genuinely fills a
+  // column — no competing small rect on that page) is real and kept. The ≥300pt band
+  // gate means synthetic tiny-page fixtures never trip this.
+  const bandH = band ? band.bottom - band.top : Infinity
+  const isTallRect = (r: PdfRect): boolean => bandH >= 300 && r.height >= 0.9 * bandH
   const regionsByPage = new Map<number, Region[]>()
   for (const [id, rects] of rectsById) {
     const byCell = new Map<string, Region>()
-    for (const r of rects) {
-      if (r.width <= 0 || r.height <= 0) continue
-      if (!inBand(r.y, r.y + r.height)) continue // header/footer-margin stray (BUG-30)
+    const inb = rects.filter((r) => r.width > 0 && r.height > 0 && inBand(r.y, r.y + r.height))
+    const smallPages = new Set(inb.filter((r) => !isTallRect(r)).map((r) => r.page))
+    for (const r of inb.filter((r) => !(isTallRect(r) && smallPages.has(r.page)))) {
       const layout = columnsByPage.get(r.page)
       const col: PdfCol = fullWidthIds.has(id)
         ? 'full'
@@ -556,9 +938,15 @@ export function binContentToBlocks(
         boxAcc.get(rg.id)?.get(`${page}|${rg.col}`)?.bottom ?? -Infinity
       const span = (rg: Region): number => rg.bottom - rg.top
       const ownerOf = (key: number, col: PdfCol, xLeft: number, xRight: number): Region | null => {
-        // A backward-mapped (authoritative) owner overrides geometry at a galley
-        // collision: route the unit to that block's region here — one that contains
-        // it, else the nearest — since the synctex edit map says this block drew it.
+        // A backward-mapped owner overrides geometry at a galley collision: route the
+        // unit to that block's region when one CONTAINS it. synctex's backward map is
+        // only coarse, though — it sometimes maps a paragraph's lower lines onto a
+        // NEIGHBOUR paragraph's source line — so the override is honoured only when the
+        // forced owner actually renders AT the unit: a containing region, or a nearest
+        // region within MAX_LINE_GAP (a wrapped tail just below it). A forced owner
+        // whose only region is FAR from the unit is a wrong map; distrust it and fall
+        // through to geometry, else that block's box stretches across the page to
+        // swallow the unit (a first paragraph swallowing the model section below it).
         const forcedId = forcedOwners?.get(unitKey(page, key, xLeft))
         if (forcedId) {
           let pick: Region | null = null
@@ -567,8 +955,11 @@ export function binContentToBlocks(
             if (key >= rg.top - BAND_EPS && key <= rg.bottom + BAND_EPS) return rg
             if (!pick || Math.abs(rg.top - key) < Math.abs(pick.top - key)) pick = rg
           }
-          if (pick) return pick
-          // forced block has no region on this page/col (forward missed) → geometry.
+          if (pick) {
+            const gap = key < pick.top ? pick.top - key : key > pick.bottom ? key - pick.bottom : 0
+            if (gap <= MAX_LINE_GAP) return pick
+          }
+          // forced owner has no region here, or only a FAR one (coarse map) → geometry.
         }
         let inside: Region | null = null
         for (const rg of regions) {
@@ -583,21 +974,40 @@ export function binContentToBlocks(
                 (rg.bottom === inside.bottom && deeper(rg, inside))))) inside = rg
         }
         if (inside) return inside
-        // No region contains the unit (a wrapped line synctex dropped): the nearest
-        // region above whose ink FRONTIER is within MAX_LINE_GAP claims it. Rank by
-        // frontier, tie by id (deterministic — not iteration order).
+        // No region CONTAINS the unit (a wrapped line synctex dropped). DEFAULT: bind it
+        // to the nearest region ABOVE whose ink FRONTIER is within MAX_LINE_GAP — synctex
+        // almost always drops a block's TRAILING wrapped line, so it re-homes up to that
+        // block. Rank by frontier, tie by id (deterministic — not iteration order).
+        //
+        // EXCEPTION — a LEADING dropped line: a run-in `\paragraph` after a float has its
+        // first rendered line covered ONLY by a whole-column galley rect; once that rect
+        // is dropped the first line is orphaned just ABOVE its block's remaining rects.
+        // Upward-only then mis-files it onto the block above, whose box swallows the next
+        // paragraph's first line. Such a line is recognisable: it sits just above a
+        // region's TOP and is INDENTED into it (a paragraph first-line indent), so it
+        // binds DOWN to its own paragraph. Proximity can't tell a leading line from a
+        // trailing tail — both are equally contiguous — but the indent does. A leading
+        // bind takes precedence over the trailing default.
         let above: Region | null = null
         let aboveFrontier = -Infinity
+        let below: Region | null = null
+        let belowTop = Infinity
         for (const rg of regions) {
           if (!candidate(rg, col, xLeft, xRight)) continue
           const frontier = Math.max(rg.bottom, runningBottom(rg))
-          if (frontier > key + BAND_EPS || key - frontier > MAX_LINE_GAP) continue
-          if (!above || frontier > aboveFrontier || (frontier === aboveFrontier && rg.id < above.id)) {
-            above = rg
-            aboveFrontier = frontier
+          if (frontier <= key + BAND_EPS && key - frontier <= MAX_LINE_GAP) {
+            if (!above || frontier > aboveFrontier || (frontier === aboveFrontier && rg.id < above.id)) {
+              above = rg
+              aboveFrontier = frontier
+            }
+          } else if (key < rg.top - BAND_EPS && rg.top - key <= MAX_LINE_GAP && xLeft > rg.xLeft + PARA_INDENT_MIN) {
+            if (!below || rg.top < belowTop || (rg.top === belowTop && rg.id < below.id)) {
+              below = rg
+              belowTop = rg.top
+            }
           }
         }
-        return above
+        return below ?? above
       }
       // Sweep `units` (already in baseline / graphic-top order) so the contiguity
       // frontier grows as ink is added.
@@ -754,22 +1164,32 @@ export async function blockGeometryRects(
   return forward(block.span)
 }
 
-/** The block whose source span TIGHTEST contains (file, line) — the authoritative
- *  owner of a rendered unit, from the synctex BACKWARD map (`synctex edit`). Used to
- *  resolve a galley collision: a contested unit (in ≥2 blocks' regions) backward-maps
- *  to one source line, and the smallest-span block covering it truly drew it. A
- *  section's span dwarfs the leaf inside it, so the leaf (figure, list, paragraph)
- *  wins naturally — no kind gate. Returns the block id, or null if none covers it. */
+/** The block that most specifically contains (file, line) — the authoritative owner
+ *  of a rendered unit, from the synctex BACKWARD map (`synctex edit`). Used to resolve
+ *  a galley collision: a contested unit (in ≥2 blocks' regions) backward-maps to one
+ *  source line, and the block that truly drew it is the DEEPEST one covering it.
+ *
+ *  Resolves by nesting depth, NOT span — mirroring the binner's coincident-rect
+ *  tie-break (`deeper()`). A run-in `\paragraph` heading's span is collapsed to its
+ *  single start line (size 0, BUG-5), so by span it out-ranks the deeper prose child
+ *  that shares that line, handing the heading its prose's rows (an oversized heading
+ *  box, the prose split/starved). Depth is the reliable specificity axis: a child's
+ *  span ⊆ its parent's, so depth and smallest-span agree EXCEPT for that collapse, so
+ *  the leaf (figure, list, paragraph) still wins naturally — no kind gate. Tie on
+ *  depth → smaller span, then id (deterministic). Null if none covers (file, line). */
 export function blockForSourceLine(
   blocks: { id: string; span: BlockSpan }[],
   file: string,
   line: number
 ): string | null {
-  let best: { id: string; size: number } | null = null
+  const depth = (id: string): number => (id.split('#', 1)[0].match(/\//g)?.length ?? 0)
+  let best: { id: string; depth: number; size: number } | null = null
   for (const b of blocks) {
     if (b.span.file !== file || line < b.span.startLine || line > b.span.endLine) continue
-    const size = b.span.endLine - b.span.startLine
-    if (!best || size < best.size) best = { id: b.id, size }
+    const cand = { id: b.id, depth: depth(b.id), size: b.span.endLine - b.span.startLine }
+    if (!best || cand.depth > best.depth ||
+        (cand.depth === best.depth && (cand.size < best.size ||
+          (cand.size === best.size && cand.id < best.id)))) best = cand
   }
   return best?.id ?? null
 }

@@ -17,7 +17,9 @@ export function outlineLabel(node: BlockNode): string {
 }
 
 /** Filter the block tree to a structural table of contents: ONLY titled
- *  sections (`\chapter … \subparagraph`, all `kind: 'section'`). Preamble, plain
+ *  sections (`\chapter … \subsubsection`, all `kind: 'section'`). Run-in
+ *  `\paragraph`/`\subparagraph` are plain paragraph blocks (not sections), so they
+ *  don't appear here. Preamble, plain
  *  paragraphs, and every environment (equations, figures, theorems) are dropped
  *  — the outline is navigation over document structure, not content. An untitled
  *  section emits no row but its children are PROMOTED into the parent level, so a

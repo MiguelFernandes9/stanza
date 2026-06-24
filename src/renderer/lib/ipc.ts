@@ -94,6 +94,8 @@ export const api = {
   compileRun: (req: CompileRequest) => invoke<CompileResult>(IpcChannels.compileRun, req),
   synctexInverse: (p: InversePoint) =>
     invoke<SourceLocation | null>(IpcChannels.synctexInverse, p),
+  synctexInverseBatch: (pts: InversePoint[]) =>
+    invoke<(SourceLocation | null)[]>(IpcChannels.synctexInverseBatch, pts),
   synctexForward: (span: BlockSpan) => invoke<PdfRect[]>(IpcChannels.synctexForward, span),
   claudeRun: (req: ClaudeRequest) => invoke<ClaudeResult>(IpcChannels.claudeRun, req),
   /** One turn of a persistent conversation bubble (its own session). */

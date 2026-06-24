@@ -215,6 +215,11 @@ export function registerIpcHandlers(): void {
     return doc ? doc.compiler.inverse(point) : null
   })
 
+  ipcMain.handle(IpcChannels.synctexInverseBatch, (event, points: InversePoint[]) => {
+    const doc = sessions.get(event.sender.id)
+    return doc ? doc.compiler.inverseBatch(points) : points.map(() => null)
+  })
+
   ipcMain.handle(IpcChannels.synctexForward, (event, span: BlockSpan) => {
     const doc = sessions.get(event.sender.id)
     return doc ? doc.compiler.forward(span) : []

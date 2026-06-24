@@ -669,6 +669,19 @@ describe('blockForSourceLine — tightest block covering a source line (backward
     expect(blockForSourceLine(blocks, 'main.tex', 999)).toBeNull()
     expect(blockForSourceLine(blocks, 'other.tex', 216)).toBeNull()
   })
+  it('run-in \\paragraph: the prose child wins the shared line over its collapsed heading (BUG-5)', () => {
+    // A run-in \paragraph heading ("a) Overview.") and its prose share the source
+    // line. The heading's span is collapsed to its single start line (size 0), so
+    // smallest-span would hand it the prose's rendered rows — an oversized heading
+    // box, the prose split/starved. Depth picks the deeper prose child, matching the
+    // binner's own `deeper()` tie-break (the forced re-bin then agrees with it).
+    const runIn = [
+      { id: 's#1', span: { file: 'main.tex', startLine: 80, endLine: 200 } }, // section
+      { id: 's/h#1', span: { file: 'main.tex', startLine: 90, endLine: 90 } }, // run-in heading (collapsed)
+      { id: 's/h/p#1', span: { file: 'main.tex', startLine: 90, endLine: 120 } } // its prose child
+    ]
+    expect(blockForSourceLine(runIn, 'main.tex', 90)).toBe('s/h/p#1')
+  })
 })
 
 describe('binContentToBlocks — galley collision resolved by forced owners (backward map)', () => {
@@ -729,6 +742,36 @@ describe('binContentToBlocks — galley collision resolved by forced owners (bac
     const it = boxesById.get('it#1')!
     expect(it.length).toBeGreaterThanOrEqual(1)
     expect(it.every((b) => b.page === 2)).toBe(true)
+  })
+
+  it('a forced owner whose only region is FAR from the unit is distrusted (coarse backward map)', () => {
+    // synctex's backward map can be coarse: it sometimes maps a paragraph's lower
+    // lines onto a DIFFERENT (earlier) paragraph's source line. Blindly honouring that
+    // routed the far rows onto the first paragraph, whose region is far above — its box
+    // then stretched down across the page, swallowing the section below it (the real
+    // IEEEtran "first Methodology paragraph covers the model section" bug). The forced
+    // override is honoured only when the owner renders AT the unit (contains it, or a
+    // nearest region within MAX_LINE_GAP); a far forced owner falls through to geometry.
+    const rectsById = new Map<string, PdfRect[]>([
+      ['par#1', [prect(1, 72, 100, 200, 14), prect(1, 72, 116, 200, 14), prect(1, 72, 132, 200, 14)]], // region 100–146
+      ['real#1', [prect(1, 72, 200, 200, 14), prect(1, 72, 240, 200, 14), prect(1, 72, 264, 200, 14)]] // region 200–278
+    ])
+    const rowsByPage = new Map<number, TextRow[]>([
+      [
+        1,
+        [
+          trow(100, 112, 72, 272), trow(116, 128, 72, 272), trow(132, 144, 72, 272),
+          trow(200, 212, 72, 272), trow(240, 252, 72, 272), trow(252, 264, 72, 272)
+        ]
+      ]
+    ])
+    // The wrong backward map: the far unit (baseline 264, deep in real#1) is forced onto par#1.
+    const forced = new Map([['1|264|72', 'par#1']])
+    const { boxesById } = binContentToBlocks(rectsById, rowsByPage, new Map<number, GraphicBox[]>(), forced)
+    // par#1 keeps its own short box — it does NOT stretch down to the far forced unit.
+    expect(boxBottom(boxesById.get('par#1')![0]!)).toBeLessThan(160)
+    // the far unit fell through to geometry → the block that truly contains it.
+    expect(boxBottom(boxesById.get('real#1')![0]!)).toBeGreaterThanOrEqual(264)
   })
 })
 
@@ -923,16 +966,18 @@ describe('padBoxClamped — breathing room without crossing neighbors (BUG-13/19
     })
   })
 
-  it('clamps vertical pad so adjacent padded boxes meet but never overlap (BUG-19)', () => {
-    // A sits flush above B with only a 4pt gap (< 2·pad=10) — the float case.
+  it('clamps vertical pad so adjacent padded boxes keep a hairline gap, never overlap (BUG-19)', () => {
+    // A sits flush above B with only a 4pt gap (< 2·pad=10) — the float case, and the
+    // section heading-above-first-paragraph case. The pad leaves a SELECT_BOX_GAP (3pt)
+    // hairline between them so a multi-block selection's members don't tile into one mass.
     const A = { page: 1, x: 72, y: 80, width: 100, height: 16 } // bottom 96
     const B = { page: 1, x: 72, y: 100, width: 100, height: 40 } // top 100, gap 4
     const pa = padBoxClamped(A, 5, [B])
     const pb = padBoxClamped(B, 5, [A])
-    // top pad capped at gap/2 = 2; bottom (no neighbor below) keeps full pad
-    expect(pb).toEqual({ page: 1, x: 67, y: 98, width: 110, height: 47 })
-    // the two padded boxes touch at 98, they do not overlap
-    expect(pa.y + pa.height).toBeLessThanOrEqual(pb.y)
+    // top pad capped so a 3pt gap remains; bottom (no neighbor below) keeps full pad
+    expect(pb).toEqual({ page: 1, x: 67, y: 99.5, width: 110, height: 45.5 })
+    // a >=3pt gap remains between them — distinct, never overlapping
+    expect(pb.y - (pa.y + pa.height)).toBeCloseTo(3)
   })
 
   it('keeps full pad against far, off-page, or side-by-side neighbors', () => {
