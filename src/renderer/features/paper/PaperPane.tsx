@@ -129,6 +129,10 @@ export function PaperPane(props: Props): JSX.Element {
   // its badge/connector/bubble are skipped until a real box lands.
   const [anchorTops, setAnchorTops] = useState<Record<number, number | null>>({})
   const [tops, setTops] = useState<Record<number, number>>({})
+  // Which rail a task's card hangs on — 'left' for a left-column block (two-column
+  // papers), else 'right'. Follows the same box the card is anchored to, so it
+  // flips side when the block crosses a column break.
+  const [sides, setSides] = useState<Record<number, 'left' | 'right'>>({})
   // Scroll position drives the sticky rail cards (they follow the block across
   // pages). `scrolling` drops the cards' `top` transition mid-scroll so the
   // follow is instant; it relaxes ~120ms after the last scroll so open/close
@@ -450,16 +454,23 @@ export function PaperPane(props: Props): JSX.Element {
       pad: PAD
     })
     const anchorById: Record<number, number | null> = {}
-    for (const a of anchors) anchorById[a.id] = a.top
+    const sideById: Record<number, 'left' | 'right'> = {}
+    for (const a of anchors) {
+      anchorById[a.id] = a.top
+      sideById[a.id] = a.col === 'l' ? 'left' : 'right' // 'r'/'full'/none → right
+    }
     setAnchorTops((prev) => (JSON.stringify(prev) === JSON.stringify(anchorById) ? prev : anchorById))
+    setSides((prev) => (JSON.stringify(prev) === JSON.stringify(sideById) ? prev : sideById))
 
-    // Only stack open bubbles with a resolved anchor; null-anchor tasks (BUG-32)
-    // aren't placed yet, so they're left out until their geometry lands.
-    const stacked = stackTops(
-      state.tasks
-        .filter((t) => openIds.includes(t.id) && anchorById[t.id] != null)
+    // Collision-stack each rail independently: a left-column bubble never pushes a
+    // right-column one. Only open bubbles with a resolved anchor are placed;
+    // null-anchor tasks (BUG-32) wait until their geometry lands.
+    const open = state.tasks.filter((t) => openIds.includes(t.id) && anchorById[t.id] != null)
+    const itemsOn = (side: 'left' | 'right'): { id: number; top: number; height: number }[] =>
+      open
+        .filter((t) => sideById[t.id] === side)
         .map((t) => ({ id: t.id, top: anchorById[t.id]!, height: cardEls.current[t.id]?.offsetHeight ?? 120 }))
-    )
+    const stacked = { ...stackTops(itemsOn('left')), ...stackTops(itemsOn('right')) }
     setTops((prev) => (JSON.stringify(prev) === JSON.stringify(stacked) ? prev : stacked))
   })
 
@@ -485,7 +496,11 @@ export function PaperPane(props: Props): JSX.Element {
   }, [openIds, tops])
 
   const pageWidth = geo?.width ?? FALLBACK_PAGE_WIDTH
-  const { pageRightX, railLeft, cW } = paneLayout(pageWidth)
+  // Two-column doc → reserve a mirror left rail (so the page stays centred). A
+  // doc property: true if any block box was binned into a left/right column.
+  const twoCol = [...blockRects.values()].some((boxes) => boxes.some((b) => b.col === 'l' || b.col === 'r'))
+  const { originX, pageLeftX, pageRightX, railLeft, leftRailLeft, leftRailRight, rightBadgeLeft, leftBadgeLeft, cW, centerW } =
+    paneLayout(pageWidth, twoCol)
   const slot = geo ? geo.height + geo.gap : 0
   const pageStackH = geo ? numPages * slot : 0
   const openTasks = state.tasks.filter((t) => openIds.includes(t.id))
@@ -652,8 +667,8 @@ export function PaperPane(props: Props): JSX.Element {
             {/* The PAGE is the only flow child, so it alone sets the scroll
                 container's width: centred when it fits the pane, scrolled from
                 its own left edge when the pane is narrower (#69). */}
-            <div data-testid="paper-page" style={{ position: 'relative', width: pageWidth, height: contentH, flex: '0 0 auto' }}>
-              <div style={{ position: 'absolute', left: 0, top: PAD, width: pageWidth }}>
+            <div data-testid="paper-page" style={{ position: 'relative', width: centerW, height: contentH, flex: '0 0 auto' }}>
+              <div style={{ position: 'absolute', left: originX, top: PAD, width: pageWidth }}>
                 <PdfPageStack
                   pdf={displayPdf}
                   scale={zoom}
@@ -697,10 +712,10 @@ export function PaperPane(props: Props): JSX.Element {
                 pointerEvents: 'none'
               }}
             >
-              <div style={{ position: 'relative', width: pageWidth, height: contentH, flex: '0 0 auto' }}>
+              <div style={{ position: 'relative', width: centerW, height: contentH, flex: '0 0 auto' }}>
                 {/* connector lines: one bezier per open bubble */}
                 <svg
-                  width={cW}
+                  width={centerW}
                   height={contentH}
                   style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none', overflow: 'visible' }}
                 >
@@ -709,10 +724,16 @@ export function PaperPane(props: Props): JSX.Element {
                     if (anchor == null) return null // geometry not ready (BUG-32)
                     const by = PAD + anchor + 12
                     const cy = PAD + (tops[t.id] ?? 0) + 22
+                    // Left-column card: bezier from the page's LEFT edge to the left
+                    // rail's near (right) edge; else the right edge → right rail.
+                    const d =
+                      sides[t.id] === 'left'
+                        ? connectorPath(pageLeftX, leftRailRight, by, cy)
+                        : connectorPath(pageRightX, railLeft, by, cy)
                     return (
                       <path
                         key={t.id}
-                        d={connectorPath(pageRightX, railLeft, by, cy)}
+                        d={d}
                         fill="none"
                         stroke={phaseTone(t.phase).accent}
                         strokeWidth={2}
@@ -747,7 +768,7 @@ export function PaperPane(props: Props): JSX.Element {
                       title={`${label}${t.instruction ? ` — ${t.instruction}` : ''}`}
                       style={{
                         position: 'absolute',
-                        left: pageRightX - 13,
+                        left: sides[t.id] === 'left' ? leftBadgeLeft : rightBadgeLeft,
                         top: PAD + anchor,
                         width: BADGE,
                         height: BADGE,
@@ -785,6 +806,7 @@ export function PaperPane(props: Props): JSX.Element {
                   // animates later re-stacks (another bubble opening/closing).
                   const top = railBubbleTop(tops, t.id, PAD)
                   if (top == null) return null
+                  const side = sides[t.id] ?? 'right'
                   return (
                     <div
                       key={t.id}
@@ -795,7 +817,7 @@ export function PaperPane(props: Props): JSX.Element {
                       onPointerDown={(e) => e.stopPropagation()}
                       style={{
                         position: 'absolute',
-                        left: railLeft,
+                        left: side === 'left' ? leftRailLeft : railLeft,
                         top,
                         width: RAIL,
                         zIndex: 7,
@@ -807,7 +829,7 @@ export function PaperPane(props: Props): JSX.Element {
                         <ThreadCard
                           task={t}
                           blocks={blocksOf(t.blockIds)}
-                          side="right"
+                          side={side}
                           refCb={(el) => {
                             cardEls.current[t.id] = el
                           }}
@@ -826,7 +848,7 @@ export function PaperPane(props: Props): JSX.Element {
                           task={t}
                           blocks={blocksOf(t.blockIds)}
                           expanded
-                          side="right"
+                          side={side}
                           adding={state.adding}
                           onToggleAdding={props.onToggleAdding}
                           onRemoveBlock={(bid) => props.onRemoveBlock(t.id, bid)}
