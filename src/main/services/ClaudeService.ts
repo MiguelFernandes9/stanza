@@ -27,11 +27,8 @@ export class ClaudeService {
     private globalSettings: GlobalSettingsStore,
     private doc: DocumentInfo,
     private timeoutMs: number = DEFAULT_TIMEOUT_MS,
-    /** The owning window's session id — tags this session's ops and excludes them
-     *  from the cross-session bus digest (DocumentSession passes its id). */
-    private sessionId: string = randomUUID(),
-    /** Shared in-memory registry of in-flight ops across windows — its entries (from
-     *  OTHER sessions) feed the "editing right now" part of the digest. */
+    /** Shared in-memory registry of in-flight forks across windows — its entries
+     *  (from OTHER forks) feed the "editing right now" part of the digest. */
     private activeOps: ActiveOps = new ActiveOps(),
     /** Last `n` commits of the DOCUMENT repo (read fresh per op) — the shared,
      *  always-live "what changed" half of the bus digest. DocumentSession wires this
@@ -39,12 +36,14 @@ export class ClaudeService {
     private recentCommits: (n: number) => Promise<CommitInfo[]> = async () => [],
   ) {}
 
-  /** Run one turn of a FORK in its OWN `workDir`: prime a fresh session when
-   *  `sessionId` is null (an ephemeral edit, or a chat's first turn), else resume
-   *  it. No queue here — the ForkManager serializes a fork's own turns and bounds
+  /** Run one turn of a FORK (`forkId`) in its OWN `workDir`: prime a fresh session
+   *  when `sessionId` is null (an ephemeral edit, or a chat's first turn), else
+   *  resume it. `forkId` is the bus key so the in-flight digest excludes this fork.
+   *  No queue here — the ForkManager serializes a fork's own turns and bounds
    *  global concurrency, and the fork owns the returned session id. */
   async runForkTurn(
     workDir: string,
+    forkId: string,
     sessionId: string | null,
     req: ClaudeRequest,
     onStatus: (s: ClaudeStatus) => void,
@@ -53,7 +52,7 @@ export class ClaudeService {
     onStatus({ opId, state: 'priming' })
     try {
       const sid = sessionId ?? (await this.primeSession(workDir))
-      const done = await this.runResume(workDir, opId, sid, req, onStatus)
+      const done = await this.runResume(workDir, forkId, opId, sid, req, onStatus)
       return { ...done, sessionId: sid }
     } catch (err) {
       onStatus({ opId, state: 'failed', detail: String(err) })
@@ -70,6 +69,7 @@ export class ClaudeService {
    *  second --add-dir and removed once the turn returns. */
   private async runResume(
     workDir: string,
+    forkId: string,
     opId: string,
     sessionId: string,
     req: ClaudeRequest,
@@ -87,7 +87,7 @@ export class ClaudeService {
       // Capped at busCommitLimit (default 20) so old history doesn't burn tokens.
       const limit = this.globalSettings.get().busCommitLimit ?? 20
       const commits = await this.recentCommits(limit).catch((): CommitInfo[] => [])
-      const digest = formatSessionDigest(commits, this.activeOps.othersFor(this.doc.root, this.sessionId), limit)
+      const digest = formatSessionDigest(commits, this.activeOps.othersFor(this.doc.root, forkId), limit)
       args.push('--output-format', 'json', '--permission-mode', 'acceptEdits', opPrompt(req, shotPath, digest ?? undefined))
       const proc = await this.claudeIn(workDir, args)
       assertCompleted(proc, this.timeoutMs)

@@ -94,7 +94,7 @@ export class DocumentSession {
     // shared, always-live "what changed" source); `this.git` targets info.root.
     // Each fork runs Claude in its OWN worktree (passed per call to runForkTurn).
     this.claude = new ClaudeService(
-      runner, globalSettings, info, undefined, this.sessionId, activeOps,
+      runner, globalSettings, info, undefined, activeOps,
       (n) => this.git.log(n),
     )
     this.files = new FileService(info.root, this.git)

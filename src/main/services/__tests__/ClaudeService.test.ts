@@ -60,9 +60,7 @@ describe('ClaudeService.runForkTurn', () => {
     const runner = new MockRunner(() => claudeJson('done'))
     const service = new ClaudeService(runner, globalSettings, doc)
 
-    const { note, sessionId } = await service.runForkTurn(
-      WD,
-      null,
+    const { note, sessionId } = await service.runForkTurn(WD, 'fork-1', null,
       { instruction: 'tighten the intro', spans: [] },
       () => {},
     )
@@ -85,9 +83,7 @@ describe('ClaudeService.runForkTurn', () => {
     const runner = new MockRunner(() => claudeJson('ok'))
     const service = new ClaudeService(runner, globalSettings, doc)
 
-    const { sessionId } = await service.runForkTurn(
-      WD,
-      'sess-123',
+    const { sessionId } = await service.runForkTurn(WD, 'fork-1', 'sess-123',
       { instruction: 'next', spans: [] },
       () => {},
     )
@@ -101,7 +97,7 @@ describe('ClaudeService.runForkTurn', () => {
     const runner = new MockRunner(() => claudeJson('ok'))
     const service = new ClaudeService(runner, globalSettings, doc)
 
-    await service.runForkTurn('/tmp/stanza-wt/doc/fork-x', null, { instruction: 'x', spans: [] }, () => {})
+    await service.runForkTurn('/tmp/stanza-wt/doc/fork-x', 'fork-1', null, { instruction: 'x', spans: [] }, () => {})
 
     for (const call of runner.calls) {
       expect(call.cwd).toBe('/tmp/stanza-wt/doc/fork-x')
@@ -116,7 +112,7 @@ describe('ClaudeService.runForkTurn', () => {
     const service = new ClaudeService(runner, globalSettings, doc)
     const statuses: ClaudeStatus[] = []
 
-    const { opId } = await service.runForkTurn(WD, 'sess', { instruction: 'z', spans: [] }, (s) =>
+    const { opId } = await service.runForkTurn(WD, 'fork-1', 'sess', { instruction: 'z', spans: [] }, (s) =>
       statuses.push(s),
     )
 
@@ -129,7 +125,7 @@ describe('ClaudeService.runForkTurn', () => {
     const runner = new MockRunner(() => claudeJson('ok'))
     const service = new ClaudeService(runner, globalSettings, doc)
 
-    await service.runForkTurn(WD, null, { instruction: 'q', spans: [] }, () => {})
+    await service.runForkTurn(WD, 'fork-1', null, { instruction: 'q', spans: [] }, () => {})
 
     expect(store.getProject('/proj').sessionId).toBeUndefined()
   })
@@ -139,7 +135,7 @@ describe('ClaudeService.runForkTurn', () => {
     const runner = new MockRunner(() => claudeJson('done'))
     const service = new ClaudeService(runner, globalSettings, doc)
 
-    await service.runForkTurn(WD, null, { instruction: 'x', spans: [] }, () => {})
+    await service.runForkTurn(WD, 'fork-1', null, { instruction: 'x', spans: [] }, () => {})
 
     expect(runner.calls).toHaveLength(2) // prime + resume
     for (const call of runner.calls) {
@@ -153,7 +149,7 @@ describe('ClaudeService.runForkTurn', () => {
     const runner = new MockRunner(() => claudeJson('done'))
     const service = new ClaudeService(runner, globalSettings, doc)
 
-    await service.runForkTurn(WD, null, { instruction: 'x', spans: [] }, () => {})
+    await service.runForkTurn(WD, 'fork-1', null, { instruction: 'x', spans: [] }, () => {})
 
     expect(runner.calls[0]!.args.slice(0, 2)).toEqual(['--model', 'haiku'])
   })
@@ -162,7 +158,7 @@ describe('ClaudeService.runForkTurn', () => {
     const runner = new MockRunner(() => claudeJson('done'))
     const service = new ClaudeService(runner, globalSettings, doc)
 
-    await service.runForkTurn(WD, null, { instruction: 'x', spans: [] }, () => {})
+    await service.runForkTurn(WD, 'fork-1', null, { instruction: 'x', spans: [] }, () => {})
 
     expect(runner.calls[0]!.args[0]).toBe('-p')
     expect(runner.calls[0]!.args).not.toContain('--model')
@@ -174,9 +170,9 @@ describe('ClaudeService.runForkTurn', () => {
       { hash: 'h1', subject: 'claude: rewrite the intro', iso: '2026-06-24T13:34:00+01:00', kind: 'claude' as const },
     ]
     const runner = new MockRunner(() => claudeJson('done'))
-    const service = new ClaudeService(runner, globalSettings, doc, undefined, 'me', new ActiveOps(), recentCommits)
+    const service = new ClaudeService(runner, globalSettings, doc, undefined, new ActiveOps(), recentCommits)
 
-    await service.runForkTurn(WD, null, { instruction: 'fix typos', spans: [] }, () => {})
+    await service.runForkTurn(WD, 'fork-1', null, { instruction: 'fix typos', spans: [] }, () => {})
 
     const prompt = runner.calls[1]!.args.at(-1)! // resume call, last arg = prompt
     expect(prompt).toContain('Recently committed')
@@ -186,9 +182,9 @@ describe('ClaudeService.runForkTurn', () => {
 
   test('omits the digest when there are no commits and nothing in flight', async () => {
     const runner = new MockRunner(() => claudeJson('done'))
-    const service = new ClaudeService(runner, globalSettings, doc, undefined, 'me')
+    const service = new ClaudeService(runner, globalSettings, doc, undefined)
 
-    await service.runForkTurn(WD, null, { instruction: 'next', spans: [] }, () => {})
+    await service.runForkTurn(WD, 'fork-1', null, { instruction: 'next', spans: [] }, () => {})
 
     expect(runner.calls[1]!.args.at(-1)!).not.toContain('Recently committed')
     expect(runner.calls[1]!.args.at(-1)!).not.toContain('Context only')
@@ -196,11 +192,11 @@ describe('ClaudeService.runForkTurn', () => {
 
   test('injects siblings IN-FLIGHT edits (write-on-prompt) into the prompt', async () => {
     const activeOps = new ActiveOps()
-    activeOps.start({ sessionId: 'other', root: '/proj', instruction: 'rewriting section 3', startedAt: '2026-06-24T10:05:00.000Z' })
+    activeOps.start({ forkId: 'other', root: '/proj', instruction: 'rewriting section 3', startedAt: '2026-06-24T10:05:00.000Z' })
     const runner = new MockRunner(() => claudeJson('done'))
-    const service = new ClaudeService(runner, globalSettings, doc, undefined, 'me', activeOps)
+    const service = new ClaudeService(runner, globalSettings, doc, undefined, activeOps)
 
-    await service.runForkTurn(WD, null, { instruction: 'fix a typo', spans: [] }, () => {})
+    await service.runForkTurn(WD, 'fork-1', null, { instruction: 'fix a typo', spans: [] }, () => {})
 
     const prompt = runner.calls[1]!.args.at(-1)!
     expect(prompt).toContain('In progress right now')
@@ -215,9 +211,9 @@ describe('ClaudeService.runForkTurn', () => {
       return Array.from({ length: 10 }, (_, i) => ({ hash: `h${i}`, subject: `claude: edit ${i}`, iso: 't', kind: 'claude' as const }))
     }
     const runner = new MockRunner(() => claudeJson('done'))
-    const service = new ClaudeService(runner, globalSettings, doc, undefined, 'me', new ActiveOps(), recentCommits)
+    const service = new ClaudeService(runner, globalSettings, doc, undefined, new ActiveOps(), recentCommits)
 
-    await service.runForkTurn(WD, null, { instruction: 'x', spans: [] }, () => {})
+    await service.runForkTurn(WD, 'fork-1', null, { instruction: 'x', spans: [] }, () => {})
 
     expect(askedFor).toBe(3) // fetched exactly the configured limit
     const bullets = runner.calls[1]!.args.at(-1)!.split('\n').filter((l) => l.startsWith('- '))
@@ -228,9 +224,7 @@ describe('ClaudeService.runForkTurn', () => {
     const runner = new MockRunner(() => claudeJson('ok'))
     const service = new ClaudeService(runner, globalSettings, doc)
 
-    await service.runForkTurn(
-      WD,
-      'sess-1',
+    await service.runForkTurn(WD, 'fork-1', 'sess-1',
       {
         instruction: 'formalize',
         spans: [
@@ -255,9 +249,7 @@ describe('ClaudeService.runForkTurn', () => {
     })
     const service = new ClaudeService(runner, globalSettings, doc)
 
-    await service.runForkTurn(
-      WD,
-      'sess-1',
+    await service.runForkTurn(WD, 'fork-1', 'sess-1',
       { instruction: 'fix the label', spans: [], imageDataUrl: 'data:image/png;base64,iVBORw0KGgo=' },
       () => {},
     )
@@ -282,7 +274,7 @@ describe('ClaudeService.runForkTurn', () => {
     const runner = new MockRunner(() => claudeJson('done'))
     const service = new ClaudeService(runner, globalSettings, doc)
 
-    await service.runForkTurn(WD, null, { instruction: 'x', spans: [] }, () => {})
+    await service.runForkTurn(WD, 'fork-1', null, { instruction: 'x', spans: [] }, () => {})
 
     expect(runner.calls.length).toBeGreaterThan(0)
     for (const call of runner.calls) {
@@ -298,7 +290,7 @@ describe('ClaudeService.runForkTurn', () => {
     const statuses: ClaudeStatus[] = []
 
     await expect(
-      service.runForkTurn(WD, 'sess-1', { instruction: 'x', spans: [] }, (s) => statuses.push(s)),
+      service.runForkTurn(WD, 'fork-1', 'sess-1', { instruction: 'x', spans: [] }, (s) => statuses.push(s)),
     ).rejects.toThrow(/timed out/)
     expect(statuses.map((s) => s.state)).toEqual(['priming', 'running', 'failed'])
   })
@@ -309,7 +301,7 @@ describe('ClaudeService.runForkTurn', () => {
     const statuses: ClaudeStatus[] = []
 
     await expect(
-      service.runForkTurn(WD, 'sess-1', { instruction: 'x', spans: [] }, (s) => statuses.push(s)),
+      service.runForkTurn(WD, 'fork-1', 'sess-1', { instruction: 'x', spans: [] }, (s) => statuses.push(s)),
     ).rejects.toThrow(/too much output/)
     expect(statuses.map((s) => s.state)).toEqual(['priming', 'running', 'failed'])
   })
@@ -319,7 +311,7 @@ describe('ClaudeService.runForkTurn', () => {
     const runner = new MockRunner(() => claudeJson('ok'))
     const service = new ClaudeService(runner, globalSettings, doc)
 
-    await service.runForkTurn(WD, 'sess-1', { instruction: 'x', spans: [] }, () => {})
+    await service.runForkTurn(WD, 'fork-1', 'sess-1', { instruction: 'x', spans: [] }, () => {})
 
     expect(runner.calls[0]!.cmd).toBe('/mocks/claude-mock.sh')
   })

@@ -556,7 +556,7 @@ async function runClaudeOp(
 
   // Write-on-prompt (session bus): record this op as in-flight the moment it's
   // triggered, so a sibling session that starts an op meanwhile sees it's editing.
-  activeOps.start({ sessionId: doc.sessionId, root: doc.info.root, instruction: req.instruction, startedAt: new Date().toISOString() })
+  activeOps.start({ forkId: fork.forkId, root: doc.info.root, instruction: req.instruction, scope: fork.scope, startedAt: new Date().toISOString(), windowId: doc.sessionId })
   // Mark active so the file watcher ignores the brief user-tree churn (wip-commit
   // / accept merge) — the fork's OWN edits land in its worktree, never this tree.
   doc.beginOp()
@@ -569,7 +569,7 @@ async function runClaudeOp(
         req.instruction,
         req.spans,
         async (workDir) => {
-          op = await doc.claude.runForkTurn(workDir, fork.claudeSessionId, req, (status) =>
+          op = await doc.claude.runForkTurn(workDir, fork.forkId, fork.claudeSessionId, req, (status) =>
             sendTo(wc, IpcChannels.claudeStatus, status),
           )
           fork.claudeSessionId = op.sessionId
@@ -594,7 +594,7 @@ async function runClaudeOp(
       return { opId: op!.opId, note: op!.note, proposal }
     })
   } finally {
-    activeOps.end(doc.sessionId) // op no longer in flight (session bus)
+    activeOps.end(fork.forkId) // op no longer in flight (session bus)
     setTimeout(() => doc.endOp(), FILE_WATCH_SETTLE_MS + 300)
     void doc.forks.resolve(fork.forkId).catch(() => {}) // ephemeral → tear the worktree down
   }
@@ -673,7 +673,7 @@ async function runClaudeTurn(
   // turns (a live chat), and survive a relaunch (the path is stable per thread).
   const fork = doc.forks.getOrCreate(req.threadId, forkScope(req.spans), 'persistent')
   // Write-on-prompt (session bus): mark this turn in-flight so siblings see it.
-  activeOps.start({ sessionId: doc.sessionId, root: doc.info.root, instruction: req.instruction, startedAt: new Date().toISOString() })
+  activeOps.start({ forkId: fork.forkId, root: doc.info.root, instruction: req.instruction, scope: fork.scope, startedAt: new Date().toISOString(), windowId: doc.sessionId })
   doc.beginOp()
   try {
     return await doc.forks.schedule(fork, async () => {
@@ -692,7 +692,7 @@ async function runClaudeTurn(
         req.instruction,
         req.spans,
         async (workDir) => {
-          turn = await doc.claude.runForkTurn(workDir, resumeId, claudeReq, (status) =>
+          turn = await doc.claude.runForkTurn(workDir, fork.forkId, resumeId, claudeReq, (status) =>
             sendTo(wc, IpcChannels.claudeStatus, status),
           )
           fork.claudeSessionId = turn.sessionId
@@ -721,7 +721,7 @@ async function runClaudeTurn(
       return { opId: turn!.opId, note: turn!.note, sessionId: turn!.sessionId, proposal }
     })
   } finally {
-    activeOps.end(doc.sessionId) // turn no longer in flight (session bus)
+    activeOps.end(fork.forkId) // turn no longer in flight (session bus)
     setTimeout(() => doc.endOp(), FILE_WATCH_SETTLE_MS + 300)
     // Persistent fork: keep its worktree + session alive for the next turn.
   }

@@ -1,4 +1,5 @@
 import type { CommitInfo } from '../../shared/ipc/document'
+import type { ForkScope } from '../fork/Fork'
 
 /** Per-project session bus. The shared, always-fresh source of truth is the
  *  document's own GIT HISTORY: every accepted change — a Claude op (`claude: …`) OR a
@@ -11,35 +12,38 @@ import type { CommitInfo } from '../../shared/ipc/document'
  *  manual edits the op-log never saw. In-flight ("right now") edits aren't committed
  *  yet, so those still come from the in-memory ActiveOps registry below. */
 
-/** An edit running right now in some window — recorded at prompt-trigger (op start)
- *  and cleared when it ends. */
-export interface ActiveOp {
-  sessionId: string
+/** A fork (parallel edit) running right now — recorded at prompt-trigger and
+ *  cleared when it ends. `scope` (the spans it's editing) feeds the future
+ *  in-flight overlap guard; `windowId` groups a window's forks. */
+export interface ActiveFork {
+  forkId: string
   root: string
   instruction: string
   startedAt: string
+  scope?: ForkScope
+  windowId?: string
 }
 
-/** In-memory registry of in-flight edits, shared across windows in the one main
- *  process. Transient by design — NOT persisted, so a crash/quit clears it (a stale
- *  durable "in progress" marker would be worse than none). One op per window at a
- *  time (ops queue per window), so it keys by `sessionId`. (Cross-launch in-flight
- *  would need a shared file with a TTL — a follow-up; committed edits already cross
- *  launches via git.) */
+/** In-memory registry of in-flight forks, shared across windows in the one main
+ *  process. Transient by design — NOT persisted, so a crash/quit clears it (a
+ *  stale durable "in progress" marker would be worse than none). Keyed by
+ *  `forkId` so concurrent forks — even in the same window — never overwrite each
+ *  other. (Cross-launch in-flight would need a shared file with a TTL — a
+ *  follow-up; committed edits already cross launches via git.) */
 export class ActiveOps {
-  private byKey = new Map<string, ActiveOp>()
+  private byKey = new Map<string, ActiveFork>()
 
-  start(op: ActiveOp): void {
-    this.byKey.set(op.sessionId, op)
+  start(fork: ActiveFork): void {
+    this.byKey.set(fork.forkId, fork)
   }
 
-  end(sessionId: string): void {
-    this.byKey.delete(sessionId)
+  end(forkId: string): void {
+    this.byKey.delete(forkId)
   }
 
-  /** In-flight edits by OTHER sessions on the same project. */
-  othersFor(root: string, ownSessionId: string): ActiveOp[] {
-    return [...this.byKey.values()].filter((o) => o.root === root && o.sessionId !== ownSessionId)
+  /** In-flight forks on the same project OTHER than `ownForkId`. */
+  othersFor(root: string, ownForkId: string): ActiveFork[] {
+    return [...this.byKey.values()].filter((o) => o.root === root && o.forkId !== ownForkId)
   }
 }
 
@@ -52,7 +56,7 @@ export class ActiveOps {
  *  agent-bus, couldn't (it's a sandboxed editor), then reported that and made NO edit.
  *  Here it's just background with an explicit "do not report or act on this", so the
  *  model uses it and gets on with its own task. */
-export function formatSessionDigest(commits: CommitInfo[], active: ActiveOp[], limit = 20): string | null {
+export function formatSessionDigest(commits: CommitInfo[], active: ActiveFork[], limit = 20): string | null {
   const recent = commits.slice(0, limit) // git log is newest-first
   if (recent.length === 0 && active.length === 0) return null
 
