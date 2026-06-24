@@ -17,9 +17,9 @@ summary of what you changed.`
 export const opPrompt = (req: ClaudeRequest, imagePath?: string, injectedContext?: string) => {
   const wholeDoc = req.spans.length === 0
   const scope = wholeDoc
-    ? // The whole-document chat (⌘J) is a session over the entire project: the
-      // instruction may be a question (answer it, change nothing) or an edit.
-      'Scope: the whole document. The instruction may be a question — in that case answer it in your summary and leave every file unchanged — or an edit (a template change, a document-wide revision, …), in which case apply the changes wherever they belong across the project.'
+    ? // The ⌘J chat is the general agent: a session with full access to the whole
+      // project that can do anything the instruction asks.
+      'Scope: the whole project — you can read and edit any file. Do whatever the instruction asks: answer a question (changing nothing), make a small targeted edit, or a sweeping document-wide change. Apply edits wherever they belong.'
     : 'Scope (edit only inside these spans):\n' +
       req.spans.map((s) => `- ${s.file} lines ${s.startLine}-${s.endLine}`).join('\n')
   const image = imagePath
