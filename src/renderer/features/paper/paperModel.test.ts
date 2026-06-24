@@ -951,6 +951,33 @@ describe('viewportAnchorTops — card sits at the block box on the page in view'
     expect(out).toEqual([{ id: 5, top: 1752 }])
   })
 
+  // Two-column: the chosen box's `col` rides out so the caller picks the side.
+  it('returns the chosen box col, following the block across a column break', () => {
+    const colRects = new Map<string, PdfRect[]>([
+      ['left-blk', [{ page: 1, x: 40, y: 100, width: 200, height: 80, col: 'l' }]],
+      ['right-blk', [{ page: 1, x: 320, y: 100, width: 200, height: 80, col: 'r' }]],
+      // flows across the column break: left box bottom of p1, right box top of p2
+      ['straddle-col', [
+        { page: 1, x: 40, y: 600, width: 200, height: 40, col: 'l' }, // anchor 600
+        { page: 2, x: 320, y: 60, width: 200, height: 40, col: 'r' } // anchor 876
+      ]]
+    ])
+    expect(viewportAnchorTops([{ id: 1, blockIds: ['left-blk'] }], colRects, geo, 1, view(0))).toEqual([
+      { id: 1, top: 100, col: 'l' }
+    ])
+    expect(viewportAnchorTops([{ id: 2, blockIds: ['right-blk'] }], colRects, geo, 1, view(0))).toEqual([
+      { id: 2, top: 100, col: 'r' }
+    ])
+    // p1 left box visible → col 'l'
+    expect(viewportAnchorTops([{ id: 3, blockIds: ['straddle-col'] }], colRects, geo, 1, view(300))).toEqual([
+      { id: 3, top: 600, col: 'l' }
+    ])
+    // scrolled to p2 right box → col 'r'
+    expect(viewportAnchorTops([{ id: 3, blockIds: ['straddle-col'] }], colRects, geo, 1, view(900))).toEqual([
+      { id: 3, top: 876, col: 'r' }
+    ])
+  })
+
   // M3-3: whole-doc task (no blockIds) is pane-pinned, never page-anchored.
   it('returns null for an unscoped whole-doc card (empty blockIds)', () => {
     expect(viewportAnchorTops([{ id: 7, blockIds: [] }], rects, geo, 1, view(0))).toEqual([{ id: 7, top: null }])

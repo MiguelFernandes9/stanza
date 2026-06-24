@@ -1222,13 +1222,13 @@ export function viewportAnchorTops(
   geo: { height: number; gap: number } | null,
   zoom: number,
   view: Viewport
-): { id: number; top: number | null }[] {
+): { id: number; top: number | null; col?: PdfCol }[] {
   return tasks.map((t) => {
     if (!geo) return { id: t.id, top: null }
     const slot = geo.height + geo.gap
     const vpTop = view.scrollTop
     const vpBottom = view.scrollTop + view.height
-    let best: { top: number; overlap: number; dist: number } | null = null
+    let best: { top: number; overlap: number; dist: number; col?: PdfCol } | null = null
     for (const id of t.blockIds) {
       for (const b of rects.get(id) ?? []) {
         const top = (b.page - 1) * slot + b.y * zoom
@@ -1237,11 +1237,11 @@ export function viewportAnchorTops(
         const overlap = Math.max(0, Math.min(r1, vpBottom) - Math.max(r0, vpTop))
         const dist = overlap > 0 ? 0 : Math.min(Math.abs(r0 - vpBottom), Math.abs(r1 - vpTop))
         if (!best || overlap > best.overlap || (overlap === best.overlap && dist < best.dist)) {
-          best = { top, overlap, dist }
+          best = { top, overlap, dist, col: b.col }
         }
       }
     }
-    return { id: t.id, top: best ? best.top : null }
+    return best ? { id: t.id, top: best.top, col: best.col } : { id: t.id, top: null }
   })
 }
 

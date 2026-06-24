@@ -7,6 +7,7 @@ import {
   pdfScrollTop,
   phaseTone,
   RAIL,
+  RAIL_GUTTER,
   railBubbleTop,
   stackTops
 } from './paperPaneLayout'
@@ -38,6 +39,40 @@ describe('paneLayout — page/rail track from page width only (M2-5)', () => {
     // the page can't jitter sideways (M2-5).
     expect(paneLayout(600).cW).toBe(600 + GAPX + RAIL)
     expect(paneLayout(564).cW).toBe(564 + GAPX + RAIL)
+  })
+
+  it('single-column (default) reserves no left band: origin 0, page-only centre box', () => {
+    const l = paneLayout(600)
+    expect(l.originX).toBe(0)
+    expect(l.pageLeftX).toBe(0)
+    expect(l.pageRightX).toBe(600)
+    expect(l.centerW).toBe(600)
+  })
+})
+
+describe('paneLayout — two-column: a mirror left rail, page stays centred', () => {
+  const inset = GAPX + RAIL + RAIL_GUTTER
+
+  it('shifts the page right by a mirror of the right extent so the page is centred', () => {
+    const l = paneLayout(600, true)
+    expect(l.originX).toBe(inset)
+    expect(l.pageLeftX).toBe(inset)
+    expect(l.pageRightX).toBe(inset + 600)
+    // symmetric track: left inset == right extent → centring keeps the page centred
+    expect(l.centerW).toBe(inset + 600 + inset)
+    expect(l.centerW - l.pageRightX).toBe(l.pageLeftX)
+  })
+
+  it('places the left rail as the mirror of the right rail, all at x >= 0 (reachable)', () => {
+    const l = paneLayout(600, true)
+    expect(l.railLeft).toBe(l.pageRightX + GAPX) // right rail unchanged relative to page
+    expect(l.leftRailLeft).toBe(RAIL_GUTTER) // inset - GAPX - RAIL
+    expect(l.leftRailRight).toBe(l.pageLeftX - GAPX) // bubble's right edge / connector end
+    expect(l.leftRailLeft + RAIL).toBe(l.leftRailRight)
+    expect(l.leftRailLeft).toBeGreaterThanOrEqual(0)
+    // badges straddle their page edge symmetrically
+    expect(l.rightBadgeLeft).toBe(l.pageRightX - 13)
+    expect(l.leftBadgeLeft).toBe(l.pageLeftX - 15)
   })
 })
 
