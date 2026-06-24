@@ -733,7 +733,24 @@ export function binBlocks(
         const a = clusters.get(k); if (a) a.push(u); else clusters.set(k, [u])
       }
       if (clusters.size < 2) { rebuilt.push(cellBox); continue }
-      for (const ccu of clusters.values()) rebuilt.push(buildBox(fwd, page, col, ccu, col !== 'full'))
+      // Build each cluster's box, then merge vertically-CONTIGUOUS ones. The intervening bands
+      // separate FAR-APART regions (a body and its page-bottom footnote), but a band whose box
+      // straddles the first line of such a region — a footnote whose top a neighbour's box
+      // overlaps by a point — splits that one region across two adjacent k-clusters whose boxes
+      // then overlap, tripping the self-overlap guard and losing the whole split (the massive
+      // single-column box). Re-merge boxes within MAX_LINE_GAP so a contiguous run is one box;
+      // only the real gap (the intervening body) keeps body and footnote apart.
+      const cellBoxes = [...clusters.values()].map((ccu) => buildBox(fwd, page, col, ccu, col !== 'full')).sort((a, b) => a.y - b.y)
+      const mergedCell: PdfRect[] = []
+      for (const bx of cellBoxes) {
+        const prev = mergedCell[mergedCell.length - 1]
+        if (prev && bx.y - (prev.y + prev.height) <= MAX_LINE_GAP) {
+          prev.width = Math.max(prev.x + prev.width, bx.x + bx.width) - Math.min(prev.x, bx.x)
+          prev.x = Math.min(prev.x, bx.x)
+          prev.height = Math.max(prev.y + prev.height, bx.y + bx.height) - prev.y
+        } else mergedCell.push({ ...bx })
+      }
+      for (const m of mergedCell) rebuilt.push(m)
       changed = true
     }
     // The main build's l/r fold merges vertically-overlapping left+right boxes — right for a
