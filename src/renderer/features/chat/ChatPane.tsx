@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { JSX } from 'react'
 import { ArrowUp, Check, FileText, GitCommitHorizontal, Sparkles, Undo2, X } from 'lucide-react'
-import { Avatar, BlockTag, Button, DiffHunk, Kbd, StatusDot } from '@renderer/components'
-import type { BlockTagKind } from '@renderer/components'
+import { Avatar, Button, DiffHunk, Kbd, StatusDot } from '@renderer/components'
 import type { ReviewProposal } from '@shared/ipc'
 import { summarizeBlocks } from '@shared/blocks/changes'
 
@@ -14,21 +13,9 @@ export interface ChatMessage {
   resolved?: 'accept' | 'reject' | null
 }
 
-export interface ComposeChip {
-  blockId: string
-  kind: BlockTagKind
-  label: string
-  span: string
-}
-
 interface Props {
   messages: ChatMessage[]
   busy: boolean
-  chips: ComposeChip[]
-  /** Select-blocks mode owns editing through the rail bubbles, so the whole-doc
-   *  composer is deactivated then — history stays readable, the input is locked. */
-  disabled?: boolean
-  onRemoveChip: (blockId: string) => void
   onSubmit: (instruction: string) => void
   onResolveOp: (opId: string, accept: boolean) => void
 }
@@ -90,9 +77,11 @@ function ProposalBlock({ proposal, resolved, onResolve }: { proposal?: ReviewPro
   )
 }
 
-/** Assistant panel (⌘J) — design §2/ChatPane: session history with inline
- *  proposals, composer acting on the newest compose task. */
-export function ChatPane({ messages, busy, chips, disabled = false, onRemoveChip, onSubmit, onResolveOp }: Props): JSX.Element {
+/** Assistant panel (⌘J) — the one main agent: a whole-document session for
+ *  questions, template changes, and whole-file edits. It is independent of
+ *  block selection (⌘B) — selecting blocks never scopes or disables this chat;
+ *  block-scoped editing lives in the rail bubbles. */
+export function ChatPane({ messages, busy, onSubmit, onResolveOp }: Props): JSX.Element {
   const [instruction, setInstruction] = useState('')
   const streamRef = useRef<HTMLDivElement | null>(null)
 
@@ -101,7 +90,7 @@ export function ChatPane({ messages, busy, chips, disabled = false, onRemoveChip
   }, [messages.length, busy])
 
   const submit = (): void => {
-    if (disabled || !instruction.trim() || busy) return
+    if (!instruction.trim() || busy) return
     onSubmit(instruction.trim())
     setInstruction('')
   }
@@ -190,28 +179,22 @@ export function ChatPane({ messages, busy, chips, disabled = false, onRemoveChip
 
       <div style={{ flex: '0 0 auto', borderTop: '1px solid var(--border-default)', padding: 12, background: 'var(--surface-app)' }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 9 }}>
-          {chips.length > 0 ? (
-            chips.map((c) => (
-              <BlockTag key={c.blockId} kind={c.kind} label={c.label} span={c.span} active onRemove={() => onRemoveChip(c.blockId)} />
-            ))
-          ) : (
-            // No selection → the op edits the whole project (spans: []).
-            <span
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 5,
-                height: 22,
-                padding: '0 9px',
-                borderRadius: 'var(--radius-pill)',
-                border: '1px dashed var(--line-ink)',
-                color: 'var(--ink-500)',
-                font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-sans)'
-              }}
-            >
-              <FileText size={11} /> Whole document
-            </span>
-          )}
+          {/* The main chat always edits the whole project (spans: []). */}
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+              height: 22,
+              padding: '0 9px',
+              borderRadius: 'var(--radius-pill)',
+              border: '1px dashed var(--line-ink)',
+              color: 'var(--ink-500)',
+              font: 'var(--weight-medium) var(--text-2xs)/1 var(--font-sans)'
+            }}
+          >
+            <FileText size={11} /> Whole document
+          </span>
         </div>
         <div
           style={{
@@ -222,14 +205,11 @@ export function ChatPane({ messages, busy, chips, disabled = false, onRemoveChip
             border: '1px solid var(--border-strong)',
             borderRadius: 'var(--radius-lg)',
             padding: '8px 8px 8px 12px',
-            boxShadow: 'var(--shadow-inset)',
-            opacity: disabled ? 0.5 : 1,
-            pointerEvents: disabled ? 'none' : undefined
+            boxShadow: 'var(--shadow-inset)'
           }}
         >
           <textarea
             value={instruction}
-            disabled={disabled}
             onChange={(e) => setInstruction(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
@@ -238,7 +218,7 @@ export function ChatPane({ messages, busy, chips, disabled = false, onRemoveChip
               }
             }}
             rows={1}
-            placeholder={chips.length ? 'Instruct Claude for the selected block…' : 'Edit the whole document…'}
+            placeholder="Ask a question or edit the whole document…"
             style={{
               flex: 1,
               resize: 'none',
@@ -251,27 +231,19 @@ export function ChatPane({ messages, busy, chips, disabled = false, onRemoveChip
               padding: '5px 0'
             }}
           />
-          <Button size="sm" variant="primary" disabled={disabled || !instruction.trim() || busy} onClick={submit} style={{ padding: '0 10px' }} iconLeft={<ArrowUp size={15} />}>
+          <Button size="sm" variant="primary" disabled={!instruction.trim() || busy} onClick={submit} style={{ padding: '0 10px' }} iconLeft={<ArrowUp size={15} />}>
             Run
           </Button>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 7, paddingLeft: 2 }}>
-          {disabled ? (
-            <span style={{ font: 'var(--text-2xs)/1.4 var(--font-sans)', color: 'var(--ink-400)' }}>
-              Editing blocks — switch to Read mode (<Kbd>⌘</Kbd> <Kbd>B</Kbd>) to chat with the whole document.
-            </span>
-          ) : (
-            <>
-              <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>
-                Claude Code edits the <span style={{ fontFamily: 'var(--font-mono)' }}>.tex</span> source directly ·{' '}
-              </span>
-              <span style={{ display: 'inline-flex', gap: 3, alignItems: 'center' }}>
-                <Kbd>⌘</Kbd>
-                <Kbd>↵</Kbd>
-              </span>
-              <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>to run</span>
-            </>
-          )}
+          <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>
+            Claude Code edits the <span style={{ fontFamily: 'var(--font-mono)' }}>.tex</span> source directly ·{' '}
+          </span>
+          <span style={{ display: 'inline-flex', gap: 3, alignItems: 'center' }}>
+            <Kbd>⌘</Kbd>
+            <Kbd>↵</Kbd>
+          </span>
+          <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>to run</span>
         </div>
       </div>
     </div>

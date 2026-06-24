@@ -14,7 +14,6 @@ import type {
   ThreadTurn
 } from '@shared/ipc'
 import { ChatPane } from '../chat/ChatPane'
-import type { ComposeChip } from '../chat/ChatPane'
 import { chatMessages } from '../chat/chatModel'
 import { saveActiveAndCompile, saveAllAndCompile } from './compileTriggers'
 import { filesToReloadAfterResolve } from './reviewReload'
@@ -36,9 +35,8 @@ import {
 import { PaperPane } from '../paper/PaperPane'
 import { HistoryDiffOverlay } from '../review/HistoryDiffOverlay'
 import type { PdfFlash } from '../paper/PaperPane'
-import { expandIds, flattenBlocks, parentOf, spanLabel, taskSpans } from '../paper/paperModel'
+import { expandIds, flattenBlocks, parentOf, taskSpans } from '../paper/paperModel'
 import { resolveToKnownFile } from '@renderer/lib/paths'
-import { blockLabel, tagKind } from '../tasks/TaskCard'
 import { dismissRoute, initialTaskState, isWholeDocTask, taskReducer } from '../tasks/taskStore'
 import { pendingRemap, restoreAnchors, vanishedThreads } from '../tasks/reanchor'
 import { planMove } from './fileDrag'
@@ -844,18 +842,10 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
   // indicator must track only whole-doc ops — else a block edit shows a thinking
   // indicator in the panel with no matching message (review C5).
   const chatPaneBusy = state.tasks.some((t) => t.phase === 'busy' && isWholeDocTask(t))
-  const chips: ComposeChip[] = state.tasks
-    .filter((t) => t.phase === 'compose')
-    .flatMap((t) => t.blockIds)
-    .map((id) => pageById.get(id))
-    .filter((b): b is NonNullable<typeof b> => b != null)
-    .map((b) => ({ blockId: b.id, kind: tagKind(b), label: blockLabel(b), span: spanLabel(b.span) }))
-
-  const chatSubmit = (instruction: string): void => {
-    const compose = state.tasks.filter((t) => t.phase === 'compose').at(-1)
-    if (compose) submitTask(compose.id, instruction)
-    else submitWholeDoc(instruction)
-  }
+  // The main chat (⌘J) is one whole-document session — independent of block
+  // selection. It never narrows to selected blocks; block-scoped editing lives
+  // in the rail bubbles (TaskCard / ThreadCard).
+  const chatSubmit = (instruction: string): void => submitWholeDoc(instruction)
 
   const resolveByOp = (opId: string, accept: boolean): void => {
     const owner = state.tasks.find((t) => t.opId === opId || t.proposal?.opId === opId)
@@ -1017,9 +1007,6 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           <ChatPane
             messages={messages}
             busy={chatPaneBusy}
-            chips={chips}
-            disabled={state.view === 'select'}
-            onRemoveChip={(blockId) => dispatch({ type: 'toggle-block', ids: [blockId], additive: true })}
             onSubmit={chatSubmit}
             onResolveOp={resolveByOp}
           />
