@@ -51,7 +51,7 @@ describe('DocumentSession', () => {
 
     // Session B runs an op → its prompt shows A's in-flight edit (read-on-prompt hook).
     // (Committed edits travel via the doc's git log, exercised in ClaudeService tests.)
-    await b.claude.runOp({ instruction: 'B fixes typos', spans: [] }, () => {})
+    await b.claude.runForkTurn('/wt', null, { instruction: 'B fixes typos', spans: [] }, () => {})
     const prompt = runner.calls.at(-1)!.args.at(-1)!
     expect(prompt).toContain('In progress right now')
     expect(prompt).toContain('A is rewriting the intro')

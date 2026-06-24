@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import type { ClaudeRequest, ClaudeStatus } from '../../shared/ipc/claude'
 import type { CommitInfo, DocumentInfo } from '../../shared/ipc/document'
 import type { ProcessRunner, ProcResult } from '../infra/ProcessRunner'
-import type { GlobalSettingsStore, Store } from '../infra/Store'
+import type { GlobalSettingsStore } from '../infra/Store'
 import { opPrompt, primePrompt } from './prompts'
 import { ActiveOps, formatSessionDigest } from './sessionBus'
 
@@ -16,22 +16,16 @@ import { ActiveOps, formatSessionDigest } from './sessionBus'
 // generous so a real op is never cut short, but finite so a deadlock frees.
 const DEFAULT_TIMEOUT_MS = 1_800_000 // 30 min
 
-/** One Claude Code CLI session per document, run in the doc's op WORKTREE
- *  (`workDir`, defaults to the doc root). Claude's file sandbox is pinned to the
- *  dir it is primed in, so priming + every op share `workDir` — ops edit that
- *  tree, never the user's checkout, which is what lets Accept run unblocked.
- *  Primed lazily on the first op; ops serialize through a FIFO queue. */
+/** Runs Claude Code CLI turns for one document. Each FORK passes its OWN
+ *  worktree per call (runForkTurn) — Claude's sandbox is pinned to the dir it's
+ *  primed in, so a fork edits its own tree, never the user's checkout, which is
+ *  what lets Accept run unblocked. No queue: the ForkManager serializes a fork's
+ *  own turns and bounds global concurrency. */
 export class ClaudeService {
-  private queue: Promise<unknown> = Promise.resolve()
-  /** In-flight prime, so concurrent first-ops share one priming call. */
-  private priming?: Promise<string>
-
   constructor(
     private runner: ProcessRunner,
-    private store: Store,
     private globalSettings: GlobalSettingsStore,
     private doc: DocumentInfo,
-    private workDir: string = doc.root,
     private timeoutMs: number = DEFAULT_TIMEOUT_MS,
     /** The owning window's session id — tags this session's ops and excludes them
      *  from the cross-session bus digest (DocumentSession passes its id). */
@@ -45,55 +39,10 @@ export class ClaudeService {
     private recentCommits: (n: number) => Promise<CommitInfo[]> = async () => [],
   ) {}
 
-  /** Establish the session without running an op (priming pipeline).
-   *  The signal aborts the underlying CLI call (prime:cancel). */
-  async prime(signal?: AbortSignal): Promise<void> {
-    await this.ensureSession(signal)
-  }
-
-  /** Forget the doc session so the next op primes a fresh one (Settings → Reset),
-   *  dropping accumulated context when the model degrades. Clears BOTH the in-memory
-   *  priming latch AND the persisted id — clearing only the store would let
-   *  ensureSession hand back the cached `priming` promise. Headless claude has no
-   *  /compact, so a fresh prime IS the compact. */
-  resetSession(): void {
-    this.priming = undefined
-    this.store.setProject(this.doc.root, { sessionId: undefined, primedWorkdir: undefined })
-  }
-
-  runOp(
-    req: ClaudeRequest,
-    onStatus: (s: ClaudeStatus) => void,
-  ): Promise<{ opId: string; note: string }> {
-    const opId = randomUUID()
-    onStatus({ opId, state: 'priming' })
-    const result = this.queue.then(() => this.execute(opId, req, onStatus))
-    this.queue = result.catch(() => {}) // a failed op must not poison the queue
-    return result
-  }
-
-  /** A turn of a persistent conversation bubble. Runs on the THREAD's own
-   *  session (isolated from the doc session): `sessionId` null primes a fresh
-   *  one and returns its id; otherwise resumes the given id. Serialized through
-   *  the same queue as doc ops — every CLI call shares the one working tree. */
-  runThreadTurn(
-    sessionId: string | null,
-    req: ClaudeRequest,
-    onStatus: (s: ClaudeStatus) => void,
-  ): Promise<{ opId: string; note: string; sessionId: string }> {
-    const opId = randomUUID()
-    onStatus({ opId, state: 'priming' })
-    const result = this.queue.then(() => this.executeTurn(opId, sessionId, req, onStatus))
-    this.queue = result.catch(() => {})
-    return result
-  }
-
   /** Run one turn of a FORK in its OWN `workDir`: prime a fresh session when
    *  `sessionId` is null (an ephemeral edit, or a chat's first turn), else resume
    *  it. No queue here — the ForkManager serializes a fork's own turns and bounds
-   *  global concurrency, and the fork owns the returned session id. This is the
-   *  stateless primitive the parallel pipeline runs; runOp/runThreadTurn are the
-   *  pre-fork callers, removed once ipc-registry is cut over. */
+   *  global concurrency, and the fork owns the returned session id. */
   async runForkTurn(
     workDir: string,
     sessionId: string | null,
@@ -112,45 +61,13 @@ export class ClaudeService {
     }
   }
 
-  private async execute(
-    opId: string,
-    req: ClaudeRequest,
-    onStatus: (s: ClaudeStatus) => void,
-  ): Promise<{ opId: string; note: string }> {
-    try {
-      const sessionId = await this.ensureSession()
-      return await this.runResume(this.workDir, opId, sessionId, req, onStatus)
-    } catch (err) {
-      onStatus({ opId, state: 'failed', detail: String(err) })
-      throw err
-    }
-  }
-
-  private async executeTurn(
-    opId: string,
-    threadSessionId: string | null,
-    req: ClaudeRequest,
-    onStatus: (s: ClaudeStatus) => void,
-  ): Promise<{ opId: string; note: string; sessionId: string }> {
-    try {
-      const sessionId = threadSessionId ?? (await this.primeSession(this.workDir))
-      const done = await this.runResume(this.workDir, opId, sessionId, req, onStatus)
-      return { ...done, sessionId }
-    } catch (err) {
-      onStatus({ opId, state: 'failed', detail: String(err) })
-      throw err
-    }
-  }
-
-  /** The --resume op CLI call shared by doc ops and thread turns. Runs in
-   *  `workDir` (the op worktree) like every op, so a thread turn's edits land in
-   *  the worktree and capture from there — never the user's checkout.
+  /** The --resume CLI call every fork turn runs in its own `workDir` — edits land
+   *  in the fork's worktree and capture from there, never the user's checkout.
    *
    *  A snapshot of the selected block (req.imageDataUrl) travels as a PNG written
    *  OUTSIDE the worktree (writing it in would leak the image into the captured
    *  diff); Claude reads it via its Read tool, so the shot dir is granted with a
-   *  second --add-dir and removed once the op returns. Living here, not in
-   *  execute(), means a persistent thread bubble can attach a fresh render too. */
+   *  second --add-dir and removed once the turn returns. */
   private async runResume(
     workDir: string,
     opId: string,
@@ -202,43 +119,6 @@ export class ClaudeService {
       signal,
     )
     assertCompleted(proc, this.timeoutMs)
-    return sessionId
-  }
-
-  /** Session id for `workDir`, priming a new one when none was primed there yet.
-   *  A session primed in a DIFFERENT dir (e.g. an older doc-root session) can't
-   *  be resumed here — Claude's sandbox is pinned to the primed dir — so it is
-   *  re-primed. Concurrent first-ops share one priming call (the latch). */
-  private async ensureSession(signal?: AbortSignal): Promise<string> {
-    const proj = this.store.getProject(this.doc.root)
-    if (proj.sessionId && proj.primedWorkdir === this.workDir) return proj.sessionId
-    if (!this.priming) {
-      this.priming = this.primeNewSession(signal).catch((err: unknown) => {
-        this.priming = undefined // a failed prime must not stick — allow retry
-        throw err
-      })
-    }
-    return this.priming
-  }
-
-  private async primeNewSession(signal?: AbortSignal): Promise<string> {
-    const sessionId = randomUUID()
-    const proc = await this.claudeIn(
-      this.workDir,
-      [
-        '-p',
-        '--session-id',
-        sessionId,
-        '--add-dir',
-        this.workDir,
-        '--output-format',
-        'json',
-        primePrompt(this.doc, this.workDir),
-      ],
-      signal,
-    )
-    assertCompleted(proc, this.timeoutMs)
-    this.store.setProject(this.doc.root, { sessionId, primedWorkdir: this.workDir })
     return sessionId
   }
 

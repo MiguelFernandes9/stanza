@@ -92,10 +92,9 @@ export class DocumentSession {
     this.forks = new ForkManager(this.git, forkBase, globalSettings.get().forkConcurrency ?? 12)
     // The bus digest reads the document repo's recent commits fresh per op (the
     // shared, always-live "what changed" source); `this.git` targets info.root.
-    // Each fork runs Claude in its OWN worktree (passed per call to runForkTurn),
-    // so the constructor workDir here only backs the legacy runOp/runThreadTurn.
+    // Each fork runs Claude in its OWN worktree (passed per call to runForkTurn).
     this.claude = new ClaudeService(
-      runner, store, globalSettings, info, info.root, undefined, this.sessionId, activeOps,
+      runner, globalSettings, info, undefined, this.sessionId, activeOps,
       (n) => this.git.log(n),
     )
     this.files = new FileService(info.root, this.git)

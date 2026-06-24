@@ -154,13 +154,16 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IpcChannels.documentHistory, (event) => sessionFor(event).git.log(50))
 
-  // Reset the doc's Claude session: the next op primes a fresh one (drops
-  // accumulated context when the model degrades). Goes through the live service so
-  // its in-memory priming latch is cleared too, not just the persisted id. The
-  // worktree is untouched; ensureSession re-primes there. Headless claude has no
-  // /compact, so a fresh prime IS the "compact".
+  // "Compact" the document's chats: drop every persistent thread's stored session
+  // so its next turn re-primes fresh (headless claude has no /compact, so a fresh
+  // prime IS the compact). Ephemeral block edits already prime a throwaway session
+  // per run, so there's nothing else to reset. The worktrees are untouched.
   ipcMain.handle(IpcChannels.assistantReset, (event): void => {
-    sessionFor(event).claude.resetSession()
+    const root = sessionFor(event).info.root
+    const threads = store.getProject(root).threads ?? []
+    store.setProject(root, {
+      threads: threads.map((t) => ({ ...t, sessionId: undefined, primedWorkdir: undefined })),
+    })
   })
 
   // HISTORY diff viewer: the change a commit introduced (its diff vs its
