@@ -53,6 +53,8 @@ export const api = {
     invoke<DocumentInfo | null>(IpcChannels.documentCreate, req),
   documentRecents: () => invoke<RecentProject[]>(IpcChannels.documentRecents),
   documentHistory: () => invoke<CommitInfo[]>(IpcChannels.documentHistory),
+  /** Clear the open doc's Claude session so the next op primes fresh (Settings). */
+  assistantReset: () => invoke<void>(IpcChannels.assistantReset),
   /** The change a commit (by sha) introduced — its diff vs its parent (HISTORY viewer). */
   documentDiffAt: (sha: string) => invoke<HistoryDiff>(IpcChannels.documentDiffAt, sha),
   /** Restore the document to a commit (by sha) — surfaces as a review proposal

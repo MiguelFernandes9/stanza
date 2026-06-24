@@ -52,7 +52,7 @@ export class ActiveOps {
  *  agent-bus, couldn't (it's a sandboxed editor), then reported that and made NO edit.
  *  Here it's just background with an explicit "do not report or act on this", so the
  *  model uses it and gets on with its own task. */
-export function formatSessionDigest(commits: CommitInfo[], active: ActiveOp[], limit = 12): string | null {
+export function formatSessionDigest(commits: CommitInfo[], active: ActiveOp[], limit = 20): string | null {
   const recent = commits.slice(0, limit) // git log is newest-first
   if (recent.length === 0 && active.length === 0) return null
 

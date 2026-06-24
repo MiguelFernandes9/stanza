@@ -158,6 +158,39 @@ describe('ClaudeService.runOp', () => {
     expect(prompt).toContain('rewriting section 3')
   })
 
+  test('fetches and shows only busCommitLimit commits', async () => {
+    globalSettings.set({ busCommitLimit: 3 })
+    let askedFor = -1
+    const recentCommits = async (n: number) => {
+      askedFor = n
+      return Array.from({ length: 10 }, (_, i) => ({ hash: `h${i}`, subject: `claude: edit ${i}`, iso: 't', kind: 'claude' as const }))
+    }
+    const runner = new MockRunner(() => claudeJson('done'))
+    const service = new ClaudeService(runner, store, globalSettings, doc, undefined, undefined, 'me', new ActiveOps(), recentCommits)
+
+    await service.runOp({ instruction: 'x', spans: [] }, () => {})
+
+    expect(askedFor).toBe(3) // fetched exactly the configured limit
+    const bullets = runner.calls[1]!.args.at(-1)!.split('\n').filter((l) => l.startsWith('- '))
+    expect(bullets).toHaveLength(3) // digest capped at 3
+  })
+
+  test('re-primes with a NEW session after resetSession (assistant reset)', async () => {
+    const runner = new MockRunner(() => claudeJson('done'))
+    const service = new ClaudeService(runner, store, globalSettings, doc)
+
+    await service.runOp({ instruction: 'a', spans: [] }, () => {}) // prime + op
+    const firstId = runner.calls[0]!.args[runner.calls[0]!.args.indexOf('--session-id') + 1]
+
+    service.resetSession()
+    await service.runOp({ instruction: 'b', spans: [] }, () => {}) // must re-prime
+
+    const secondPrime = runner.calls[2]! // [prime, op, prime2, op2]
+    expect(secondPrime.args).toContain('--session-id')
+    const secondId = secondPrime.args[secondPrime.args.indexOf('--session-id') + 1]
+    expect(secondId).not.toBe(firstId)
+  })
+
   test('ops run in a custom workDir (the op worktree), primed + resumed THERE', async () => {
     const runner = new MockRunner(() => claudeJson('ok'))
     const service = new ClaudeService(runner, store, globalSettings, doc, '/tmp/stanza-wt/abc')

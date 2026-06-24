@@ -34,6 +34,10 @@ export interface GlobalSettings {
    *  → omit → CLI default. (Fast mode isn't headless-controllable; effort is the
    *  speed lever instead.) */
   claudeEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  /** How many recent document commits the session-bus digest injects into each op
+   *  prompt — caps token spend on old history. Unset → 20. Raise it to have the
+   *  model consider more history. */
+  busCommitLimit?: number
 }
 
 /** Per-document settings, persisted on the project's Store record (keyed by

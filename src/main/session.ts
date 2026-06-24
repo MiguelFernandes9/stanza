@@ -104,7 +104,7 @@ export class DocumentSession {
     // shared, always-live "what changed" source); `this.git` targets info.root.
     this.claude = new ClaudeService(
       runner, store, globalSettings, info, this.worktreeDir, undefined, this.sessionId, activeOps,
-      () => this.git.log(12),
+      (n) => this.git.log(n),
     )
     this.files = new FileService(info.root, this.git)
     this.snippets = new SnippetCompiler(runner, info.root)

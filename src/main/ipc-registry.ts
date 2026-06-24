@@ -153,6 +153,15 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IpcChannels.documentHistory, (event) => sessionFor(event).git.log(50))
 
+  // Reset the doc's Claude session: the next op primes a fresh one (drops
+  // accumulated context when the model degrades). Goes through the live service so
+  // its in-memory priming latch is cleared too, not just the persisted id. The
+  // worktree is untouched; ensureSession re-primes there. Headless claude has no
+  // /compact, so a fresh prime IS the "compact".
+  ipcMain.handle(IpcChannels.assistantReset, (event): void => {
+    sessionFor(event).claude.resetSession()
+  })
+
   // HISTORY diff viewer: the change a commit introduced (its diff vs its
   // parent) + the files it touched (so the overlay renders one card per file).
   ipcMain.handle(IpcChannels.documentDiffAt, async (event, sha: string) => {

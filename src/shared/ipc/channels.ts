@@ -21,6 +21,7 @@ export const IpcChannels = {
   claudeRunTurn: 'claude:runTurn',    // invoke ClaudeTurnRequest → ClaudeTurnResult (persistent thread bubble)
   claudeStatus: 'claude:status',      // main→renderer event: ClaudeStatus
   claudeHistory: 'claude:history',    // invoke → OpRecord[] (chat pane, F9)
+  assistantReset: 'assistant:reset',  // invoke → void — clear the doc's Claude session so the next op primes fresh
   threadsList: 'threads:list',        // invoke → ThreadRecord[] (persistent bubbles, restored on open)
   threadsDelete: 'threads:delete',    // invoke threadId → void (drop a persistent bubble's record)
   reviewProposal: 'review:proposal',  // main→renderer event: ReviewProposal

@@ -39,16 +39,26 @@ export class ClaudeService {
     /** Shared in-memory registry of in-flight ops across windows — its entries (from
      *  OTHER sessions) feed the "editing right now" part of the digest. */
     private activeOps: ActiveOps = new ActiveOps(),
-    /** Recent commits of the DOCUMENT repo (read fresh per op) — the shared,
+    /** Last `n` commits of the DOCUMENT repo (read fresh per op) — the shared,
      *  always-live "what changed" half of the bus digest. DocumentSession wires this
      *  to its GitClient; defaults to none for isolated callers (tests). */
-    private recentCommits: () => Promise<CommitInfo[]> = async () => [],
+    private recentCommits: (n: number) => Promise<CommitInfo[]> = async () => [],
   ) {}
 
   /** Establish the session without running an op (priming pipeline).
    *  The signal aborts the underlying CLI call (prime:cancel). */
   async prime(signal?: AbortSignal): Promise<void> {
     await this.ensureSession(signal)
+  }
+
+  /** Forget the doc session so the next op primes a fresh one (Settings → Reset),
+   *  dropping accumulated context when the model degrades. Clears BOTH the in-memory
+   *  priming latch AND the persisted id — clearing only the store would let
+   *  ensureSession hand back the cached `priming` promise. Headless claude has no
+   *  /compact, so a fresh prime IS the compact. */
+  resetSession(): void {
+    this.priming = undefined
+    this.store.setProject(this.doc.root, { sessionId: undefined, primedWorkdir: undefined })
   }
 
   runOp(
@@ -132,8 +142,10 @@ export class ClaudeService {
       // Read-on-prompt hook: prepend a digest of recent edits — the document's git
       // history (read fresh from disk, so it's live across every app instance and
       // captures manual edits too) plus any edits in progress in another window now.
-      const commits = await this.recentCommits().catch((): CommitInfo[] => [])
-      const digest = formatSessionDigest(commits, this.activeOps.othersFor(this.doc.root, this.sessionId))
+      // Capped at busCommitLimit (default 20) so old history doesn't burn tokens.
+      const limit = this.globalSettings.get().busCommitLimit ?? 20
+      const commits = await this.recentCommits(limit).catch((): CommitInfo[] => [])
+      const digest = formatSessionDigest(commits, this.activeOps.othersFor(this.doc.root, this.sessionId), limit)
       args.push('--output-format', 'json', '--permission-mode', 'acceptEdits', opPrompt(req, shotPath, digest ?? undefined))
       const proc = await this.claude(args)
       assertCompleted(proc, this.timeoutMs)
