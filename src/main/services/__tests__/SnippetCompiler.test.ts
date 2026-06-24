@@ -22,11 +22,11 @@ describe('SnippetCompiler.renderDiff', () => {
     const runner = new MockRunner((spec) => {
       if (spec.cmd === 'latexdiff') {
         oldWrapper = readFileSync(join(spec.cwd, spec.args[0]), 'utf8')
-        return { code: 0, stdout: '%marked\n\\begin{document}\\end{document}\n', stderr: '', timedOut: false }
+        return { code: 0, stdout: '%marked\n\\begin{document}\\end{document}\n', stderr: '', timedOut: false, truncated: false }
       }
       // tectonic: write the page PDF next to the marked .tex
       writeFileSync(join(spec.cwd, lastArg(spec).replace('.tex', '.pdf')), Buffer.from('%PDF marked'))
-      return { code: 0, stdout: '', stderr: '', timedOut: false }
+      return { code: 0, stdout: '', stderr: '', timedOut: false, truncated: false }
     })
     const compiler = new SnippetCompiler(runner, root)
 
@@ -58,7 +58,7 @@ describe('SnippetCompiler.renderDiff', () => {
         err.code = 'ENOENT'
         throw err
       }
-      return { code: 0, stdout: '', stderr: '', timedOut: false }
+      return { code: 0, stdout: '', stderr: '', timedOut: false, truncated: false }
     })
     const compiler = new SnippetCompiler(runner, root)
 
@@ -70,9 +70,9 @@ describe('SnippetCompiler.renderDiff', () => {
 
   test('surfaces a tectonic compile failure', async () => {
     const runner = new MockRunner((spec) => {
-      if (spec.cmd === 'latexdiff') return { code: 0, stdout: '%marked', stderr: '', timedOut: false }
+      if (spec.cmd === 'latexdiff') return { code: 0, stdout: '%marked', stderr: '', timedOut: false, truncated: false }
       writeFileSync(join(spec.cwd, lastArg(spec).replace('.tex', '.log')), '! Undefined control sequence.\n')
-      return { code: 1, stdout: '', stderr: 'fail', timedOut: false }
+      return { code: 1, stdout: '', stderr: 'fail', timedOut: false, truncated: false }
     })
     const compiler = new SnippetCompiler(runner, root)
 

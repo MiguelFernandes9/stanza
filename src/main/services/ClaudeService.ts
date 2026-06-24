@@ -268,6 +268,9 @@ function assertCompleted(proc: ProcResult, timeoutMs: number): void {
   if (proc.timedOut) {
     throw new Error(`Claude op timed out after ${Math.round(timeoutMs / 1000)}s`)
   }
+  if (proc.truncated) {
+    throw new Error('Claude produced too much output (>64 MB) and was stopped')
+  }
   if (proc.code !== 0) {
     throw new Error(`claude exited with code ${proc.code}: ${proc.stderr || proc.stdout}`)
   }

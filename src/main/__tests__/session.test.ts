@@ -14,7 +14,7 @@ class MockRunner implements ProcessRunner {
   calls: RunSpec[] = []
   run(spec: RunSpec): Promise<ProcResult> {
     this.calls.push(spec)
-    return Promise.resolve({ code: 0, stdout: '', stderr: '', timedOut: false })
+    return Promise.resolve({ code: 0, stdout: '', stderr: '', timedOut: false, truncated: false })
   }
 }
 

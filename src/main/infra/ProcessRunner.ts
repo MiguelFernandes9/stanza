@@ -5,6 +5,10 @@ export interface ProcResult {
   stdout: string
   stderr: string
   timedOut: boolean
+  /** True when output hit `maxBytes` and the child was killed. The returned
+   *  stdout/stderr are then partial; callers should treat the run as failed
+   *  rather than parse the truncated payload. */
+  truncated: boolean
 }
 
 export interface RunSpec {
@@ -13,6 +17,11 @@ export interface RunSpec {
   cwd: string
   timeoutMs?: number // default 120_000
   signal?: AbortSignal
+  /** Per-stream output cap in bytes (default 64 MiB). A runaway child whose
+   *  output approached V8's ~512MB string limit used to throw `RangeError:
+   *  Invalid string length` inside the data handler and crash the main
+   *  process; this bounds each stream well below that. Tunable per call. */
+  maxBytes?: number
   /** Child environment. Omit to inherit the parent process env. Callers pass
    *  this to scrub vars — e.g. ClaudeService strips ANTHROPIC_API_KEY so the
    *  claude CLI uses the logged-in subscription, not a pay-per-token key. */
@@ -24,6 +33,9 @@ export interface ProcessRunner {
 }
 
 const DEFAULT_TIMEOUT_MS = 120_000
+// 64 MiB per stream — an order of magnitude below V8's ~512MB string cap, far
+// above any legitimate claude/tectonic/git/synctex output.
+const DEFAULT_MAX_BYTES = 64 * 1024 * 1024
 
 /** Spawns a child process, collects output, kills on timeout or abort.
  *  Timeout/abort resolve normally (code: null); only spawn failures
@@ -41,9 +53,15 @@ export class DefaultProcessRunner implements ProcessRunner {
         stdio: ['ignore', 'pipe', 'pipe'],
         ...(spec.env ? { env: spec.env } : {}),
       })
-      let stdout = ''
-      let stderr = ''
+      const maxBytes = spec.maxBytes ?? DEFAULT_MAX_BYTES
+      // Collect raw Buffers and decode once at close: a multibyte UTF-8 char
+      // split across two chunks would be mangled by per-chunk `.toString()`.
+      const stdoutChunks: Buffer[] = []
+      const stderrChunks: Buffer[] = []
+      let stdoutBytes = 0
+      let stderrBytes = 0
       let timedOut = false
+      let truncated = false
 
       const timer = setTimeout(() => {
         timedOut = true
@@ -58,15 +76,41 @@ export class DefaultProcessRunner implements ProcessRunner {
         spec.signal?.removeEventListener('abort', onAbort)
       }
 
-      child.stdout.on('data', (chunk: Buffer) => (stdout += chunk))
-      child.stderr.on('data', (chunk: Buffer) => (stderr += chunk))
+      // Cap each stream so a runaway child can never grow one string past V8's
+      // limit (the RangeError crash). On overflow, keep what fits, flag the
+      // truncation, and SIGKILL; later chunks are dropped via the flag.
+      const collect = (chunks: Buffer[], soFar: number, chunk: Buffer): number => {
+        if (truncated) return soFar
+        if (soFar + chunk.length > maxBytes) {
+          const room = maxBytes - soFar
+          if (room > 0) chunks.push(chunk.subarray(0, room))
+          truncated = true
+          child.kill('SIGKILL')
+          return maxBytes
+        }
+        chunks.push(chunk)
+        return soFar + chunk.length
+      }
+
+      child.stdout.on('data', (chunk: Buffer) => {
+        stdoutBytes = collect(stdoutChunks, stdoutBytes, chunk)
+      })
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderrBytes = collect(stderrChunks, stderrBytes, chunk)
+      })
       child.on('error', (err) => {
         cleanup()
         reject(err)
       })
       child.on('close', (code) => {
         cleanup()
-        resolve({ code, stdout, stderr, timedOut })
+        resolve({
+          code,
+          stdout: Buffer.concat(stdoutChunks).toString('utf8'),
+          stderr: Buffer.concat(stderrChunks).toString('utf8'),
+          timedOut,
+          truncated,
+        })
       })
     })
   }

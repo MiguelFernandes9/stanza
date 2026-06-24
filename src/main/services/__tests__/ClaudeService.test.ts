@@ -22,6 +22,7 @@ const claudeJson = (result: string): ProcResult => ({
   stdout: JSON.stringify({ type: 'result', result }),
   stderr: '',
   timedOut: false,
+  truncated: false,
 })
 
 class MockRunner implements ProcessRunner {
@@ -336,6 +337,7 @@ describe('ClaudeService.runOp', () => {
       stdout: '',
       stderr: '',
       timedOut: true,
+      truncated: false,
     }))
     const service = new ClaudeService(runner, store, globalSettings, doc)
     const statuses: ClaudeStatus[] = []
@@ -347,6 +349,24 @@ describe('ClaudeService.runOp', () => {
     expect(store.getProject('/proj').sessionId).toBe(
       'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
     )
+  })
+
+  test('truncated output emits failed and rejects with a clear message', async () => {
+    store.setProject('/proj', { sessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', primedWorkdir: '/proj' })
+    const runner = new MockRunner(() => ({
+      code: null,
+      stdout: '',
+      stderr: '',
+      timedOut: false,
+      truncated: true,
+    }))
+    const service = new ClaudeService(runner, store, globalSettings, doc)
+    const statuses: ClaudeStatus[] = []
+
+    await expect(
+      service.runOp({ instruction: 'x', spans: [] }, (s) => statuses.push(s)),
+    ).rejects.toThrow(/too much output/)
+    expect(statuses.map((s) => s.state)).toEqual(['priming', 'running', 'failed'])
   })
 
   test('ops serialize through a FIFO queue (v1, spec FR6)', async () => {
@@ -397,7 +417,7 @@ describe('ClaudeService.runOp', () => {
     const controller = new AbortController()
     const runner = new MockRunner(() => {
       controller.abort()
-      return { code: null, stdout: '', stderr: '', timedOut: false }
+      return { code: null, stdout: '', stderr: '', timedOut: false, truncated: false }
     })
     const service = new ClaudeService(runner, store, globalSettings, doc)
 

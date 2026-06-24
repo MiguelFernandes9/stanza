@@ -32,6 +32,31 @@ if (process.env.STANZA_USER_DATA) {
   app.setPath('userData', process.env.STANZA_USER_DATA)
 }
 
+// Main-process safety net (mirrors the renderer-crash net below): an uncaught
+// exception or unhandled rejection used to kill the whole app with Electron's
+// fatal dialog. Log it loudly and, once ready, surface a non-fatal dialog
+// instead of exiting, so one bad operation degrades gracefully. The root cause
+// of the known case (a runaway child growing one string past V8's limit) is
+// fixed by ProcessRunner's output cap; this guards any future throw. We never
+// swallow silently — the console.error keeps real bugs visible.
+function reportMainError(label: string, err: unknown): void {
+  console.error(`[stanza] ${label}:`, err)
+  if (!app.isReady()) return
+  try {
+    void dialog.showMessageBox({
+      type: 'error',
+      title: 'Something went wrong',
+      message: 'Stanza hit an unexpected error but stayed open.',
+      detail: err instanceof Error ? err.message : String(err),
+      buttons: ['OK'],
+    })
+  } catch {
+    // The dialog itself failed; the console.error above is the durable record.
+  }
+}
+process.on('uncaughtException', (err) => reportMainError('uncaughtException', err))
+process.on('unhandledRejection', (reason) => reportMainError('unhandledRejection', reason))
+
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1440,

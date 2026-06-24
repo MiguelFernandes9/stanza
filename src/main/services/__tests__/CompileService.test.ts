@@ -20,7 +20,7 @@ const doc: DocumentInfo = {
   texFiles: ['main.tex', 'chapters/ch1.tex'],
 }
 
-const ok: ProcResult = { code: 0, stdout: '', stderr: '', timedOut: false }
+const ok: ProcResult = { code: 0, stdout: '', stderr: '', timedOut: false, truncated: false }
 
 class MockRunner implements ProcessRunner {
   calls: RunSpec[] = []
@@ -37,7 +37,7 @@ class MockRunner implements ProcessRunner {
 function hangUntilAborted(spec: RunSpec): Promise<ProcResult> {
   return new Promise((resolve) => {
     spec.signal!.addEventListener('abort', () =>
-      resolve({ code: null, stdout: '', stderr: '', timedOut: false }),
+      resolve({ code: null, stdout: '', stderr: '', timedOut: false, truncated: false }),
     )
   })
 }
