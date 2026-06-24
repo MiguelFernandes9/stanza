@@ -750,6 +750,16 @@ export function binBlocks(
   // separator, so there is no gap constant; an ordinary block (nothing inside it) is untouched.
   const allBoxes: { id: string; b: PdfRect }[] = []
   for (const [id, bs] of boxesById) for (const b of bs) allBoxes.push({ id, b })
+  // Self-overlap count of one block's boxes — a re-box is only kept if it does not INCREASE
+  // this (a gutter-crossing unit can leave a thin right-column sliver overlapping the left box).
+  const selfOverlaps = (arr: PdfRect[]): number => {
+    let n = 0
+    for (let i = 0; i < arr.length; i++) for (let j = i + 1; j < arr.length; j++) {
+      const a = arr[i]!, c = arr[j]!
+      if (a.page === c.page && a.x < c.x + c.width && c.x < a.x + a.width && a.y < c.y + c.height && c.y < a.y + a.height) n++
+    }
+    return n
+  }
   for (const [id, bs] of boxesById) {
     const us = byBlock.get(id)
     if (!us || !bs.length) continue
@@ -790,7 +800,18 @@ export function binBlocks(
       for (const ccu of clusters.values()) rebuilt.push(buildBox(fwd, page, col, ccu, col !== 'full'))
       changed = true
     }
-    if (changed) { rebuilt.sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x); boxesById.set(id, rebuilt) }
+    // The main build's l/r fold merges vertically-overlapping left+right boxes — right for a
+    // mis-split single line, WRONG for a genuine 2-column paragraph whose body fills the
+    // left-column bottom AND the right-column top (those overlap in y, so the fold fuses them
+    // into one mis-placed box and drops a column). A mis-split line is already split+re-homed
+    // upstream (the gutter-split + forward-containment override), so if this block still has
+    // units in a column the main build produced NO box for, the fold over-merged — prefer the
+    // per-cell boxes, one per column.
+    const boxCols = new Set(bs.map((b) => b.col ?? 'full'))
+    const foldDroppedCol = [...byCell.keys()].some((k) => { const c = k.slice(k.indexOf('|') + 1); return c !== 'full' && !boxCols.has(c as PdfCol) })
+    if ((changed || foldDroppedCol) && selfOverlaps(rebuilt) <= selfOverlaps(bs)) {
+      rebuilt.sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x); boxesById.set(id, rebuilt)
+    }
   }
 
   const contentTopByPage = new Map<number, number>()
