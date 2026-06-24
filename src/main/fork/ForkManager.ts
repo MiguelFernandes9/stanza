@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { existsSync, rmSync } from 'node:fs'
+import { existsSync, realpathSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { Semaphore } from '../infra/Semaphore'
 import { Fork, type ForkLifetime, type ForkScope } from './Fork'
@@ -101,15 +101,32 @@ export class ForkManager {
   }
 
   /** On open: drop worktrees under this doc's namespace left by a crash/quit
-   *  (admin entries with no live fork), so re-adding a path can't collide. */
+   *  (admin entries with no live fork), so re-adding a path can't collide.
+   *  Compares in CANONICAL form: git records realpath'd worktree paths, while
+   *  our baseDir/worktreeDir come from os.tmpdir() — which on macOS lives under
+   *  the /var→/private/var symlink. A raw string compare would never match
+   *  (orphans leak) or could mis-target a live fork. */
   async sweepStale(): Promise<void> {
     if (!(await this.git.isRepo())) return
-    const live = new Set([...this.forks.values()].map((f) => f.worktreeDir))
+    const base = this.canonical(this.baseDir)
+    const live = new Set([...this.forks.values()].map((f) => this.canonical(f.worktreeDir)))
     for (const dir of await this.git.listWorktrees()) {
-      if (dir.startsWith(this.baseDir + '/') && !live.has(dir)) {
+      const c = this.canonical(dir)
+      if (c.startsWith(base + '/') && !live.has(c)) {
         await this.git.removeWorktree(dir)
       }
     }
     await this.git.pruneWorktrees()
+  }
+
+  /** Resolve a path to its symlink-free form so it matches the canonical paths
+   *  git records. Falls back to the raw path when it isn't on disk (a vanished
+   *  worktree we'd prune anyway). */
+  private canonical(p: string): string {
+    try {
+      return realpathSync(p)
+    } catch {
+      return p
+    }
   }
 }

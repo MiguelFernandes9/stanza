@@ -1,5 +1,8 @@
-import { existsSync } from 'node:fs'
-import { describe, expect, test } from 'vitest'
+import { randomUUID } from 'node:crypto'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, unlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { ForkManager, type ForkGit } from '../ForkManager'
 
 /** Records git calls without spawning — real worktree behavior is covered by
@@ -27,9 +30,19 @@ class FakeGit implements ForkGit {
   }
 }
 
+// A unique, real-tmp namespace per test — never a literal root path, since the
+// manager calls the REAL node:fs rmSync on baseDir / worktree dirs.
+let base: string
+beforeEach(() => {
+  base = join(tmpdir(), `stanza-fm-${randomUUID()}`)
+})
+afterEach(() => {
+  rmSync(base, { recursive: true, force: true })
+})
+
 describe('ForkManager — scheduling', () => {
   test('pool caps concurrency across different forks', async () => {
-    const fm = new ForkManager(new FakeGit(), '/base', 2)
+    const fm = new ForkManager(new FakeGit(), base, 2)
     let active = 0
     let peak = 0
     const work = () => {
@@ -46,8 +59,8 @@ describe('ForkManager — scheduling', () => {
     expect(peak).toBeGreaterThan(0)
   })
 
-  test("a fork serialises its OWN turns (different forks do not)", async () => {
-    const fm = new ForkManager(new FakeGit(), '/base', 8)
+  test('a fork serialises its OWN turns (different forks do not)', async () => {
+    const fm = new ForkManager(new FakeGit(), base, 8)
     const fork = fm.create({ kind: 'doc' }, 'persistent')
     const order: string[] = []
     const t1 = fm.schedule(fork, async () => {
@@ -64,20 +77,24 @@ describe('ForkManager — scheduling', () => {
   })
 
   test('a failed turn does not poison the fork chain', async () => {
-    const fm = new ForkManager(new FakeGit(), '/base', 4)
+    const fm = new ForkManager(new FakeGit(), base, 4)
     const fork = fm.create({ kind: 'doc' }, 'persistent')
-    await expect(fm.schedule(fork, async () => { throw new Error('boom') })).rejects.toThrow('boom')
+    await expect(
+      fm.schedule(fork, async () => {
+        throw new Error('boom')
+      }),
+    ).rejects.toThrow('boom')
     await expect(fm.schedule(fork, async () => 'ok')).resolves.toBe('ok')
   })
 })
 
 describe('ForkManager — fork allocation', () => {
   test('each fork gets a distinct worktree dir under the base', () => {
-    const fm = new ForkManager(new FakeGit(), '/base', 4)
+    const fm = new ForkManager(new FakeGit(), base, 4)
     const a = fm.create({ kind: 'doc' }, 'ephemeral')
     const b = fm.create({ kind: 'blocks', spans: [] }, 'ephemeral')
-    expect(a.worktreeDir).toBe(`/base/${a.forkId}`)
-    expect(b.worktreeDir).toBe(`/base/${b.forkId}`)
+    expect(a.worktreeDir).toBe(join(base, a.forkId))
+    expect(b.worktreeDir).toBe(join(base, b.forkId))
     expect(a.forkId).not.toBe(b.forkId)
     expect(fm.get(a.forkId)).toBe(a)
     expect(fm.list()).toHaveLength(2)
@@ -87,7 +104,7 @@ describe('ForkManager — fork allocation', () => {
 describe('ForkManager — worktree lifecycle', () => {
   test('ensureWorktree adds a detached worktree (idempotent)', async () => {
     const git = new FakeGit()
-    const fm = new ForkManager(git, '/base', 4)
+    const fm = new ForkManager(git, base, 4)
     const fork = fm.create({ kind: 'doc' }, 'ephemeral')
     await fm.ensureWorktree(fork)
     expect(git.calls).toContain(`add ${fork.worktreeDir}`)
@@ -97,7 +114,7 @@ describe('ForkManager — worktree lifecycle', () => {
   test('ensureWorktree is a no-op when the doc is not a repo', async () => {
     const git = new FakeGit()
     git.repo = false
-    const fm = new ForkManager(git, '/base', 4)
+    const fm = new ForkManager(git, base, 4)
     const fork = fm.create({ kind: 'doc' }, 'ephemeral')
     await fm.ensureWorktree(fork)
     expect(git.calls).not.toContain(`add ${fork.worktreeDir}`)
@@ -105,7 +122,7 @@ describe('ForkManager — worktree lifecycle', () => {
 
   test('resolve removes an ephemeral fork + its worktree; keeps a persistent one', async () => {
     const git = new FakeGit()
-    const fm = new ForkManager(git, '/base', 4)
+    const fm = new ForkManager(git, base, 4)
     const eph = fm.create({ kind: 'doc' }, 'ephemeral')
     const persistent = fm.create({ kind: 'doc' }, 'persistent')
     await fm.ensureWorktree(eph)
@@ -122,7 +139,7 @@ describe('ForkManager — worktree lifecycle', () => {
 
   test('close tears down a persistent fork', async () => {
     const git = new FakeGit()
-    const fm = new ForkManager(git, '/base', 4)
+    const fm = new ForkManager(git, base, 4)
     const fork = fm.create({ kind: 'doc' }, 'persistent')
     await fm.ensureWorktree(fork)
     await fm.close(fork.forkId)
@@ -130,29 +147,59 @@ describe('ForkManager — worktree lifecycle', () => {
     expect(git.worktrees).not.toContain(fork.worktreeDir)
   })
 
-  test('disposeAll removes every fork worktree and prunes', async () => {
+  test('disposeAll removes every fork worktree, prunes, and wipes the namespace dir', async () => {
     const git = new FakeGit()
-    const fm = new ForkManager(git, '/base', 4)
+    const fm = new ForkManager(git, base, 4)
     const a = fm.create({ kind: 'doc' }, 'ephemeral')
     const b = fm.create({ kind: 'doc' }, 'persistent')
     await fm.ensureWorktree(a)
     await fm.ensureWorktree(b)
+    mkdirSync(base, { recursive: true }) // a real dir on disk so the wipe is observable
+
     await fm.disposeAll()
+
     expect(git.worktrees).toHaveLength(0)
     expect(git.calls).toContain('prune')
     expect(fm.list()).toHaveLength(0)
-    expect(existsSync('/base')).toBe(false) // rmSync of a missing dir is a no-op, never throws
+    expect(existsSync(base)).toBe(false) // namespace dir actually removed
   })
 
   test('sweepStale removes worktrees under the base not backed by a live fork', async () => {
     const git = new FakeGit()
-    const fm = new ForkManager(git, '/base', 4)
+    const fm = new ForkManager(git, base, 4)
     const live = fm.create({ kind: 'doc' }, 'persistent')
     await fm.ensureWorktree(live)
-    git.worktrees.push('/base/orphan-1', '/other/keep') // orphan under base + unrelated
+    git.worktrees.push(join(base, 'orphan-1'), '/other/keep') // orphan under base + unrelated
     await fm.sweepStale()
-    expect(git.worktrees).not.toContain('/base/orphan-1')
-    expect(git.worktrees).toContain('/base/' + live.forkId) // live kept
+    expect(git.worktrees).not.toContain(join(base, 'orphan-1'))
+    expect(git.worktrees).toContain(join(base, live.forkId)) // live kept
     expect(git.worktrees).toContain('/other/keep') // outside base, untouched
+  })
+
+  test("sweepStale matches git's canonical paths through a symlinked base (realpath)", async () => {
+    // git records realpath'd worktree paths; our base comes from os.tmpdir()
+    // (under the /var→/private/var symlink on macOS). Model that exactly: the
+    // manager's base is the LINK, but git reports paths under the REAL dir. A
+    // raw string compare would leak the orphan (and could mis-sweep the live one).
+    const realBase = mkdtempSync(join(tmpdir(), 'stanza-fm-real-'))
+    const linkBase = join(tmpdir(), `stanza-fm-link-${randomUUID()}`)
+    symlinkSync(realBase, linkBase)
+    try {
+      const git = new FakeGit()
+      const fm = new ForkManager(git, linkBase, 4)
+      const live = fm.create({ kind: 'doc' }, 'persistent')
+      mkdirSync(live.worktreeDir, { recursive: true }) // exists, so realpath resolves it
+      mkdirSync(join(realBase, 'orphan'), { recursive: true })
+      // What git would report: canonical (symlink-free) paths.
+      git.worktrees.push(realpathSync(live.worktreeDir), realpathSync(join(realBase, 'orphan')))
+
+      await fm.sweepStale()
+
+      expect(git.worktrees).toContain(realpathSync(live.worktreeDir)) // live fork kept
+      expect(git.worktrees).not.toContain(realpathSync(join(realBase, 'orphan'))) // orphan swept
+    } finally {
+      unlinkSync(linkBase) // remove the symlink itself, not its target
+      rmSync(realBase, { recursive: true, force: true })
+    }
   })
 })
