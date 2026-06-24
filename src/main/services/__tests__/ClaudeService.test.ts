@@ -81,7 +81,7 @@ describe('ClaudeService.runOp', () => {
       'json',
       '--permission-mode',
       'acceptEdits',
-      'Instruction: tighten the intro\nScope: whole document.\nApply the edits directly to the files. Reply with a one-paragraph summary.',
+      'Instruction: tighten the intro\nScope: the whole project — you can read and edit any file. Do whatever the instruction asks: answer a question (changing nothing), make a small targeted edit, or a sweeping document-wide change. Apply edits wherever they belong.\nIf the instruction calls for changes, apply them directly to the files; if it is a question, make no edits. Reply with a one-paragraph summary — your answer when it was a question.',
     ])
     expect(note).toBe('done')
   })

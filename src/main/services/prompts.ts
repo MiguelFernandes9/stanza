@@ -14,16 +14,21 @@ given spans unless the instruction explicitly requires updating cross-references
 labels, or the bibliography. Never run git. Never compile. Reply with a one-paragraph
 summary of what you changed.`
 
-export const opPrompt = (req: ClaudeRequest, imagePath?: string, injectedContext?: string) =>
-  `${injectedContext ? `${injectedContext}\n\n` : ''}Instruction: ${req.instruction}
-${
-  req.spans.length === 0
-    ? 'Scope: whole document.'
+export const opPrompt = (req: ClaudeRequest, imagePath?: string, injectedContext?: string) => {
+  const wholeDoc = req.spans.length === 0
+  const scope = wholeDoc
+    ? // The ⌘J chat is the general agent: a session with full access to the whole
+      // project that can do anything the instruction asks.
+      'Scope: the whole project — you can read and edit any file. Do whatever the instruction asks: answer a question (changing nothing), make a small targeted edit, or a sweeping document-wide change. Apply edits wherever they belong.'
     : 'Scope (edit only inside these spans):\n' +
       req.spans.map((s) => `- ${s.file} lines ${s.startLine}-${s.endLine}`).join('\n')
-}${
-  imagePath
+  const image = imagePath
     ? `\nA screenshot of the selected block as it renders in the PDF is at ${imagePath} — Read it to see the rendered output before editing.`
     : ''
+  const closing = wholeDoc
+    ? 'If the instruction calls for changes, apply them directly to the files; if it is a question, make no edits. Reply with a one-paragraph summary — your answer when it was a question.'
+    : 'Apply the edits directly to the files. Reply with a one-paragraph summary.'
+  return `${injectedContext ? `${injectedContext}\n\n` : ''}Instruction: ${req.instruction}
+${scope}${image}
+${closing}`
 }
-Apply the edits directly to the files. Reply with a one-paragraph summary.`

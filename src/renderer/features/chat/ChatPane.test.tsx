@@ -21,35 +21,56 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
+// Drive the controlled <textarea> the way React expects (native value setter +
+// input event) — the repo carries no RTL user-event helper.
+function type(el: HTMLTextAreaElement, text: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
+  act(() => {
+    setter.call(el, text)
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
 const props = (over: Partial<Parameters<typeof ChatPane>[0]> = {}): Parameters<typeof ChatPane>[0] => ({
   messages: [],
   busy: false,
-  chips: [],
-  onRemoveChip: vi.fn(),
   onSubmit: vi.fn(),
   onResolveOp: vi.fn(),
   ...over
 })
 
-describe('ChatPane — block mode deactivates the assistant composer (F4)', () => {
-  it('locks the composer and shows the switch-to-Read hint when disabled', () => {
+describe('ChatPane — the one whole-document assistant (⌘J)', () => {
+  it('is always usable and submits the typed instruction whole-document on ⌘↵', () => {
     const onSubmit = vi.fn()
-    render(<ChatPane {...props({ disabled: true, onSubmit })} />)
+    render(<ChatPane {...props({ onSubmit })} />)
     const textarea = container.querySelector('textarea')!
-    expect(textarea.disabled).toBe(true)
-    const run = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('Run'))!
-    expect(run.hasAttribute('disabled')).toBe(true)
-    expect(container.textContent).toContain('Read mode')
-    // ⌘↵ while disabled must not submit.
+    // Independent of block selection: never disabled, never block-scoped, no
+    // "switch to Read mode" hint.
+    expect(textarea.disabled).toBe(false)
+    expect(container.textContent).toContain('Whole document')
+    expect(container.textContent).not.toContain('Read mode')
+
+    type(textarea, 'tighten the intro')
+    act(() => textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true })))
+    expect(onSubmit).toHaveBeenCalledWith('tighten the intro')
+  })
+
+  it('does not submit an empty instruction', () => {
+    const onSubmit = vi.fn()
+    render(<ChatPane {...props({ onSubmit })} />)
+    const textarea = container.querySelector('textarea')!
     act(() => textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true })))
     expect(onSubmit).not.toHaveBeenCalled()
   })
 
-  it('leaves the composer usable when not disabled', () => {
-    render(<ChatPane {...props({ disabled: false })} />)
+  it('disables Run and refuses to submit while a turn is in flight (busy)', () => {
+    const onSubmit = vi.fn()
+    render(<ChatPane {...props({ busy: true, onSubmit })} />)
     const textarea = container.querySelector('textarea')!
-    expect(textarea.disabled).toBe(false)
-    expect(container.textContent).toContain('edits the')
-    expect(container.textContent).not.toContain('Read mode')
+    const run = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('Run'))!
+    expect(run.hasAttribute('disabled')).toBe(true)
+    type(textarea, 'later')
+    act(() => textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true })))
+    expect(onSubmit).not.toHaveBeenCalled()
   })
 })
