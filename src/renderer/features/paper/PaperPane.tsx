@@ -19,7 +19,7 @@ import { WholeDocRail } from './WholeDocRail'
 import { FillerPage } from './FillerPage'
 import { PaperToolbar } from './PaperToolbar'
 import { useMarqueeSelect } from './useMarqueeSelect'
-import { binBlocks, blockForSourceLine, blockGeometryRects, cardAnchorTops, combinedSpanLabel, expandIds, isMathEnvName, isTightAbove, spanLabel, washBoxes } from './paperModel'
+import { binBlocks, blockForSourceLine, blockGeometryRects, combinedSpanLabel, expandIds, isMathEnvName, isTightAbove, spanLabel, viewportAnchorTops, washBoxes } from './paperModel'
 import type { AttributedUnit } from './paperModel'
 import { resolveToKnownFile } from '@renderer/lib/paths'
 import type { BlockMark, PageBlock } from './paperModel'
@@ -129,6 +129,14 @@ export function PaperPane(props: Props): JSX.Element {
   // its badge/connector/bubble are skipped until a real box lands.
   const [anchorTops, setAnchorTops] = useState<Record<number, number | null>>({})
   const [tops, setTops] = useState<Record<number, number>>({})
+  // Scroll position drives the sticky rail cards (they follow the block across
+  // pages). `scrolling` drops the cards' `top` transition mid-scroll so the
+  // follow is instant; it relaxes ~120ms after the last scroll so open/close
+  // re-stacks still animate (M3-2). scrollTop is rAF-throttled.
+  const [scrollTop, setScrollTop] = useState(0)
+  const [scrolling, setScrolling] = useState(false)
+  const scrollRaf = useRef<number | null>(null)
+  const scrollIdle = useRef<number | null>(null)
   // Bubbles open on demand; a fresh compose task auto-opens exactly once.
   const [openIds, setOpenIds] = useState<number[]>([])
   const autoOpened = useRef<Set<number>>(new Set())
@@ -406,13 +414,41 @@ export function PaperPane(props: Props): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.revealBlock?.nonce, geo != null])
 
-  // Anchor every task to its first block's box (geometry, not the DOM, so a
-  // card stays aligned even when its page is virtualized out — BUG-17), then
-  // collision-stack only the OPEN bubbles (design: 14px min gap). Whole-doc
-  // tasks have no block box → null anchor → skipped here; they get a pane-pinned
-  // marker instead (M3-3).
+  // rAF-throttled scroll tracking: feeds `scrollTop` to the sticky-anchor effect
+  // and flags `scrolling` (relaxed 120ms after the last event) to drop the
+  // cards' `top` transition while following.
+  const onPaperScroll = (): void => {
+    if (scrollRaf.current == null) {
+      scrollRaf.current = requestAnimationFrame(() => {
+        scrollRaf.current = null
+        setScrollTop(scrollRef.current?.scrollTop ?? 0)
+      })
+    }
+    setScrolling(true)
+    if (scrollIdle.current != null) clearTimeout(scrollIdle.current)
+    scrollIdle.current = window.setTimeout(() => setScrolling(false), 120)
+  }
+  useEffect(
+    () => () => {
+      if (scrollRaf.current != null) cancelAnimationFrame(scrollRaf.current)
+      if (scrollIdle.current != null) clearTimeout(scrollIdle.current)
+    },
+    []
+  )
+
+  // Anchor every task to its block's box on the page in view — the badge + bubble
+  // sit AT the block and FOLLOW it across the pages it spans, hopping to the
+  // continuation segment at each break ([[viewportAnchorTops]]). Geometry, not the
+  // DOM, so a card stays placed even when its page is virtualized out (BUG-17).
+  // Then collision-stack only the OPEN bubbles (design: 14px min gap). Whole-doc
+  // tasks have no box → null anchor → skipped; they get a pane-pinned marker
+  // instead (M3-3).
   useLayoutEffect(() => {
-    const anchors = cardAnchorTops(state.tasks, blockRects, geo, zoom)
+    const anchors = viewportAnchorTops(state.tasks, blockRects, geo, zoom, {
+      scrollTop,
+      height: scrollRef.current?.clientHeight ?? 0,
+      pad: PAD
+    })
     const anchorById: Record<number, number | null> = {}
     for (const a of anchors) anchorById[a.id] = a.top
     setAnchorTops((prev) => (JSON.stringify(prev) === JSON.stringify(anchorById) ? prev : anchorById))
@@ -598,6 +634,7 @@ export function PaperPane(props: Props): JSX.Element {
         ref={scrollRef}
         data-testid="paper-scroll"
         onPointerDown={onMarqueeDown}
+        onScroll={onPaperScroll}
         style={{ flex: 1, overflow: 'auto', scrollbarGutter: 'stable', background: 'var(--surface-canvas)' }}
       >
         {displayPdf ? (
@@ -725,7 +762,7 @@ export function PaperPane(props: Props): JSX.Element {
                         alignItems: 'center',
                         justifyContent: 'center',
                         transform: isOpen ? 'scale(1.08)' : 'none',
-                        transition: 'top var(--dur-base, 200ms) var(--ease-out)',
+                        transition: scrolling ? 'none' : 'top var(--dur-base, 200ms) var(--ease-out)',
                         zIndex: 6,
                         pointerEvents: 'auto',
                         animation: t.phase === 'busy' ? 'stz-pulse 1.1s var(--ease-in-out) infinite' : 'none'
@@ -763,7 +800,7 @@ export function PaperPane(props: Props): JSX.Element {
                         width: RAIL,
                         zIndex: 7,
                         pointerEvents: 'auto',
-                        transition: 'top var(--dur-base, 200ms) var(--ease-out)'
+                        transition: scrolling ? 'none' : 'top var(--dur-base, 200ms) var(--ease-out)'
                       }}
                     >
                       {t.persistent && t.phase !== 'compose' ? (
