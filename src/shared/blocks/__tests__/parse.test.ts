@@ -142,12 +142,16 @@ describe('standalone structural macros', () => {
     '\\end{document}', //             11
   ].join('\n')
 
-  test('a title page of \\maketitle/\\tableofcontents/\\include yields no paragraph block', () => {
+  test('a title page of \\maketitle/\\tableofcontents/\\include yields no paragraph block (\\bibliography IS a block)', () => {
     const roots = parseBlocks(FILE, TITLE_DOC)
-    expect(roots.map((b) => b.kind)).toEqual(['preamble'])
-    // The lines that hold \maketitle / \tableofcontents are not a block.
+    expect(roots.map((b) => b.kind)).toEqual(['preamble', 'environment'])
+    // A bare \maketitle (no \title before it) / \tableofcontents are not a block.
     expect(blockAtLine(roots, FILE, 3)).toBe(null)
     expect(blockAtLine(roots, FILE, 4)).toBe(null)
+    expect(blockAtLine(roots, FILE, 6)).toBe(null)
+    // \bibliography{refs} (line 10) IS the addressable reference-list block.
+    expect(roots[1]).toMatchObject({ kind: 'environment', name: 'bibliography' })
+    expect(roots[1]!.span).toMatchObject({ startLine: 10, endLine: 10 })
   })
 
   test('a standalone macro flushes the paragraph and never joins one', () => {
@@ -155,6 +159,80 @@ describe('standalone structural macros', () => {
     expect(roots.map((b) => b.kind)).toEqual(['paragraph', 'paragraph'])
     expect(roots[0]!.span).toMatchObject({ startLine: 1, endLine: 1 })
     expect(roots[1]!.span).toMatchObject({ startLine: 3, endLine: 3 })
+  })
+})
+
+describe('\\bibliography / \\printbibliography as a block (Bug A)', () => {
+  // line numbers:                          1
+  const DOC = [
+    '\\begin{document}', //                 1
+    '\\section{Conclusion}', //             2
+    'We summarize the results.', //         3
+    '\\bibliographystyle{IEEEtran}', //     4
+    '\\bibliography{references}', //         5
+    '\\end{document}', //                   6
+  ].join('\n')
+
+  test('\\bibliography is a top-level environment block named bibliography', () => {
+    const roots = parseBlocks(FILE, DOC)
+    // sibling of the section, NOT a child — the reference list is its own block
+    expect(roots.map((b) => b.kind)).toEqual(['section', 'environment'])
+    const bib = roots[1]!
+    expect(bib).toMatchObject({ kind: 'environment', name: 'bibliography' })
+    expect(bib.span).toMatchObject({ startLine: 5, endLine: 5 })
+    // \bibliographystyle stays invisible (no block)
+    expect(blockAtLine(roots, FILE, 4)).toBe(null)
+    // backmatter: the bibliography closes the section, not nested under Conclusion
+    expect(roots[0]!.children.some((c) => c.name === 'bibliography')).toBe(false)
+  })
+
+  test('\\printbibliography (biblatex) is also a bibliography block', () => {
+    const roots = parseBlocks(FILE, '\\begin{document}\n\\printbibliography\n\\end{document}')
+    expect(roots.map((b) => b.kind)).toEqual(['environment'])
+    expect(roots[0]).toMatchObject({ kind: 'environment', name: 'bibliography' })
+  })
+})
+
+describe('front matter (\\title…\\maketitle) as one block (Bug B)', () => {
+  // line numbers:                          1
+  const DOC = [
+    '\\begin{document}', //                 1
+    '\\title{A Paper%', //                  2
+    '\\thanks{Funded by X.}}', //           3
+    '', //                                  4
+    '\\author{Jane Doe}', //               5
+    '', //                                  6
+    '\\maketitle', //                       7
+    '', //                                  8
+    '\\section{Intro}', //                  9
+    'Body.', //                            10
+    '\\end{document}', //                  11
+  ].join('\n')
+
+  test('title, author, thanks and maketitle fold into one front-matter block', () => {
+    const roots = parseBlocks(FILE, DOC)
+    // ONE front-matter block then the section — NOT separate title/author paragraphs
+    expect(roots.map((b) => b.kind)).toEqual(['environment', 'section'])
+    const fm = roots[0]!
+    expect(fm).toMatchObject({ kind: 'environment', name: 'frontmatter' })
+    // spans the editable source (\title) THROUGH \maketitle and the gap before the
+    // next block — the \thanks footnote backward-maps to the line(s) just after
+    // \maketitle, so the block must reach past it (closes before \section at line 9)
+    expect(fm.span).toMatchObject({ startLine: 2, endLine: 8 })
+  })
+
+  test('the \\maketitle, \\title and \\thanks lines all resolve to the front-matter block', () => {
+    const roots = parseBlocks(FILE, DOC)
+    const fm = roots[0]!
+    expect(blockAtLine(roots, FILE, 2)).toBe(fm) // \title
+    expect(blockAtLine(roots, FILE, 3)).toBe(fm) // \thanks footnote source
+    expect(blockAtLine(roots, FILE, 7)).toBe(fm) // \maketitle (rendered rows map here)
+  })
+
+  test('a bare \\maketitle with no front matter stays a non-block standalone', () => {
+    const roots = parseBlocks(FILE, 'Alpha.\n\\maketitle\nBeta.')
+    expect(roots.map((b) => b.kind)).toEqual(['paragraph', 'paragraph'])
+    expect(blockAtLine(roots, FILE, 2)).toBe(null)
   })
 })
 

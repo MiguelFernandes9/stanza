@@ -30,21 +30,20 @@ const ENVIRONMENT_TYPES = new Set(['environment', 'mathenv', 'verbatim'])
 const SECTIONING_ENVS = new Set(['thebibliography', 'theindex'])
 
 /** Structural macros carrying no prose: they flush the open paragraph and are
- *  skipped, never a selectable block — otherwise \maketitle/\tableofcontents/
- *  \include forge a bogus prose block over the title page. `\par` is an explicit
- *  paragraph terminator; without it, prose split by `\par` inside a font group
- *  fuses into one over-reaching block (M2-4). */
+ *  skipped, never a selectable block — otherwise \tableofcontents/\include forge
+ *  a bogus prose block over the title page. `\par` is an explicit paragraph
+ *  terminator; without it, prose split by `\par` inside a font group fuses into
+ *  one over-reaching block (M2-4). (`\maketitle`, `\bibliography`,
+ *  `\printbibliography` are NOT here — they render addressable regions and get
+ *  their own blocks; see FRONTMATTER_MACROS and the walkScope branches.) */
 const STANDALONE_MACROS = new Set([
   'par',
-  'maketitle',
   'tableofcontents',
   'listoffigures',
   'listoftables',
   'include',
   'input',
-  'bibliography',
   'bibliographystyle',
-  'printbibliography',
   'newpage',
   'clearpage',
   'appendix',
@@ -52,6 +51,15 @@ const STANDALONE_MACROS = new Set([
   'mainmatter',
   'backmatter',
 ])
+
+/** Front-matter source macros. `\title`/`\author`/`\date` carry the title-page
+ *  text but render nothing themselves — `\maketitle` does, in a different page
+ *  region (title+author at the top, a `\thanks` footnote at the column bottom),
+ *  and synctex backward-maps ALL of it to the `\maketitle` line. So they fold
+ *  into ONE front-matter block spanning the editable source (`\title`) through
+ *  `\maketitle`: that span carries the source Claude edits AND the line the
+ *  rendered rows map to, so the title page is selectable (Bug B). */
+const FRONTMATTER_MACROS = new Set(['title', 'author', 'date'])
 
 /** Invisible marker macros that emit nothing. Unlike STANDALONE_MACROS they must
  *  NOT flush: a bare `\label` after `\chapter` would become a phantom paragraph
@@ -174,6 +182,10 @@ function walkBody(file: string, nodes: Ast.Node[]): BlockNode[] {
 function walkScope(file: string, nodes: Ast.Node[], out: BlockNode[]): void {
   const sectionStack: { block: BlockNode; level: number }[] = []
   let paragraph: { startLine: number; endLine: number } | null = null
+  // Open front-matter span (\title…), closed by \maketitle. Survives the blank
+  // lines (parbreaks) between \title/\author/\maketitle — so it is NOT tied to
+  // the paragraph accumulator.
+  let frontMatter: { startLine: number; endLine: number } | null = null
 
   const attach = (b: BlockNode) => {
     const parent = sectionStack[sectionStack.length - 1]
@@ -184,6 +196,13 @@ function walkScope(file: string, nodes: Ast.Node[], out: BlockNode[]): void {
     if (!paragraph) return
     attach(block('paragraph', file, paragraph.startLine, paragraph.endLine))
     paragraph = null
+  }
+
+  const flushFrontMatter = (throughLine?: number) => {
+    if (!frontMatter) return
+    const end = throughLine !== undefined ? Math.max(frontMatter.endLine, throughLine) : frontMatter.endLine
+    attach(block('environment', file, frontMatter.startLine, end, 'frontmatter'))
+    frontMatter = null
   }
 
   const joinParagraph = (startLine: number, endLine: number) => {
@@ -209,6 +228,35 @@ function walkScope(file: string, nodes: Ast.Node[], out: BlockNode[]): void {
         flushParagraph()
         continue
       }
+      if (node.type === 'macro' && (node.content === 'bibliography' || node.content === 'printbibliography')) {
+        // \bibliography{...} / \printbibliography render the BibTeX/biblatex reference
+        // list. Make it ONE block (like an inline thebibliography env) so the reference
+        // region is addressable, even though the entries come from the .bbl, not the
+        // .tex. Backmatter: close open sections so it attaches at the root (Bug A).
+        flushParagraph()
+        flushFrontMatter()
+        sectionStack.length = 0
+        attach(block('environment', file, start.line, end.line, 'bibliography'))
+        continue
+      }
+      if (node.type === 'macro' && FRONTMATTER_MACROS.has(node.content)) {
+        // \title/\author/\date: open or extend the front-matter span; emit nothing
+        // yet (the block is closed by \maketitle). flush any open prose first.
+        flushParagraph()
+        if (!frontMatter) frontMatter = { startLine: start.line, endLine: end.line }
+        else frontMatter.endLine = Math.max(frontMatter.endLine, end.line)
+        continue
+      }
+      if (node.type === 'macro' && node.content === 'maketitle') {
+        // \maketitle renders the front matter (title/author + any \thanks footnote). Extend
+        // the open span through its line but keep it OPEN: synctex attributes the \thanks
+        // footnote insert to the line(s) just AFTER \maketitle, so the block must absorb the
+        // gap up to the next real block (it closes there, or at scope end). A bare \maketitle
+        // with no preceding \title is just a non-block structural marker (flush only).
+        flushParagraph()
+        if (frontMatter) frontMatter.endLine = Math.max(frontMatter.endLine, end.line)
+        continue
+      }
       if (node.type === 'macro' && STANDALONE_MACROS.has(node.content)) {
         flushParagraph()
         continue
@@ -222,6 +270,7 @@ function walkScope(file: string, nodes: Ast.Node[], out: BlockNode[]): void {
       const level = node.type === 'macro' ? SECTION_LEVELS[node.content] : undefined
       if (node.type === 'macro' && level !== undefined) {
         flushParagraph()
+        flushFrontMatter(start.line - 1) // close the front matter, absorbing the gap before this block
         while ((sectionStack[sectionStack.length - 1]?.level ?? 0) >= level) {
           sectionStack.pop()
         }
@@ -233,6 +282,7 @@ function walkScope(file: string, nodes: Ast.Node[], out: BlockNode[]): void {
 
       if (ENVIRONMENT_TYPES.has(node.type)) {
         flushParagraph()
+        flushFrontMatter(start.line - 1) // close the front matter, absorbing the gap before this env
         const env = node as Ast.Environment
         const name = envName(env)
         // A backmatter sectioning env (bibliography/index) is a top-level division:
@@ -261,13 +311,16 @@ function walkScope(file: string, nodes: Ast.Node[], out: BlockNode[]): void {
 
       // anything else (string, inline macro, inline or display math) joins a
       // paragraph — incl. 'displaymath' \[..\]/$$..$$, which is not a \begin
-      // env and so never breaks the paragraph (BUG-45)
+      // env and so never breaks the paragraph (BUG-45). Real prose also closes an
+      // open front-matter span (it never runs into body text).
+      if (frontMatter) flushFrontMatter(start.line - 1)
       joinParagraph(start.line, end.line)
     }
   }
 
   walkNodes(nodes)
   flushParagraph()
+  flushFrontMatter()
 }
 
 function preambleBlock(file: string, nodes: Ast.Node[]): BlockNode | null {
