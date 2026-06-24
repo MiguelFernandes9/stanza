@@ -41,12 +41,13 @@ describe('formatSessionDigest — accepted (durable) ops', () => {
   test('includes other-session accepted ops, framed as context not instruction', () => {
     const ops = [op({ accepted: true, sessionId: 'other', scope: 'blocks', instruction: 'tighten intro', note: 'shortened ¶1' })]
     const digest = formatSessionDigest(ops, [], 'me')!
-    expect(digest).toContain('context only, NOT your instruction')
-    expect(digest).toContain('already changed this project')
+    expect(digest).toContain('Context only')
+    expect(digest).toContain('Already applied')
     expect(digest).toContain('[blocks]')
     expect(digest).toContain('tighten intro')
     expect(digest).toContain('shortened ¶1')
-    expect(digest).toContain('Carry out YOUR instruction below')
+    expect(digest).toContain('Do NOT report, mention, or act')
+    expect(digest).not.toMatch(/session|agent/i) // no coordination vocabulary
   })
 
   test('caps at the limit, keeping the most recent', () => {
@@ -59,18 +60,18 @@ describe('formatSessionDigest — accepted (durable) ops', () => {
 })
 
 describe('formatSessionDigest — in-flight (active) ops', () => {
-  test('reports what other sessions are editing right now', () => {
+  test('reports what is being edited right now', () => {
     const digest = formatSessionDigest([], [active({ instruction: 'rewrite section 3' })], 'me')!
-    expect(digest).toContain('editing this project RIGHT NOW')
+    expect(digest).toContain('In progress now')
     expect(digest).toContain('rewrite section 3')
   })
 
-  test('shows in-flight AND already-changed together', () => {
+  test('shows in-flight AND already-applied together', () => {
     const ops = [op({ accepted: true, sessionId: 'other', instruction: 'fixed refs' })]
     const digest = formatSessionDigest(ops, [active({ instruction: 'editing now' })], 'me')!
-    expect(digest).toContain('editing this project RIGHT NOW')
+    expect(digest).toContain('In progress now')
     expect(digest).toContain('editing now')
-    expect(digest).toContain('already changed this project')
+    expect(digest).toContain('Already applied')
     expect(digest).toContain('fixed refs')
   })
 })

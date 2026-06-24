@@ -3,10 +3,10 @@ import type { OpRecord } from '../../shared/ipc/claude'
 /** Per-project session bus. Several Stanza windows on one project share one
  *  main-process Store + one in-memory `ActiveOps` registry; each op is tagged with
  *  the window's `sessionId`. Before an op runs we prepend a digest of what the OTHER
- *  sessions are doing — both what they're editing RIGHT NOW (in-flight) and what they
- *  already changed — so parallel agents don't undo or duplicate each other's work.
- *  The digest is passive context (clearly NOT an instruction); the write side is the
- *  `sessionId` tag on each OpRecord + the ActiveOps start/end calls (ipc-registry). */
+ *  others are doing — both edits in progress now (in-flight) and edits already applied —
+ *  so parallel work doesn't undo or duplicate. The digest reads as a plain document
+ *  changelog (no "session/agent" language — see formatSessionDigest); the write side is
+ *  the `sessionId` tag on each OpRecord + the ActiveOps start/end calls (ipc-registry). */
 
 /** An op running right now in some window — recorded at prompt-trigger (op start)
  *  and cleared when it ends. */
@@ -45,8 +45,14 @@ export class ActiveOps {
  *  (newest last, capped at `limit`). Returns null when there's nothing to report.
  *  `ownSessionId` is excluded (that session already carries its own context).
  *  Untagged legacy ops and pending/rejected ops are skipped — only an accepted op
- *  durably changed the doc. Framed as awareness, NOT an instruction, so the op still
- *  fully performs its own task (it just shouldn't revert a sibling's work). */
+ *  durably changed the doc.
+ *
+ *  Worded as a plain document CHANGELOG, deliberately avoiding "sessions / agents /
+ *  coordination / bus" language: that vocabulary made the editing model switch into
+ *  multi-agent-coordination mode — it tried to "observe siblings" / run git / find an
+ *  agent-bus, couldn't (it's a sandboxed editor), then reported that and made NO edit.
+ *  Here it's just background ("other contributors edited X") with an explicit "do not
+ *  report or act on this" so the model uses it and proceeds with its own task. */
 export function formatSessionDigest(
   ops: OpRecord[],
   active: ActiveOp[],
@@ -59,14 +65,15 @@ export function formatSessionDigest(
   if (changed.length === 0 && active.length === 0) return null
 
   const parts: string[] = [
-    '[Awareness from other Stanza sessions on this project — context only, NOT your instruction.]',
+    'Context only — recent edits to this document by other contributors.',
+    'Do NOT report, mention, or act on this list; just avoid undoing these, then do your own instruction.',
   ]
   if (active.length > 0) {
-    parts.push('Other sessions are editing this project RIGHT NOW:')
-    parts.push(...active.map((a) => `- since ${a.startedAt}: ${oneLine(a.instruction)}`))
+    parts.push('In progress now:')
+    parts.push(...active.map((a) => `- ${oneLine(a.instruction)}`))
   }
   if (changed.length > 0) {
-    parts.push('Other sessions have already changed this project (most recent last):')
+    parts.push('Already applied:')
     parts.push(
       ...changed.slice(-limit).map((o) => {
         const scope = o.scope === 'blocks' ? 'blocks' : 'whole document'
@@ -75,7 +82,6 @@ export function formatSessionDigest(
       }),
     )
   }
-  parts.push('Carry out YOUR instruction below as normal; just avoid reverting or duplicating the above.')
   return parts.join('\n')
 }
 

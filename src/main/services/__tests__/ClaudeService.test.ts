@@ -132,7 +132,7 @@ describe('ClaudeService.runOp', () => {
     await service.runOp({ instruction: 'fix typos', spans: [] }, () => {})
 
     const opPromptText = runner.calls[1]!.args.at(-1)! // resume call, last arg = prompt
-    expect(opPromptText).toContain('already changed this project')
+    expect(opPromptText).toContain('Already applied')
     expect(opPromptText).toContain('rewrite the intro')
     expect(opPromptText).toContain('Instruction: fix typos') // own instruction still present
   })
@@ -148,7 +148,7 @@ describe('ClaudeService.runOp', () => {
 
     await service.runOp({ instruction: 'next', spans: [] }, () => {})
 
-    expect(runner.calls[1]!.args.at(-1)!).not.toContain('Awareness from other Stanza sessions')
+    expect(runner.calls[1]!.args.at(-1)!).not.toContain('Already applied')
   })
 
   test('injects siblings IN-FLIGHT ops (write-on-prompt) into the op prompt', async () => {
@@ -160,7 +160,7 @@ describe('ClaudeService.runOp', () => {
     await service.runOp({ instruction: 'fix a typo', spans: [] }, () => {})
 
     const prompt = runner.calls[1]!.args.at(-1)!
-    expect(prompt).toContain('editing this project RIGHT NOW')
+    expect(prompt).toContain('In progress now')
     expect(prompt).toContain('rewriting section 3')
   })
 

@@ -52,7 +52,7 @@ describe('DocumentSession', () => {
     // Session B runs an op → its prompt carries A's change (read-on-prompt hook).
     await b.claude.runOp({ instruction: 'B fixes typos', spans: [] }, () => {})
     const prompt = runner.calls.at(-1)!.args.at(-1)!
-    expect(prompt).toContain('already changed this project')
+    expect(prompt).toContain('Already applied')
     expect(prompt).toContain('A rewrote the intro')
     expect(prompt).toContain('Instruction: B fixes typos')
   })
