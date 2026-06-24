@@ -566,20 +566,25 @@ export function binBlocks(
       for (const [col, cu] of byCol) {
         let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity
         for (const u of cu) { x = Math.min(x, u.xLeft); y = Math.min(y, u.yTop); right = Math.max(right, u.xRight); bottom = Math.max(bottom, u.yBottom) }
-        // Extent fill: grow the box's Y *and X* to the block's forward line rects in this
-        // column that are CONTIGUOUS with it (within MAX_LINE_GAP), iterating to closure —
-        // fills rows pdf.js dropped / mis-attributed so the box covers where the block really
-        // is. X matters when only an INDENTED first line was attributed and the synctex-null
-        // body lines (reaching the margin) would otherwise sit left of the box. A far
-        // galley-collision rect is never reached, so the box can't over-extend.
+        // Extent fill: grow the box's Y to the block's forward line rects in this column that
+        // are CONTIGUOUS with it (within MAX_LINE_GAP), iterating to closure — fills rows
+        // pdf.js dropped / mis-attributed so the box covers where the block really is. Grow X
+        // to the rect's BACKING rendered units (real content), NOT the rect's own x: an
+        // lstlisting / tikz forward rect can carry a bogus off-page negative x that would
+        // balloon the box left. X matters when only an INDENTED first line was attributed and
+        // the synctex-null body lines (reaching the margin) would otherwise sit left of the box.
         const cand = fwd.filter((r) => r.page === page && (r.col === col || col === 'full' || r.col === 'full'))
+        const pageUnits = unitsByPage.get(page) ?? []
         const used = new Array<boolean>(cand.length).fill(false)
         for (let grew = true; grew;) {
           grew = false
           for (let k = 0; k < cand.length; k++) {
             const r = cand[k]!
             if (used[k] || r.y > bottom + MAX_LINE_GAP || r.bottom < y - MAX_LINE_GAP) continue
-            y = Math.min(y, r.y); bottom = Math.max(bottom, r.bottom); x = Math.min(x, r.x); right = Math.max(right, r.right); used[k] = true; grew = true
+            y = Math.min(y, r.y); bottom = Math.max(bottom, r.bottom)
+            for (const { u, col: uc } of pageUnits)
+              if ((uc === col || col === 'full' || uc === 'full') && u.xLeft < r.right && r.x < u.xRight && u.yTop < r.bottom && r.y < u.yBottom) { x = Math.min(x, u.xLeft); right = Math.max(right, u.xRight) }
+            used[k] = true; grew = true
           }
         }
         // Clip a column box to its column so a mis-measured full-width row can't widen it
@@ -685,13 +690,24 @@ export function binBlocks(
   // of it. A genuine multi-page env — a longtable split ~evenly — keeps both pages, since
   // neither is a small fraction. (Env-ness from the id's `envN` segment.)
   const ENV_RE = /(^|\/)env\d+(#|$)/
+  const allB: { id: string; b: PdfRect }[] = []
+  for (const [id, bs] of boxesById) for (const b of bs) allB.push({ id, b })
+  const overlapsOther = (id: string, b: PdfRect): boolean =>
+    allB.some(({ id: oid, b: o }) => oid !== id && o.page === b.page &&
+      Math.min(b.x + b.width, o.x + o.width) - Math.max(b.x, o.x) > 8 &&
+      Math.min(b.y + b.height, o.y + o.height) - Math.max(b.y, o.y) > 8)
   for (const [id, bs] of boxesById) {
     if (!ENV_RE.test(id) || bs.length < 2) continue
     const inkByPage = new Map<number, number>()
     for (const b of bs) inkByPage.set(b.page, (inkByPage.get(b.page) ?? 0) + b.height)
     if (inkByPage.size < 2) continue
-    const domInk = Math.max(...inkByPage.values())
-    const kept = bs.filter((b) => (inkByPage.get(b.page) ?? 0) >= 0.25 * domInk)
+    const domPage = [...inkByPage.entries()].sort((a, b) => b[1] - a[1])[0]![0]
+    const domInk = inkByPage.get(domPage)!
+    // Always keep the dominant page. Keep another page only if it is a SUBSTANTIAL part
+    // (>= 25 % ink, so a longtable split keeps both) AND it does not overlap another block's
+    // box — a phantom env box landing on a neighbour's content (a tikz rect mis-mapped onto
+    // the listing) is dropped even when its ink is substantial.
+    const kept = bs.filter((b) => b.page === domPage || ((inkByPage.get(b.page) ?? 0) >= 0.25 * domInk && !overlapsOther(id, b)))
     if (kept.length && kept.length !== bs.length) boxesById.set(id, kept)
   }
 
