@@ -508,6 +508,36 @@ export function binBlocks(
     return out
   }
 
+  // Build one box for a cell of attributed units: their bbox, grown by EXTENT-FILL to the
+  // block's contiguous forward line rects (`fwd`) within MAX_LINE_GAP — covering rows pdf.js
+  // dropped / mis-attributed, X grown to the rects' BACKING units (not the rect's own x, which
+  // a tikz/lstlisting rect can push off-page). The main per-(page,col) loop and the displaced-
+  // content split both call this, so a split cluster is sized like an ordinary box. `clip`
+  // gates the gutter column-clip: the main loop bins per column and clips; the split gathers a
+  // cluster column-AGNOSTICALLY (a full-width title; a footnote at the column edge), so it
+  // passes clip=false — clipping there would cut the cluster at the gutter.
+  const buildBox = (fwd: FwdLine[], page: number, col: PdfCol, cu: AttributedUnit[], clip = true): PdfRect => {
+    let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity
+    for (const u of cu) { x = Math.min(x, u.xLeft); y = Math.min(y, u.yTop); right = Math.max(right, u.xRight); bottom = Math.max(bottom, u.yBottom) }
+    const cand = fwd.filter((r) => r.page === page && (r.col === col || col === 'full' || r.col === 'full'))
+    const pageUnits = unitsByPage.get(page) ?? []
+    const used = new Array<boolean>(cand.length).fill(false)
+    for (let grew = true; grew;) {
+      grew = false
+      for (let k = 0; k < cand.length; k++) {
+        const r = cand[k]!
+        if (used[k] || r.y > bottom + MAX_LINE_GAP || r.bottom < y - MAX_LINE_GAP) continue
+        y = Math.min(y, r.y); bottom = Math.max(bottom, r.bottom)
+        for (const { u, col: uc } of pageUnits)
+          if ((uc === col || col === 'full' || uc === 'full') && u.xLeft < r.right && r.x < u.xRight && u.yTop < r.bottom && r.y < u.yBottom) { x = Math.min(x, u.xLeft); right = Math.max(right, u.xRight) }
+        used[k] = true; grew = true
+      }
+    }
+    if (clip && docGutter && col === 'l') right = Math.min(right, docGutter.right)
+    else if (clip && docGutter && col === 'r') x = Math.max(x, docGutter.left)
+    return { page, x, y, width: right - x, height: bottom - y, col }
+  }
+
   // Forward-containment override. The inverse map is off-by-one at a galley boundary: the
   // text line just before a display equation maps to the equation's \begin line, so the
   // equation's box STEALS the paragraph's last line. But the paragraph's own forward LINE
@@ -566,37 +596,7 @@ export function binBlocks(
           byCol.delete('l'); byCol.delete('r'); byCol.set(keep, [...L, ...R])
         }
       }
-      const g = docGutter
-      for (const [col, cu] of byCol) {
-        let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity
-        for (const u of cu) { x = Math.min(x, u.xLeft); y = Math.min(y, u.yTop); right = Math.max(right, u.xRight); bottom = Math.max(bottom, u.yBottom) }
-        // Extent fill: grow the box's Y to the block's forward line rects in this column that
-        // are CONTIGUOUS with it (within MAX_LINE_GAP), iterating to closure — fills rows
-        // pdf.js dropped / mis-attributed so the box covers where the block really is. Grow X
-        // to the rect's BACKING rendered units (real content), NOT the rect's own x: an
-        // lstlisting / tikz forward rect can carry a bogus off-page negative x that would
-        // balloon the box left. X matters when only an INDENTED first line was attributed and
-        // the synctex-null body lines (reaching the margin) would otherwise sit left of the box.
-        const cand = fwd.filter((r) => r.page === page && (r.col === col || col === 'full' || r.col === 'full'))
-        const pageUnits = unitsByPage.get(page) ?? []
-        const used = new Array<boolean>(cand.length).fill(false)
-        for (let grew = true; grew;) {
-          grew = false
-          for (let k = 0; k < cand.length; k++) {
-            const r = cand[k]!
-            if (used[k] || r.y > bottom + MAX_LINE_GAP || r.bottom < y - MAX_LINE_GAP) continue
-            y = Math.min(y, r.y); bottom = Math.max(bottom, r.bottom)
-            for (const { u, col: uc } of pageUnits)
-              if ((uc === col || col === 'full' || uc === 'full') && u.xLeft < r.right && r.x < u.xRight && u.yTop < r.bottom && r.y < u.yBottom) { x = Math.min(x, u.xLeft); right = Math.max(right, u.xRight) }
-            used[k] = true; grew = true
-          }
-        }
-        // Clip a column box to its column so a mis-measured full-width row can't widen it
-        // across the gutter into the other column's blocks.
-        if (g && col === 'l') right = Math.min(right, g.right)
-        else if (g && col === 'r') x = Math.max(x, g.left)
-        boxes.push({ page, x, y, width: right - x, height: bottom - y, col })
-      }
+      for (const [col, cu] of byCol) boxes.push(buildBox(fwd, page, col, cu))
     }
     boxes.sort((a, b) => a.page - b.page || a.x - b.x)
     if (boxes.length) boxesById.set(id, boxes)
@@ -773,11 +773,11 @@ export function binBlocks(
         const a = clusters.get(k); if (a) a.push(u); else clusters.set(k, [u])
       }
       if (clusters.size < 2) { rebuilt.push(b); continue }
-      for (const cu of clusters.values()) {
-        let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity
-        for (const u of cu) { x = Math.min(x, u.xLeft); y = Math.min(y, u.yTop); right = Math.max(right, u.xRight); bottom = Math.max(bottom, u.yBottom) }
-        rebuilt.push({ page: b.page, x, y, width: right - x, height: bottom - y, col: b.col })
-      }
+      // Build each cluster's box with the same extent-fill as the main loop (a dropped
+      // footnote/title row is covered), but clip=false: clusters were gathered column-
+      // agnostically, so the gutter clip would cut a full-width title or an edge footnote.
+      const fwd = lineRects(id)
+      for (const cu of clusters.values()) rebuilt.push(buildBox(fwd, b.page, b.col ?? 'full', cu, false))
       split = true
     }
     if (split) { rebuilt.sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x); boxesById.set(id, rebuilt) }
