@@ -227,6 +227,16 @@ function walkScope(file: string, nodes: Ast.Node[], out: BlockNode[]): void {
         flushParagraph()
         continue
       }
+      if (node.type === 'macro' && (node.content === 'bibliography' || node.content === 'printbibliography')) {
+        // \bibliography{...} / \printbibliography render the BibTeX reference list. Make it
+        // ONE block (like an inline thebibliography env) so the reference region is
+        // addressable, even though the entries come from the .bbl, not the .tex. Backmatter:
+        // close open sections so it attaches at the root.
+        flushParagraph()
+        sectionStack.length = 0
+        attach(block('environment', file, start.line, end.line, 'bibliography'))
+        continue
+      }
       if (node.type === 'macro' && STANDALONE_MACROS.has(node.content)) {
         flushParagraph()
         continue

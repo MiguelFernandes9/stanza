@@ -142,12 +142,16 @@ describe('standalone structural macros', () => {
     '\\end{document}', //             11
   ].join('\n')
 
-  test('a title page of \\maketitle/\\tableofcontents/\\include yields no paragraph block', () => {
+  test('a title page of \\maketitle/\\tableofcontents/\\include yields no paragraph block (\\bibliography IS a block)', () => {
     const roots = parseBlocks(FILE, TITLE_DOC)
-    expect(roots.map((b) => b.kind)).toEqual(['preamble'])
-    // The lines that hold \maketitle / \tableofcontents are not a block.
+    expect(roots.map((b) => b.kind)).toEqual(['preamble', 'environment'])
+    // The lines that hold \maketitle / \tableofcontents / \include are not a block.
     expect(blockAtLine(roots, FILE, 3)).toBe(null)
     expect(blockAtLine(roots, FILE, 4)).toBe(null)
+    expect(blockAtLine(roots, FILE, 6)).toBe(null)
+    // \bibliography{refs} (line 10) IS one block — the addressable reference region.
+    expect(roots[1]).toMatchObject({ kind: 'environment', name: 'bibliography' })
+    expect(roots[1]!.span).toMatchObject({ startLine: 10, endLine: 10 })
   })
 
   test('a standalone macro flushes the paragraph and never joins one', () => {
