@@ -1469,4 +1469,22 @@ describe('binBlocks — front-matter title/footnote split (Bug B)', () => {
     const { boxesById } = binBlocks(units, new Map([[1, rows]]), new Set(), new Map(), new Set())
     expect(boxesById.get('p1#x')!).toHaveLength(1)
   })
+
+  it('boxes a full-width front-matter title across the gutter, not clipped to a column', () => {
+    // IEEEtran: the \maketitle title spans BOTH columns at the page top. As a fullWidthId it
+    // must be ONE 'full' box over the whole title — an 'l' box would clip the centered title
+    // at the gutter (the live main_v2 bug). Two-column body below gives the gutter to clip at.
+    const titleY = [60, 73, 86]
+    const body = [250, 263, 276, 289, 302, 315]
+    const rows = new Map([[1, [...lineRows(titleY, 70, 540), ...lineRows(body, ...LCOL), ...lineRows(body, ...RCOL)]]])
+    const title = lineRows(titleY, 70, 540).map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'env1#fm'))
+    const L = lineRows(body, ...LCOL).map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'L#1'))
+    const R = lineRows(body, ...RCOL).map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'R#1'))
+    const { boxesById } = binBlocks([...title, ...L, ...R], rows, new Set(['env1#fm']))
+    const fm = boxesById.get('env1#fm')!
+    expect(fm).toHaveLength(1)
+    expect(fm[0]!.col).toBe('full')
+    expect(fm[0]!.x).toBeLessThan(120) // reaches the title's left
+    expect(fm[0]!.x + fm[0]!.width).toBeGreaterThan(450) // AND its right — spans the gutter, uncut
+  })
 })

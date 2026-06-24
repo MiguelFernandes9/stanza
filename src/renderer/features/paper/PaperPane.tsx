@@ -325,7 +325,10 @@ export function PaperPane(props: Props): JSX.Element {
       )
       if (!alive) return
       const knownFiles = [...new Set(pageBlocks.map((b) => b.span.file))]
-      const fullWidthIds = new Set(pageBlocks.filter((b) => b.envName?.endsWith('*')).map((b) => b.id))
+      // Full-width blocks (one 'full' box, never column-split/clipped): `*` floats AND the
+      // \maketitle front matter — its title/author span both columns at the page top, so an
+      // 'l' box would clip the centered title at the gutter.
+      const fullWidthIds = new Set(pageBlocks.filter((b) => b.envName?.endsWith('*') || b.envName === 'frontmatter').map((b) => b.id))
       // \bibliography blocks: their .bbl rows are synctex-null, so the binner claims the
       // long null run for them instead of leaving the reference list unboxed.
       const bibliographyIds = new Set(pageBlocks.filter((b) => b.envName === 'bibliography').map((b) => b.id))
