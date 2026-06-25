@@ -7,6 +7,7 @@ import type { PageBlock } from '../paper/paperModel'
 import type { EditTask } from './taskStore'
 import { blockLabel, pillStyle, tagKind } from './TaskCard'
 import { ThreadTranscript } from './ThreadTranscript'
+import { AiDisabledNotice } from '@renderer/features/assistant/AiDisabledNotice'
 
 const VIOLET = '#6d5bd0'
 const RAIL_GAP = 22
@@ -15,6 +16,9 @@ interface Props {
   task: EditTask
   blocks: PageBlock[]
   side?: 'left' | 'right'
+  /** False when Claude is unavailable — the follow-up composer is disabled and a
+   *  notice shows. Accept/Reject on a pending proposal stay enabled. */
+  aiEnabled?: boolean
   onSubmitTurn: (text: string) => void
   onResolve: (accept: boolean) => void
   /** Stage a PNG snapshot of the anchor block to send with the next turn. */
@@ -36,6 +40,7 @@ export function ThreadCard({
   task,
   blocks,
   side,
+  aiEnabled = true,
   onSubmitTurn,
   onResolve,
   onSnapshot,
@@ -47,7 +52,9 @@ export function ThreadCard({
   const [draft, setDraft] = useState('')
   const busy = task.phase === 'busy'
   const pending = task.phase === 'review'
-  const locked = busy || pending
+  // The composer locks while a turn runs / a proposal is pending (the existing
+  // span-lock guard) AND whenever Claude is unavailable. Resolve stays separate.
+  const composerLocked = busy || pending || !aiEnabled
   const isSection = blocks.length > 1 && blocks[0]?.kind === 'heading'
   const spanRef = blocks.length
     ? blocks.length > 1
@@ -57,7 +64,7 @@ export function ThreadCard({
 
   const send = (): void => {
     const text = draft.trim()
-    if (!text || locked) return
+    if (!text || composerLocked) return
     onSubmitTurn(text)
     setDraft('')
   }
@@ -130,12 +137,12 @@ export function ThreadCard({
             border: '1px solid var(--border-strong)',
             borderRadius: 'var(--radius-md)',
             padding: '6px 6px 6px 10px',
-            opacity: locked ? 0.55 : 1
+            opacity: composerLocked ? 0.55 : 1
           }}
         >
           <textarea
             value={draft}
-            disabled={locked}
+            disabled={composerLocked}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
@@ -162,18 +169,23 @@ export function ThreadCard({
               <button
                 type="button"
                 onClick={onSnapshot}
-                disabled={locked}
+                disabled={composerLocked}
                 aria-label={task.image ? 'Remove snapshot' : 'Attach snapshot'}
-                style={{ ...pillStyle(!!task.image), height: 30, cursor: locked ? 'default' : 'pointer' }}
+                style={{ ...pillStyle(!!task.image), height: 30, cursor: composerLocked ? 'default' : 'pointer' }}
               >
                 {task.image ? <Check size={12} /> : <Camera size={12} />}
               </button>
             </Tooltip>
           )}
-          <Button size="sm" variant="primary" disabled={locked || !draft.trim()} onClick={send} iconLeft={<ArrowUp size={13} />}>
+          <Button size="sm" variant="primary" disabled={composerLocked || !draft.trim()} onClick={send} iconLeft={<ArrowUp size={13} />}>
             Send
           </Button>
         </div>
+        {!aiEnabled && (
+          <div style={{ marginTop: 8 }}>
+            <AiDisabledNotice />
+          </div>
+        )}
       </div>
     </div>
   )
