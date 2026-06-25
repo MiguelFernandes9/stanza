@@ -1,6 +1,7 @@
 export * from './channels'
 export * from './document'
 export * from './compile'
+export * from './attachments'
 export * from './claude'
 export * from './conversation'
 export * from './review'

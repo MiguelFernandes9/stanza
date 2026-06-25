@@ -7,6 +7,8 @@ import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
 import { combinedSpanLabel, spanLabel } from '../paper/paperModel'
 import type { PageBlock } from '../paper/paperModel'
 import type { EditTask } from './taskStore'
+import { taskSnapshot } from './taskStore'
+import { AttachmentChips } from '../chat/AttachmentChips'
 import { summarizeBlocks } from '@shared/blocks/changes'
 
 export const RAIL = 316
@@ -73,6 +75,8 @@ interface Props {
   /** Capture the block as a PNG and attach it to this task's next Run. Absent for
    *  whole-document cards (no block to snapshot). */
   onSnapshot?: () => void
+  /** Remove one staged attachment (chip ×) by id. */
+  onRemoveAttachment?: (id: string) => void
   refCb: (el: HTMLDivElement | null) => void
 }
 
@@ -185,9 +189,11 @@ export function TaskCard({
   onResolve,
   onOpenReview,
   onSnapshot,
+  onRemoveAttachment,
   refCb
 }: Props): JSX.Element {
   const taRef = useRef<HTMLTextAreaElement | null>(null)
+  const snapshot = taskSnapshot(task)
   useEffect(() => {
     // preventScroll: the card paints at top:0 before PaperPane's layout effect
     // sets its rail offset; a plain focus() would scroll the PDF pane to the
@@ -401,6 +407,10 @@ export function TaskCard({
                 {task.error}
               </div>
             )}
+            <AttachmentChips
+              attachments={task.attachments ?? []}
+              onRemove={(id) => onRemoveAttachment?.(id)}
+            />
             <div
               className="stz-field"
               style={{
@@ -414,15 +424,15 @@ export function TaskCard({
               }}
             >
               {onSnapshot && blocks.length > 0 && (
-                <Tooltip label={task.image ? 'Remove snapshot' : 'Attach snapshot'} side="top">
+                <Tooltip label={snapshot ? 'Remove snapshot' : 'Attach snapshot'} side="top">
                   <IconButton
                     size="sm"
                     variant="ghost"
-                    active={!!task.image}
-                    label={task.image ? 'Remove snapshot' : 'Attach snapshot'}
+                    active={!!snapshot}
+                    label={snapshot ? 'Remove snapshot' : 'Attach snapshot'}
                     onClick={onSnapshot}
                   >
-                    {task.image ? <Check size={14} /> : <Camera size={14} />}
+                    {snapshot ? <Check size={14} /> : <Camera size={14} />}
                   </IconButton>
                 </Tooltip>
               )}

@@ -4,6 +4,7 @@ import { ConfirmDialog, Toast } from '@renderer/components'
 import { client } from '@renderer/lib/client'
 import type { BlockNode } from '@shared/blocks/types'
 import type {
+  Attachment,
   BlockSpan,
   CommitInfo,
   CompileError,
@@ -37,7 +38,7 @@ import { HistoryDiffOverlay } from '../review/HistoryDiffOverlay'
 import type { PdfFlash } from '../paper/PaperPane'
 import { expandIds, flattenBlocks, parentOf, taskSpans } from '../paper/paperModel'
 import { resolveToKnownFile } from '@renderer/lib/paths'
-import { dismissRoute, initialTaskState, isWholeDocTask, taskReducer } from '../tasks/taskStore'
+import { dismissRoute, initialTaskState, isWholeDocTask, SNAPSHOT_ID, taskReducer } from '../tasks/taskStore'
 import { pendingRemap, restoreAnchors, vanishedThreads } from '../tasks/reanchor'
 import { planMove } from './fileDrag'
 import { revealBlock } from './revealBlock'
@@ -661,8 +662,8 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
 
   /** Fire claude:run for a task already in busy phase and wire its result
    *  back by taskId (op-started → proposal/noop, or op-failed). */
-  const runOp = (taskId: number, instruction: string, spans: BlockSpan[], image?: string): void => {
-    void client.claudeRun({ instruction, spans, imageDataUrl: image }).then(
+  const runOp = (taskId: number, instruction: string, spans: BlockSpan[], attachments?: Attachment[]): void => {
+    void client.claudeRun({ instruction, spans, attachments }).then(
       (res) => {
         dispatch({ type: 'op-started', taskId, opId: res.opId })
         if (res.proposal) dispatch({ type: 'proposal', taskId, proposal: res.proposal, note: res.note, conflict: res.conflict })
@@ -706,18 +707,18 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
     }
     if (instructionOverride) dispatch({ type: 'update-instruction', taskId, instruction })
     dispatch({ type: 'submit', taskId })
-    runOp(taskId, instruction, taskSpans(task.blockIds, blocks), task.image)
+    runOp(taskId, instruction, taskSpans(task.blockIds, blocks), task.attachments)
   }
 
   /** No blocks selected → edit the whole project (unscoped op, spans: []).
    *  The reducer assigns the new task state.nextId, so the async op result
    *  can target that id — mirrors submitTask's flow. */
-  const submitWholeDoc = (instruction: string): void => {
+  const submitWholeDoc = (instruction: string, attachments?: Attachment[]): void => {
     const text = instruction.trim()
     if (!text) return
     const taskId = state.nextId
     dispatch({ type: 'start-whole-doc', instruction: text })
-    runOp(taskId, text, [])
+    runOp(taskId, text, [], attachments)
   }
 
   /** Console "Fix with Claude": bundle every current compile error + the raw
@@ -818,8 +819,8 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
         instruction,
         spans: taskSpans(task.blockIds, blocks),
         blockIds: task.blockIds,
-        // A staged snapshot rides with this turn (add-user-turn clears it after).
-        imageDataUrl: task.image
+        // Staged attachments ride with this turn (add-user-turn clears them after).
+        attachments: task.attachments
       })
       .then(
         (res) => {
@@ -867,7 +868,8 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
   // The main chat (⌘J) is one whole-document session — independent of block
   // selection. It never narrows to selected blocks; block-scoped editing lives
   // in the rail bubbles (TaskCard / ThreadCard).
-  const chatSubmit = (instruction: string): void => submitWholeDoc(instruction)
+  const chatSubmit = (instruction: string, attachments?: Attachment[]): void =>
+    submitWholeDoc(instruction, attachments)
 
   const resolveByOp = (opId: string, accept: boolean): void => {
     const owner = state.tasks.find((t) => t.opId === opId || t.proposal?.opId === opId)
@@ -1016,7 +1018,16 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           onTogglePersistent={toggleTaskPersistent}
           onSubmitThreadTurn={submitThreadTurn}
           onDeleteThread={deleteThread}
-          onAttachImage={(taskId, image) => dispatch({ type: 'attach-image', taskId, image })}
+          onAttachImage={(taskId, image) =>
+            image
+              ? dispatch({
+                  type: 'add-attachments',
+                  taskId,
+                  items: [{ id: SNAPSHOT_ID, name: 'block.png', kind: 'snapshot', dataUrl: image, thumbDataUrl: image }]
+                })
+              : dispatch({ type: 'remove-attachment', taskId, id: SNAPSHOT_ID })
+          }
+          onRemoveAttachment={(taskId, id) => dispatch({ type: 'remove-attachment', taskId, id })}
           onSnapshotError={() =>
             setToast({
               title: "Couldn't snapshot the block",
