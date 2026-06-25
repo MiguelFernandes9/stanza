@@ -91,6 +91,10 @@ export function Input({
           height: '100%',
           border: 'none',
           outline: 'none',
+          // The wrapper owns the focus ring; suppress the global :focus-visible
+          // square ring that would otherwise paint a hard-cornered box inside
+          // this rounded field (matches .stz-field textarea).
+          boxShadow: 'none',
           background: 'transparent',
           color: 'var(--ink-900)',
           fontFamily: mono ? 'var(--font-mono)' : 'var(--font-sans)',
