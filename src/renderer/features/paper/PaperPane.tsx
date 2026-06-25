@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { JSX } from 'react'
 import { Check, CircleSlash, MessagesSquare, PenLine, Sparkles } from 'lucide-react'
 import { client } from '@renderer/lib/client'
@@ -153,7 +153,7 @@ export function PaperPane(props: Props): JSX.Element {
   const geomForPdf = useRef<unknown>(null)
   const geomForSig = useRef<string>('')
 
-  const { pdf, loading } = usePdfDocument(pdfUrl)
+  const { pdf, loading, retire } = usePdfDocument(pdfUrl)
   // The PDF actually shown. It lags `pdf` (the freshly loaded doc): we keep the
   // previous page AND its block overlays on screen, unchanged, through the whole
   // recompile, then swap the new page and its boxes in together in a single render
@@ -161,6 +161,20 @@ export function PaperPane(props: Props): JSX.Element {
   // intact until everything is ready — never the new PDF before its boxes, never
   // stale boxes over the new PDF.
   const [displayPdf, setDisplayPdf] = useState<PDFDocumentProxy | null>(null)
+  // The proxy currently shown (mirrors displayPdf, in a ref so `reveal` can read it
+  // synchronously). PaperPane OWNS the displayed proxy's lifetime: usePdfDocument
+  // never tears a resolved proxy down — we retire the previous one the instant we
+  // swap off it, so PdfPageStack never calls getPage() on a destroyed proxy.
+  const displayedRef = useRef<PDFDocumentProxy | null>(null)
+  const reveal = useCallback(
+    (next: PDFDocumentProxy): void => {
+      const prev = displayedRef.current
+      displayedRef.current = next
+      setDisplayPdf(next)
+      if (prev && prev !== next) retire(prev) // old proxy is off-screen as of this swap
+    },
+    [retire]
+  )
 
   const byId = new Map(pageBlocks.map((b) => [b.id, b]))
   const blocksOf = (blockIds: string[]): PageBlock[] =>
@@ -354,8 +368,8 @@ export function PaperPane(props: Props): JSX.Element {
       geomForPdf.current = pdf
       geomForSig.current = blocksSig
       // Reveal the new PDF now that its boxes are ready — page + overlays swap in
-      // together, never the page first.
-      setDisplayPdf(pdf)
+      // together, never the page first. `reveal` retires the proxy we swap off.
+      reveal(pdf)
     })().catch(() => {
       // Every async step above is individually catch-guarded, so this only fires
       // on an unexpected throw. Still complete the swap rather than freeze on the
@@ -367,7 +381,7 @@ export function PaperPane(props: Props): JSX.Element {
       setContentTops(new Map())
       geomForPdf.current = pdf
       geomForSig.current = blocksSig
-      setDisplayPdf(pdf)
+      reveal(pdf)
     })
     return () => {
       alive = false
