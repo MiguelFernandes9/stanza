@@ -77,13 +77,13 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
   const command = `tectonic ${effectiveFlags(mainFile || '<main>.tex', compile)}`
 
   return (
-    <Modal title="Settings" onClose={onClose} testid="settings-modal" width="min(880px, 94vw)">
-      <div style={{ padding: '6px 18px 18px' }}>
+    <Modal title="Settings" onClose={onClose} testid="settings-modal" width="min(960px, 94vw)">
+      <div style={{ padding: '10px 28px 24px' }}>
         <Section title="Editor" testid="section-editor-font">
           <Field label="Font family">
             <Select
               aria-label="Editor font family"
-              size="sm"
+              size="md"
               value={global.editorFontFamily ?? ''}
               options={FONT_FAMILIES}
               onChange={(v) => patchGlobal({ editorFontFamily: v || undefined })}
@@ -93,14 +93,14 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
           <Field label="Size">
             <Input
               aria-label="Editor font size"
-              size="sm"
+              size="md"
               type="number"
               min={10}
               max={24}
               value={global.editorFontSize ?? 13}
               onChange={(e) => patchGlobal({ editorFontSize: Number(e.target.value) || undefined })}
-              trailing={<span style={{ font: 'var(--text-2xs) var(--font-sans)' }}>px</span>}
-              wrapStyle={{ width: 92 }}
+              trailing={<span style={{ font: 'var(--text-xs) var(--font-sans)' }}>px</span>}
+              wrapStyle={{ width: 112 }}
             />
           </Field>
         </Section>
@@ -110,7 +110,7 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
             <Select
               aria-label="Main file"
               data-testid="main-file-select"
-              size="sm"
+              size="md"
               disabled={!doc}
               value={mainFile}
               options={(doc?.texFiles ?? []).map((f) => ({ label: f, value: f }))}
@@ -125,7 +125,7 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
             <Select
               aria-label="Paper size"
               data-testid="paper-size-select"
-              size="sm"
+              size="md"
               disabled={!doc}
               value={compile.paperSize ?? ''}
               options={[{ label: 'Default', value: '' }, ...PAPER_SIZES.map((p) => ({ label: p, value: p }))]}
@@ -156,7 +156,7 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
               background: 'var(--surface-well)',
               border: '1px solid var(--border-faint)',
               borderRadius: 'var(--radius-sm)',
-              font: 'var(--text-2xs)/1.5 var(--font-mono)',
+              font: 'var(--text-xs)/1.55 var(--font-mono)',
               color: 'var(--text-muted)',
               whiteSpace: 'pre-wrap',
               wordBreak: 'break-all'
@@ -169,7 +169,7 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
         <Section title="Appearance" testid="section-theme">
           <Field label="Theme">
             <SegmentedControl
-              size="sm"
+              size="md"
               value={global.theme ?? 'system'}
               options={[
                 { value: 'light', label: 'Light' },
@@ -185,7 +185,7 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
           <Field label="Model">
             <Select
               aria-label="Assistant model"
-              size="sm"
+              size="md"
               value={global.claudeModel ?? ''}
               options={CLAUDE_MODELS}
               onChange={(v) => patchGlobal({ claudeModel: (v || undefined) as GlobalSettings['claudeModel'] })}
@@ -195,7 +195,7 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
           <Field label="Effort">
             <Select
               aria-label="Assistant effort"
-              size="sm"
+              size="md"
               value={global.claudeEffort ?? ''}
               options={CLAUDE_EFFORTS}
               onChange={(v) => patchGlobal({ claudeEffort: (v || undefined) as GlobalSettings['claudeEffort'] })}
@@ -205,14 +205,14 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
           <Field label="Project history" hint="Commits of project history shown to the model.">
             <Input
               aria-label="Bus commit limit"
-              size="sm"
+              size="md"
               type="number"
               min={0}
               max={100}
               value={global.busCommitLimit ?? 20}
               onChange={(e) => patchGlobal({ busCommitLimit: Number(e.target.value) || undefined })}
-              trailing={<span style={{ font: 'var(--text-2xs) var(--font-sans)' }}>commits</span>}
-              wrapStyle={{ width: 128 }}
+              trailing={<span style={{ font: 'var(--text-xs) var(--font-sans)' }}>commits</span>}
+              wrapStyle={{ width: 152 }}
             />
           </Field>
           <Field
@@ -222,7 +222,7 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
             <Button
               aria-label="Reset assistant session"
               variant="secondary"
-              size="sm"
+              size="md"
               disabled={!doc}
               onClick={() => {
                 void client.assistantReset().then(() => {
@@ -284,28 +284,28 @@ function Section({
       data-testid={testid}
       data-disabled={disabled ? 'true' : undefined}
       style={{
-        padding: '14px 0',
+        padding: '20px 0',
         borderBottom: last ? 'none' : '1px solid var(--border-faint)',
         opacity: disabled ? 0.55 : 1
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, margin: '0 0 6px' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, margin: '0 0 12px' }}>
         <h3
           style={{
             margin: 0,
-            font: 'var(--weight-semibold) var(--text-2xs)/1 var(--font-sans)',
-            letterSpacing: '0.06em',
+            font: 'var(--weight-semibold) var(--text-xs)/1 var(--font-sans)',
+            letterSpacing: '0.07em',
             textTransform: 'uppercase',
             color: 'var(--text-muted)'
           }}
         >
           {title}
         </h3>
-        {note && <span style={{ font: 'var(--text-2xs) var(--font-sans)', color: 'var(--text-faint)' }}>{note}</span>}
+        {note && <span style={{ font: 'var(--text-xs) var(--font-sans)', color: 'var(--text-faint)' }}>{note}</span>}
       </div>
       {children}
       {disabled && (
-        <p style={{ margin: '6px 0 0', font: 'var(--text-2xs)/1.4 var(--font-sans)', color: 'var(--text-faint)' }}>
+        <p style={{ margin: '8px 0 0', font: 'var(--text-xs)/1.4 var(--font-sans)', color: 'var(--text-faint)' }}>
           Open a document to change this.
         </p>
       )}
@@ -315,13 +315,13 @@ function Section({
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: JSX.Element }): JSX.Element {
   return (
-    <div style={{ padding: '5px 0' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16, minHeight: 28 }}>
-        <span style={{ width: 180, flex: '0 0 auto', font: 'var(--text-sm)/1.3 var(--font-sans)', color: 'var(--text-body)' }}>{label}</span>
+    <div style={{ padding: '9px 0' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 24, minHeight: 34 }}>
+        <span style={{ width: 210, flex: '0 0 auto', font: 'var(--text-base)/1.3 var(--font-sans)', color: 'var(--text-body)' }}>{label}</span>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flex: '1 1 auto', minWidth: 0 }}>{children}</div>
       </div>
       {hint && (
-        <p style={{ margin: '2px 0 0', font: 'var(--text-2xs)/1.4 var(--font-sans)', color: 'var(--text-faint)' }}>
+        <p style={{ margin: '4px 0 0', font: 'var(--text-xs)/1.45 var(--font-sans)', color: 'var(--text-faint)' }}>
           {hint}
         </p>
       )}
