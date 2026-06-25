@@ -346,10 +346,10 @@ export function EditorPane({
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 2,
+          // Tabs butt together (VS-Code shape) — no gaps, flush to the edge.
+          gap: 0,
           height: 'var(--rail-toolbar)',
           flex: '0 0 auto',
-          padding: '0 8px',
           borderBottom: '1px solid var(--border-default)',
           background: 'var(--surface-app)',
           overflowX: 'auto'
