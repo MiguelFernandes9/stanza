@@ -1,3 +1,5 @@
+import { splitLines } from '../platform'
+
 /** Resolve the \input/\include tree starting at mainFile.
  *  Pure: caller supplies readFile (null = file unreadable/missing).
  *  Returns readable files in inclusion order, each listed once. */
@@ -27,7 +29,7 @@ const INPUT_RE = /\\(?:input|include)\{([^}]+)\}/g
 
 function inputTargets(source: string): string[] {
   const targets: string[] = []
-  for (const line of source.split('\n')) {
+  for (const line of splitLines(source)) {
     const code = stripComment(line)
     for (const match of code.matchAll(INPUT_RE)) {
       let target = match[1]!.trim()

@@ -14,6 +14,7 @@ import type { ProcessRunner } from '../infra/ProcessRunner'
 import { installHint } from '../infra/installHint'
 import { parseCompileLog } from '../../shared/latex/log'
 import { parseEditOutput, parseViewOutput } from '../../shared/latex/synctex'
+import { toPosix } from '../../shared/platform'
 
 const TECTONIC_HINT = `tectonic not found — ${installHint('tectonic', 'https://tectonic-typesetting.github.io/install.html')}`
 
@@ -211,8 +212,10 @@ export class CompileService {
   private toRelative(file: string): string {
     const resolved = safeRealpath(file)
     const rel = relative(this.root, resolved)
-    // Outside the root (unexpected) → hand back the best path we have.
-    return rel && !rel.startsWith('..') ? rel : resolved
+    // Outside the root (unexpected) → hand back the best path we have. Normalize to
+    // forward slashes: `path.relative`/realpath yield backslashes on Windows, and the
+    // whole app (block file ids, resolveToKnownFile) matches on one separator.
+    return toPosix(rel && !rel.startsWith('..') ? rel : resolved)
   }
 }
 

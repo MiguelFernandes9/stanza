@@ -1,11 +1,14 @@
 import type { PdfRect, SourceLocation } from '../ipc/compile'
+import { splitLines, toPosix } from '../platform'
 
-/** Parse `synctex edit` stdout (PDF point → source). First record wins. */
+/** Parse `synctex edit` stdout (PDF point → source). First record wins. On Windows
+ *  the `Input:` line is a native path (`C:\proj\main.tex`); normalize to forward
+ *  slashes so the block/file matching downstream keeps its one separator. */
 export function parseEditOutput(stdout: string): SourceLocation | null {
   const input = /^Input:(.+)$/m.exec(stdout)?.[1]
   const line = /^Line:(\d+)$/m.exec(stdout)?.[1]
   if (!input || !line) return null
-  return { file: input.trim(), line: Number(line) }
+  return { file: toPosix(input.trim()), line: Number(line) }
 }
 
 /** Parse `synctex view` stdout (source line → PDF boxes).
@@ -29,7 +32,7 @@ export function parseViewOutput(stdout: string): PdfRect[] {
     current = {}
   }
 
-  for (const line of stdout.split('\n')) {
+  for (const line of splitLines(stdout)) {
     const match = /^(Page|h|v|W|H):(-?[\d.]+)$/.exec(line.trim())
     if (!match) continue
     const key = match[1] === 'Page' ? 'page' : (match[1] as 'h' | 'v' | 'W' | 'H')

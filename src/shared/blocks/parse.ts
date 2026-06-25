@@ -1,6 +1,7 @@
 import { parse } from '@unified-latex/unified-latex-util-parse'
 import type * as Ast from '@unified-latex/unified-latex-types'
 import type { BlockNode } from './types'
+import { splitLines } from '../platform'
 
 // Display sectioning commands only. `\paragraph`/`\subparagraph` are deliberately
 // EXCLUDED: they are run-in headings (the title renders inline with the following
@@ -125,6 +126,13 @@ function envContentStartLine(node: Ast.Environment): number | undefined {
  *  paragraphs, environments. Ids are structural path + content hash —
  *  derived from the parse, never embedded in the source. */
 export function parseBlocks(file: string, source: string): BlockNode[] {
+  // Normalize line endings for ANALYSIS only (never written back — the editor and
+  // save preserve the user's CRLF). unified-latex mis-parses CRLF (it splits a
+  // paragraph at the \r), and synctex maps by line number, so a Windows-authored
+  // (CRLF) .tex must parse byte-identically to LF: same tree, spans, and content
+  // hashes. \r\n and lone \r → \n; the line count is unchanged, so every span line
+  // number is preserved.
+  source = source.replace(/\r\n?/g, '\n')
   const ast = parse(source)
   const documentEnv = ast.content.find(
     (node): node is Ast.Environment =>
@@ -142,7 +150,7 @@ export function parseBlocks(file: string, source: string): BlockNode[] {
   }
 
   closeSectionSpans(roots)
-  assignIds(roots, source.split('\n'), '')
+  assignIds(roots, splitLines(source), '') // LF or CRLF → identical line indices
   return roots
 }
 

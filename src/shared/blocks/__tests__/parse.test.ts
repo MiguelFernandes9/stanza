@@ -98,6 +98,16 @@ describe('parseBlocks', () => {
     expect(new Set(first).size).toBe(first.length)
     expect(first.every((id) => /#[0-9a-f]{6}$/.test(id))).toBe(true)
   })
+
+  test('a CRLF-authored file parses identically to LF (same ids and line spans)', () => {
+    // A Windows .tex uses CRLF; synctex still maps by line number, so the block
+    // tree (ids + start/end lines) must be byte-for-byte the same as the LF doc.
+    const lf = parseBlocks(FILE, SOURCE)
+    const crlf = parseBlocks(FILE, SOURCE.replace(/\n/g, '\r\n'))
+    const shape = (roots: ReturnType<typeof parseBlocks>): unknown =>
+      JSON.parse(JSON.stringify(roots, ['id', 'kind', 'name', 'span', 'file', 'startLine', 'endLine', 'children']))
+    expect(shape(crlf)).toEqual(shape(lf))
+  })
 })
 
 describe('backmatter sectioning environments (bibliography/index)', () => {

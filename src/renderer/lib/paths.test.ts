@@ -30,4 +30,10 @@ describe('resolveToKnownFile', () => {
     // "ch1.tex" must not match "match1.tex" — boundary required.
     expect(resolveToKnownFile('/abs/notch1.tex', ['ch1.tex'])).toBe('/abs/notch1.tex')
   })
+
+  it('matches a Windows backslash / drive-letter path against forward-slash ids', () => {
+    expect(resolveToKnownFile('C:\\Users\\me\\proj\\chapters\\ch1.tex', known)).toBe('chapters/ch1.tex')
+    // an exact match supplied with backslashes still resolves
+    expect(resolveToKnownFile('chapters\\ch1.tex', known)).toBe('chapters/ch1.tex')
+  })
 })
