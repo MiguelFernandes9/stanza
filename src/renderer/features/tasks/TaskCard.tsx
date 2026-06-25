@@ -403,6 +403,7 @@ export function TaskCard({
               <ContextStatus building={contextBuilding} />
             </div>
             <div
+              className="stz-field"
               style={{
                 display: 'flex',
                 alignItems: 'flex-end',

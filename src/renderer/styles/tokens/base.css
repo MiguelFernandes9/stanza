@@ -78,6 +78,12 @@ code, pre, kbd, samp {
   box-shadow: var(--ring-accent);
 }
 
+/* A field container (composer / wrapped input) owns its focus affordance, so the
+   borderless control inside it does not paint its own square ring inside the field. */
+.stz-field { transition: box-shadow var(--dur-fast) var(--ease-out); }
+.stz-field:focus-within { box-shadow: var(--shadow-inset), var(--ring-field); }
+.stz-field textarea:focus-visible { box-shadow: none; }
+
 hr {
   border: none;
   border-top: 1px solid var(--border-default);
