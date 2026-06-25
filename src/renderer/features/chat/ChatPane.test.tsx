@@ -73,4 +73,21 @@ describe('ChatPane — the one whole-document assistant (⌘J)', () => {
     act(() => textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true })))
     expect(onSubmit).not.toHaveBeenCalled()
   })
+
+  it('when Claude is unavailable: disables Run, shows the sign-in notice, refuses ⌘↵', () => {
+    const onSubmit = vi.fn()
+    render(<ChatPane {...props({ aiEnabled: false, onSubmit })} />)
+    const textarea = container.querySelector('textarea')!
+    const run = [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('Run'))!
+    expect(run.hasAttribute('disabled')).toBe(true)
+    expect(container.querySelector('[data-testid="ai-disabled-notice"]')).not.toBeNull()
+    type(textarea, 'do it anyway')
+    act(() => textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true })))
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
+  it('shows no sign-in notice when Claude is available', () => {
+    render(<ChatPane {...props({ aiEnabled: true })} />)
+    expect(container.querySelector('[data-testid="ai-disabled-notice"]')).toBeNull()
+  })
 })

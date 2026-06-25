@@ -9,6 +9,7 @@ import { Button } from '../../components/forms/Button'
 import { IconButton } from '../../components/forms/IconButton'
 import { SegmentedControl } from '../../components/data/SegmentedControl'
 import { StatusDot } from '../../components/feedback/StatusDot'
+import { Tooltip } from '../../components/feedback/Tooltip'
 import { errorLocation } from './formatFixInstruction'
 
 /** Compile phase → status-dot tone (default neutral for idle). */
@@ -32,6 +33,8 @@ interface Props {
   onClose: () => void
   /** A fix op (or compile) is in flight — disables the fix button. */
   busy: boolean
+  /** False when Claude is unavailable — "Fix with Claude" is disabled. */
+  aiEnabled?: boolean
 }
 
 type View = 'problems' | 'log'
@@ -39,9 +42,22 @@ type View = 'problems' | 'log'
 /** Bottom "Problems" console: every compile error in one list (click → jump),
  *  a raw-log view, and a single "Fix with Claude" button. Spans the full width
  *  beneath the editor/PDF panes (VS Code build-output placement). */
-export function ConsolePanel({ errors, log, state, height, onJump, onFix, onClose, busy }: Props): JSX.Element {
+export function ConsolePanel({ errors, log, state, height, onJump, onFix, onClose, busy, aiEnabled = true }: Props): JSX.Element {
   const [view, setView] = useState<View>('problems')
   const count = errors.length
+
+  const fixButton = (
+    <Button
+      data-testid="console-fix"
+      variant="primary"
+      size="sm"
+      loading={busy}
+      disabled={busy || count === 0 || !aiEnabled}
+      onClick={onFix}
+    >
+      Fix with Claude
+    </Button>
+  )
 
   return (
     <div
@@ -83,16 +99,13 @@ export function ConsolePanel({ errors, log, state, height, onJump, onFix, onClos
           ]}
         />
         <div style={{ flex: 1 }} />
-        <Button
-          data-testid="console-fix"
-          variant="primary"
-          size="sm"
-          loading={busy}
-          disabled={busy || count === 0}
-          onClick={onFix}
-        >
-          Fix with Claude
-        </Button>
+        {aiEnabled ? (
+          fixButton
+        ) : (
+          <Tooltip label="Claude is signed out" hint="Run claude auth login, then Recheck in Settings" side="bottom">
+            {fixButton}
+          </Tooltip>
+        )}
         <IconButton label="Close console" size="sm" onClick={onClose}>
           <X size={15} />
         </IconButton>

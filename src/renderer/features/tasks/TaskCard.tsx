@@ -8,6 +8,7 @@ import { combinedSpanLabel, spanLabel } from '../paper/paperModel'
 import type { PageBlock } from '../paper/paperModel'
 import type { EditTask } from './taskStore'
 import { summarizeBlocks } from '@shared/blocks/changes'
+import { AiDisabledNotice } from '@renderer/features/assistant/AiDisabledNotice'
 
 export const RAIL = 316
 export const RAIL_GAP = 22
@@ -54,6 +55,9 @@ interface Props {
    *  pulsing "Updating context…" hint so the user knows a Run now would carry
    *  provisional summaries (Part A). */
   contextBuilding?: boolean
+  /** False when Claude is unavailable — the composer Run + snapshot are disabled
+   *  and a notice shows. Accept/Reject on a pending proposal stay enabled. */
+  aiEnabled?: boolean
   onToggleAdding: () => void
   onRemoveBlock: (blockId: string) => void
   onActivate: () => void
@@ -174,6 +178,7 @@ export function TaskCard({
   side,
   adding,
   contextBuilding,
+  aiEnabled = true,
   onToggleAdding,
   onRemoveBlock,
   onActivate,
@@ -419,6 +424,7 @@ export function TaskCard({
                     size="sm"
                     variant="ghost"
                     active={!!task.image}
+                    disabled={!aiEnabled}
                     label={task.image ? 'Remove snapshot' : 'Attach snapshot'}
                     onClick={onSnapshot}
                   >
@@ -433,7 +439,7 @@ export function TaskCard({
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()
-                    onSubmit()
+                    if (aiEnabled) onSubmit()
                   }
                   if (e.key === 'Escape') onDismiss()
                 }}
@@ -450,10 +456,15 @@ export function TaskCard({
                   padding: '4px 0'
                 }}
               />
-              <Button size="sm" variant="primary" disabled={!task.instruction.trim()} onClick={onSubmit} iconLeft={<ArrowUp size={13} />}>
+              <Button size="sm" variant="primary" disabled={!task.instruction.trim() || !aiEnabled} onClick={onSubmit} iconLeft={<ArrowUp size={13} />}>
                 Run
               </Button>
             </div>
+            {!aiEnabled && (
+              <div style={{ marginTop: 8 }}>
+                <AiDisabledNotice />
+              </div>
+            )}
             <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 6, paddingLeft: 1, flexWrap: 'wrap' }}>
               {adding ? (
                 <span style={{ font: 'var(--weight-medium) var(--text-2xs)/1.4 var(--font-sans)', color: 'var(--clay-600)' }}>

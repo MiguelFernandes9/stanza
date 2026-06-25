@@ -31,6 +31,20 @@ export interface ClaudeResult {
   conflict?: LiveConflict
 }
 
+/** Whether the user has a working Claude CLI (installed AND logged in). The one
+ *  signal the renderer gates every AI feature on — disable the block button, the
+ *  assistant, and the composers when `available` is false. Probed in the main
+ *  process via `claude auth status` so detection matches what a real op would do. */
+export interface ClaudeAvailability {
+  available: boolean
+  /** Why unavailable — drives the disabled-state message. Absent when available. */
+  reason?: 'logged-out' | 'not-installed' | 'error'
+  /** Account email, shown in Settings when available. */
+  email?: string
+  /** Subscription tier (e.g. "max"), shown in Settings when available. */
+  subscriptionType?: string
+}
+
 /** One finished or pending op, as persisted per project (infra/Store).
  *  Lives in the contract because claude:history returns it to the renderer. */
 export interface OpRecord {

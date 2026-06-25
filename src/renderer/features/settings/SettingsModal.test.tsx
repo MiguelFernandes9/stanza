@@ -70,4 +70,24 @@ describe('SettingsModal', () => {
     await mount({ open: false })
     expect(sec('settings-modal')).toBeNull()
   })
+
+  it('shows the signed-in account when Claude is available, no auth hint', async () => {
+    await mount({ aiStatus: { status: 'available', email: 'me@x.com', subscriptionType: 'max' } })
+    expect(sec('ai-status-detail')?.textContent).toContain('me@x.com')
+    expect(sec('ai-status-detail')?.textContent).toContain('max')
+    expect(sec('ai-auth-hint')).toBeNull()
+  })
+
+  it('shows the reason + claude auth login when Claude is unavailable', async () => {
+    await mount({ aiStatus: { status: 'unavailable', reason: 'logged-out' } })
+    expect(sec('ai-status-detail')?.textContent).toContain('Signed out')
+    expect(sec('ai-auth-hint')?.textContent).toContain('claude auth login')
+  })
+
+  it('Recheck calls onRecheckAi', async () => {
+    const onRecheckAi = vi.fn()
+    await mount({ aiStatus: { status: 'unavailable', reason: 'not-installed' }, onRecheckAi })
+    act(() => sec('ai-recheck')!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(onRecheckAi).toHaveBeenCalledOnce()
+  })
 })

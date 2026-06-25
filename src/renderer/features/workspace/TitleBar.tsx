@@ -1,8 +1,9 @@
 import type { CSSProperties, JSX } from 'react'
 import { Code, RefreshCw, Settings, Sparkles } from 'lucide-react'
-import { CompilePill, IconButton, Tooltip } from '@renderer/components'
+import { CompilePill, IconButton, StatusDot, Tooltip } from '@renderer/components'
 import type { CompileState } from '@renderer/components'
 import { StanzaMark } from '@renderer/features/project/StanzaMark'
+import { reasonLabel, type AiStatus } from '@renderer/features/assistant/availability'
 
 export interface CompileInfo {
   state: CompileState
@@ -23,6 +24,8 @@ interface Props {
   onToggleChat: () => void
   /** Open the Settings panel (App owns the state; Lane S mounts the modal). */
   onOpenSettings: () => void
+  /** Claude availability — shows an "offline" indicator (→ Settings) when not usable. */
+  aiStatus?: AiStatus
 }
 
 /** Window chrome — design §2. Native macOS traffic lights (hiddenInset
@@ -37,7 +40,8 @@ export function TitleBar({
   chatOpen,
   chatUnread,
   onToggleChat,
-  onOpenSettings
+  onOpenSettings,
+  aiStatus
 }: Props): JSX.Element {
   return (
     <div
@@ -87,6 +91,31 @@ export function TitleBar({
           } as CSSProperties
         }
       >
+        {aiStatus?.status === 'unavailable' && (
+          <Tooltip label={reasonLabel(aiStatus.reason)} hint="Open Settings to fix" side="bottom">
+            <button
+              data-testid="ai-status"
+              type="button"
+              onClick={onOpenSettings}
+              aria-label={`Claude unavailable: ${reasonLabel(aiStatus.reason)}`}
+              style={
+                {
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  height: 26,
+                  padding: '0 9px',
+                  borderRadius: 'var(--radius-pill)',
+                  border: '1px solid var(--border-default)',
+                  background: 'var(--surface-card)',
+                  cursor: 'pointer',
+                  WebkitAppRegion: 'no-drag'
+                } as CSSProperties
+              }
+            >
+              <StatusDot tone="error" label="Claude offline" />
+            </button>
+          </Tooltip>
+        )}
         <CompilePill
           state={compile.state}
           errors={compile.errors}
