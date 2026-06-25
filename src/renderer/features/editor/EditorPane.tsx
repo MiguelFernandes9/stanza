@@ -110,7 +110,7 @@ export function EditorPane({
   // Right-click menu over the editor surface (Cut/Copy/Paste/Select All/…).
   // Anchored at the cursor; the items are rebuilt on open so disabled state
   // reflects the live selection.
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; pos: number | null } | null>(null)
 
   activeFileRef.current = activeFile
 
@@ -393,7 +393,8 @@ export function EditorPane({
             // placeholder keep the native menu.
             if (openFiles.length === 0 || showAsset || !viewRef.current) return
             e.preventDefault()
-            setMenu({ x: e.clientX, y: e.clientY })
+            const pos = viewRef.current.posAtCoords({ x: e.clientX, y: e.clientY })
+            setMenu({ x: e.clientX, y: e.clientY, pos })
           }}
           style={{
             position: 'absolute',
@@ -406,7 +407,7 @@ export function EditorPane({
           <FileContextMenu
             x={menu.x}
             y={menu.y}
-            items={buildEditorMenu(viewRef.current)}
+            items={buildEditorMenu(viewRef.current, menu.pos)}
             onClose={() => setMenu(null)}
           />
         )}

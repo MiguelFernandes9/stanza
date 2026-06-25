@@ -5,6 +5,7 @@ import { lintGutter } from '@codemirror/lint'
 import { EditorView, drawSelection, highlightActiveLine, keymap, lineNumbers } from '@codemirror/view'
 import { latex, latexCompletionSource } from 'codemirror-lang-latex'
 import type { Extension } from '@codemirror/state'
+import { latexSpellcheck } from './spellcheckLatex'
 import { citeSource } from './completion/citeSource'
 import { projectContextField } from './completion/contextFacet'
 import { filePathSource } from './completion/filePathSource'
@@ -39,7 +40,16 @@ const stanzaTheme = EditorView.theme({
   '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': {
     background: 'var(--select-fill) !important'
   },
-  '.cm-lint-marker-error': { content: 'none' }
+  '.cm-lint-marker-error': { content: 'none' },
+  // Misspelled prose (latexSpellcheck) — the universal red wavy underline, drawn
+  // under the word only (skip-ink off so it stays continuous under descenders).
+  '.cm-spell-error': {
+    textDecorationLine: 'underline',
+    textDecorationStyle: 'wavy',
+    textDecorationColor: '#e5484d',
+    textDecorationSkipInk: 'none',
+    textUnderlineOffset: '2px'
+  }
 })
 
 /** Static extension set; per-instance pieces (updateListener, state-closing
@@ -77,9 +87,9 @@ export function baseExtensions(): Extension[] {
     ]),
     stanzaTheme,
     EditorView.lineWrapping,
-    // Never spellcheck source: red squiggles under every \command are noise, and
-    // the app's spelling context menu keys off misspelledWord, so off here also
-    // keeps that menu away from the editor (it has its own right-click menu).
-    EditorView.contentAttributes.of({ spellcheck: 'false', autocorrect: 'off', autocapitalize: 'off' })
+    // Spellcheck the prose, not the markup: latexSpellcheck reads the syntax tree
+    // for `Normal` text runs only and underlines misspellings with our own engine
+    // (one rule off the tree, scales to every construct).
+    latexSpellcheck()
   ]
 }
