@@ -4,6 +4,7 @@ import { ArrowUp, Check, FileText, GitCommitHorizontal, Sparkles, Undo2, X } fro
 import { Avatar, Button, DiffHunk, Kbd, StatusDot } from '@renderer/components'
 import type { ReviewProposal } from '@shared/ipc'
 import { summarizeBlocks } from '@shared/blocks/changes'
+import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
 
 export interface ChatMessage {
   role: 'user' | 'claude'
@@ -84,10 +85,13 @@ function ProposalBlock({ proposal, resolved, onResolve }: { proposal?: ReviewPro
 export function ChatPane({ messages, busy, onSubmit, onResolveOp }: Props): JSX.Element {
   const [instruction, setInstruction] = useState('')
   const streamRef = useRef<HTMLDivElement | null>(null)
+  const taRef = useRef<HTMLTextAreaElement | null>(null)
 
   useEffect(() => {
     if (streamRef.current) streamRef.current.scrollTop = streamRef.current.scrollHeight
   }, [messages.length, busy])
+  // One-line at rest, grows with the prompt up to a cap (then scrolls).
+  useAutoGrowTextarea(taRef, instruction, 120)
 
   const submit = (): void => {
     if (!instruction.trim() || busy) return
@@ -210,6 +214,7 @@ export function ChatPane({ messages, busy, onSubmit, onResolveOp }: Props): JSX.
           }}
         >
           <textarea
+            ref={taRef}
             value={instruction}
             onChange={(e) => setInstruction(e.target.value)}
             onKeyDown={(e) => {
@@ -228,7 +233,6 @@ export function ChatPane({ messages, busy, onSubmit, onResolveOp }: Props): JSX.
               background: 'transparent',
               font: 'var(--weight-regular) var(--text-base)/1.45 var(--font-sans)',
               color: 'var(--ink-900)',
-              maxHeight: 96,
               padding: '5px 0'
             }}
           />
