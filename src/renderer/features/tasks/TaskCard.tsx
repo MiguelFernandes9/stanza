@@ -106,6 +106,44 @@ function ConflictBanner({ conflict }: { conflict: NonNullable<EditTask['conflict
   )
 }
 
+/** Always-on paper-context status, shown above the composer's prompt bar: a steady
+ *  grey dot when the summaries are up to date, a pulsing amber dot + "Updating
+ *  context…" while they refresh (a Run then carries provisional context, Part A). */
+function ContextStatus({ building }: { building?: boolean }): JSX.Element {
+  return (
+    <Tooltip
+      label={
+        building
+          ? 'The paper summaries are refreshing — an edit run now may use provisional context.'
+          : 'Paper context is up to date.'
+      }
+      side="top"
+    >
+      <span
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 5,
+          font: 'var(--text-2xs)/1 var(--font-sans)',
+          color: building ? 'var(--ink-500)' : 'var(--ink-400)',
+          cursor: 'default'
+        }}
+      >
+        <span
+          style={{
+            width: 5,
+            height: 5,
+            borderRadius: '50%',
+            background: building ? 'var(--clay-400)' : 'var(--ink-300)',
+            ...(building ? { animation: 'stz-pulse 1s var(--ease-in-out) infinite' } : {})
+          }}
+        />
+        {building ? 'Updating context…' : 'Context ready'}
+      </span>
+    </Tooltip>
+  )
+}
+
 export const tagKind = (b: PageBlock): BlockTagKind =>
   b.kind === 'heading'
     ? 'section'
@@ -359,6 +397,11 @@ export function TaskCard({
                 {task.error}
               </div>
             )}
+            {/* Context status sits on top of the prompt bar so it's the first thing
+                the eye lands on before typing an instruction. */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
+              <ContextStatus building={contextBuilding} />
+            </div>
             <div
               style={{
                 display: 'flex',
@@ -425,40 +468,6 @@ export function TaskCard({
               <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>run ·</span>
               <Kbd>esc</Kbd>
               <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>dismiss</span>
-              {/* Always-on paper-context status: a steady grey dot when the summaries
-                  are up to date, a pulsing amber dot + "Updating context…" while they
-                  refresh (a Run then carries provisional context, Part A). */}
-              <Tooltip
-                label={
-                  contextBuilding
-                    ? 'The paper summaries are refreshing — an edit run now may use provisional context.'
-                    : 'Paper context is up to date.'
-                }
-                side="top"
-              >
-                <span
-                  style={{
-                    marginLeft: 'auto',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 5,
-                    font: 'var(--text-2xs)/1 var(--font-sans)',
-                    color: contextBuilding ? 'var(--ink-500)' : 'var(--ink-400)',
-                    cursor: 'default'
-                  }}
-                >
-                  <span
-                    style={{
-                      width: 5,
-                      height: 5,
-                      borderRadius: '50%',
-                      background: contextBuilding ? 'var(--clay-400)' : 'var(--ink-300)',
-                      ...(contextBuilding ? { animation: 'stz-pulse 1s var(--ease-in-out) infinite' } : {})
-                    }}
-                  />
-                  {contextBuilding ? 'Updating context…' : 'Context ready'}
-                </span>
-              </Tooltip>
             </div>
           </div>
         )}
