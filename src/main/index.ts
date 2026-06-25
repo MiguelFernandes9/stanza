@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, nativeImage, shell } from 'electron'
 import { join } from 'node:path'
+import { isMac } from '@shared/platform'
 import {
   dropSession,
   getGlobalSettings,
@@ -65,7 +66,10 @@ function createWindow(): BrowserWindow {
     minHeight: 620,
     show: false,
     icon: ICON_PATH, // win/linux; macOS ignores the window icon (Dock set below)
-    titleBarStyle: 'hiddenInset',
+    // macOS: frameless with inset traffic lights (the TitleBar reserves 84px for
+    // them). Windows/Linux have no left-inset native controls, so use the default
+    // OS frame — Windows custom controls (titleBarOverlay) come in the Windows phase.
+    titleBarStyle: isMac(process.platform) ? 'hiddenInset' : 'default',
     backgroundColor: '#F4EFE6',
     webPreferences: {
       preload: join(import.meta.dirname, '../preload/index.mjs'),

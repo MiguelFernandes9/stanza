@@ -91,13 +91,12 @@ describe('CompileService.compile', () => {
     const result = await service.compile({})
 
     expect(result.ok).toBe(false)
-    expect(result.errors).toEqual([
-      {
-        file: '',
-        line: null,
-        message: 'tectonic not found — install with: brew install tectonic',
-      },
-    ])
+    expect(result.errors).toHaveLength(1)
+    expect(result.errors[0]).toMatchObject({ file: '', line: null })
+    // The install hint is platform-specific (brew/scoop/apt); assert the stable
+    // "not found" guidance + the tool name rather than one OS's exact wording.
+    expect(result.errors[0]!.message).toMatch(/^tectonic not found —/)
+    expect(result.errors[0]!.message).toContain('tectonic')
   })
 
   test('a second compile aborts the running one; latest wins', async () => {

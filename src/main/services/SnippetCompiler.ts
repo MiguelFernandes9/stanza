@@ -2,9 +2,10 @@ import { readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseCompileLog } from '../../shared/latex/log'
 import type { ProcessRunner } from '../infra/ProcessRunner'
+import { installHint } from '../infra/installHint'
 
-const TECTONIC_HINT = 'tectonic not found — install with: brew install tectonic'
-const LATEXDIFF_HINT = 'latexdiff not found — install with: brew install latexdiff'
+const TECTONIC_HINT = `tectonic not found — ${installHint('tectonic', 'https://tectonic-typesetting.github.io/install.html')}`
+const LATEXDIFF_HINT = `latexdiff not found — ${installHint('latexdiff', 'https://ctan.org/pkg/latexdiff')}`
 
 /** Throwaway wrapper prefix for an isolated-block compile. Mirrors
  *  CompileService's `.stanza-scope` convention so the doc .gitignore

@@ -6,6 +6,7 @@ import type { BlockTagKind } from '@renderer/components'
 import type { PreviewRequest, PreviewResult, ReviewProposal } from '@shared/ipc'
 import { DiffPreviewPane } from './DiffPreviewPane'
 import { DiffView } from './DiffView'
+import { modKey } from '@renderer/lib/platform'
 
 export interface ReviewBlockTag {
   kind: BlockTagKind
@@ -121,7 +122,7 @@ export function ReviewOverlay({ proposal, note, blockTag, fetchPreview, onClose,
           </span>
           <div style={{ flex: 1 }} />
           <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center', marginRight: 6 }}>
-            <Kbd>⌘</Kbd>
+            <Kbd>{modKey()}</Kbd>
             <Kbd>↵</Kbd>
           </span>
           <Button size="md" variant="secondary" iconLeft={<X size={14} />} onClick={() => onResolve(false)}>

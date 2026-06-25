@@ -5,6 +5,7 @@ import { Avatar, Button, DiffHunk, Kbd, StatusDot } from '@renderer/components'
 import type { ReviewProposal } from '@shared/ipc'
 import { summarizeBlocks } from '@shared/blocks/changes'
 import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
+import { modKey } from '@renderer/lib/platform'
 
 export interface ChatMessage {
   role: 'user' | 'claude'
@@ -70,7 +71,7 @@ function ProposalBlock({ proposal, resolved, onResolve }: { proposal?: ReviewPro
         </Button>
         <div style={{ flex: 1 }} />
         <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-          <Kbd>⌘</Kbd>
+          <Kbd>{modKey()}</Kbd>
           <Kbd>↵</Kbd>
         </span>
       </div>
@@ -245,7 +246,7 @@ export function ChatPane({ messages, busy, onSubmit, onResolveOp }: Props): JSX.
             Claude Code edits the <span style={{ fontFamily: 'var(--font-mono)' }}>.tex</span> source directly ·{' '}
           </span>
           <span style={{ display: 'inline-flex', gap: 3, alignItems: 'center' }}>
-            <Kbd>⌘</Kbd>
+            <Kbd>{modKey()}</Kbd>
             <Kbd>↵</Kbd>
           </span>
           <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>to run</span>

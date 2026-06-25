@@ -10,6 +10,9 @@ function assertKnown(channel: string): void {
 // Thin allowlisted pass-through; the typed surface lives in
 // src/renderer/lib/ipc.ts against the shared contract.
 const bridge = {
+  // The host OS, bridged from the node-context preload — the renderer's isolated
+  // world has no `process`. Read via src/renderer/lib/platform.ts, not directly.
+  platform: process.platform as string,
   // Variadic: document:save's handler takes (relPath, content) positionally.
   invoke(channel: string, ...args: unknown[]): Promise<unknown> {
     assertKnown(channel)

@@ -3,6 +3,7 @@ import { Code, RefreshCw, Settings, Sparkles } from 'lucide-react'
 import { CompilePill, IconButton, Tooltip } from '@renderer/components'
 import type { CompileState } from '@renderer/components'
 import { StanzaMark } from '@renderer/features/project/StanzaMark'
+import { isMac, modKey } from '@renderer/lib/platform'
 
 export interface CompileInfo {
   state: CompileState
@@ -25,8 +26,9 @@ interface Props {
   onOpenSettings: () => void
 }
 
-/** Window chrome — design §2. Native macOS traffic lights (hiddenInset
- *  window) sit in the left inset; the design's drawn dots are not recreated. */
+/** Window chrome — design §2. On macOS the native traffic lights (hiddenInset
+ *  window) sit in the left inset, so the title bar reserves 84px there; on
+ *  Windows/Linux there are no left controls, so it uses the normal 12px gutter. */
 export function TitleBar({
   title,
   mainFile,
@@ -39,6 +41,7 @@ export function TitleBar({
   onToggleChat,
   onOpenSettings
 }: Props): JSX.Element {
+  const mod = modKey()
   return (
     <div
       style={
@@ -48,7 +51,7 @@ export function TitleBar({
           gap: 12,
           height: 'var(--rail-titlebar)',
           flex: '0 0 auto',
-          padding: '0 12px 0 84px',
+          padding: `0 12px 0 ${isMac() ? 84 : 12}px`,
           background: 'var(--surface-app)',
           borderBottom: '1px solid var(--border-default)',
           WebkitAppRegion: 'drag'
@@ -93,17 +96,17 @@ export function TitleBar({
           warnings={compile.warnings}
           onClick={onCompile}
         />
-        <Tooltip label="Recompile" hint="⌘R" side="bottom">
+        <Tooltip label="Recompile" hint={`${mod}R`} side="bottom">
           <IconButton label="Recompile" onClick={onCompile}>
             <RefreshCw size={17} />
           </IconButton>
         </Tooltip>
-        <Tooltip label="Source editor" hint="⌘E" side="bottom">
+        <Tooltip label="Source editor" hint={`${mod}E`} side="bottom">
           <IconButton label="Source editor" active={sourceOpen} onClick={onToggleSource}>
             <Code size={17} />
           </IconButton>
         </Tooltip>
-        <Tooltip label="Assistant panel" hint="⌘J" side="bottom">
+        <Tooltip label="Assistant panel" hint={`${mod}J`} side="bottom">
           <span style={{ position: 'relative', display: 'inline-flex' }}>
             <IconButton label="Assistant panel" active={chatOpen} onClick={onToggleChat}>
               <Sparkles size={17} />
@@ -126,7 +129,7 @@ export function TitleBar({
             )}
           </span>
         </Tooltip>
-        <Tooltip label="Settings" hint="⌘," side="bottom">
+        <Tooltip label="Settings" hint={`${mod},`} side="bottom">
           <IconButton label="Settings" onClick={onOpenSettings}>
             <Settings size={17} />
           </IconButton>

@@ -11,10 +11,11 @@ import type { BlockSpan } from '../../shared/ipc/claude'
 import type { DocumentInfo } from '../../shared/ipc/document'
 import type { CompileOptions } from '../../shared/ipc/settings'
 import type { ProcessRunner } from '../infra/ProcessRunner'
+import { installHint } from '../infra/installHint'
 import { parseCompileLog } from '../../shared/latex/log'
 import { parseEditOutput, parseViewOutput } from '../../shared/latex/synctex'
 
-const TECTONIC_HINT = 'tectonic not found — install with: brew install tectonic'
+const TECTONIC_HINT = `tectonic not found — ${installHint('tectonic', 'https://tectonic-typesetting.github.io/install.html')}`
 
 /** Max concurrent `synctex edit` processes for inverseBatch — caps the spawn burst
  *  while keeping a dense page (~450 rows) under ~0.5s. */
