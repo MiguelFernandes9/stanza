@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { CSSProperties, JSX } from 'react'
-import { ArrowUp, Camera, Check, CircleSlash, FileText, Maximize2, Pin, Plus, Sparkles, X } from 'lucide-react'
+import { AlertTriangle, ArrowUp, Camera, Check, CircleSlash, FileText, Maximize2, Pin, Plus, Sparkles, X } from 'lucide-react'
 import { BlockTag, Button, DiffHunk, IconButton, Kbd, Tooltip } from '@renderer/components'
 import type { BlockTagKind } from '@renderer/components'
 import { combinedSpanLabel, spanLabel } from '../paper/paperModel'
@@ -69,6 +69,37 @@ interface Props {
    *  whole-document cards (no block to snapshot). */
   onSnapshot?: () => void
   refCb: (el: HTMLDivElement | null) => void
+}
+
+/** Non-blocking ⚠ banner: another fork was editing overlapping content when this
+ *  op started (deterministic span overlap). The edit still ran — this tells the
+ *  user to double-check before accepting. Complements the model's own "⚠ possible
+ *  conflict" note inside the summary. */
+function ConflictBanner({ conflict }: { conflict: NonNullable<EditTask['conflict']> }): JSX.Element {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        gap: 7,
+        alignItems: 'flex-start',
+        background: 'rgba(240,180,40,0.12)',
+        border: '1px solid rgba(180,120,0,0.32)',
+        borderRadius: 'var(--radius-md)',
+        padding: '7px 9px',
+        margin: '0 0 8px'
+      }}
+    >
+      <AlertTriangle size={13} style={{ color: '#9a6a00', flex: '0 0 auto', marginTop: 1 }} />
+      <div style={{ minWidth: 0 }}>
+        <div style={{ font: 'var(--weight-semibold) var(--text-2xs)/1.35 var(--font-sans)', color: '#7a5400' }}>
+          Overlaps a live edit on {conflict.location}
+        </div>
+        <div style={{ font: 'var(--text-2xs)/1.4 var(--font-sans)', color: 'var(--ink-500)', marginTop: 1 }}>
+          A parallel edit is running: “{conflict.instruction}”. Review before accepting.
+        </div>
+      </div>
+    </div>
+  )
 }
 
 export const tagKind = (b: PageBlock): BlockTagKind =>
@@ -311,6 +342,10 @@ export function TaskCard({
             </button>
           )}
         </div>
+
+        {task.conflict && (task.phase === 'review' || task.phase === 'noop') && (
+          <ConflictBanner conflict={task.conflict} />
+        )}
 
         {task.phase === 'compose' && (
           <div>

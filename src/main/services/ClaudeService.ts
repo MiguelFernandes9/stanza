@@ -6,6 +6,7 @@ import type { ClaudeRequest, ClaudeStatus } from '../../shared/ipc/claude'
 import type { CommitInfo, DocumentInfo } from '../../shared/ipc/document'
 import type { ProcessRunner, ProcResult } from '../infra/ProcessRunner'
 import type { GlobalSettingsStore } from '../infra/Store'
+import type { OutlineSection } from './paperOutline'
 import { opPrompt, primePrompt } from './prompts'
 import { ActiveOps, formatSessionDigest } from './sessionBus'
 
@@ -38,6 +39,10 @@ export class ClaudeService {
      *  each prime so a fresh fork "knows the paper". Synchronous + cached — never
      *  blocks priming. */
     private paperContext: () => string = () => '',
+    /** The document's section outline (with line ranges), used to tag each in-flight
+     *  sibling edit in the digest with WHERE it's editing. Built lazily — only read
+     *  when there's actually a parallel edit to locate. */
+    private sections: () => OutlineSection[] = () => [],
   ) {}
 
   /** Run one turn of a FORK (`forkId`) in its OWN `workDir`: prime a fresh session
@@ -91,7 +96,11 @@ export class ClaudeService {
       // Capped at busCommitLimit (default 20) so old history doesn't burn tokens.
       const limit = this.globalSettings.get().busCommitLimit ?? 20
       const commits = await this.recentCommits(limit).catch((): CommitInfo[] => [])
-      const digest = formatSessionDigest(commits, this.activeOps.othersFor(this.doc.root, forkId), limit)
+      const others = this.activeOps.othersFor(this.doc.root, forkId)
+      // Build the outline only when there's a parallel edit to locate — it parses
+      // every project file, needless work when no sibling is in flight.
+      const outline = others.length > 0 ? this.sections() : []
+      const digest = formatSessionDigest(commits, others, limit, outline)
       args.push('--output-format', 'json', '--permission-mode', 'acceptEdits', opPrompt(req, shotPath, digest ?? undefined))
       const proc = await this.claudeIn(workDir, args)
       assertCompleted(proc, this.timeoutMs)

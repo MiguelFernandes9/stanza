@@ -8,6 +8,7 @@ import { GitClient } from './infra/GitClient'
 import type { GlobalSettingsStore, Store } from './infra/Store'
 import { ForkManager } from './fork/ForkManager'
 import { ClaudeService } from './services/ClaudeService'
+import { buildOutline } from './services/paperOutline'
 import { SummaryService } from './services/SummaryService'
 import { ActiveOps } from './services/sessionBus'
 import { CompileService } from './services/CompileService'
@@ -112,6 +113,7 @@ export class DocumentSession {
       runner, globalSettings, info, undefined, activeOps,
       (n) => this.git.log(n),
       () => this.summaries.contextFor(info.root, info.texFiles, readDoc),
+      () => buildOutline(info.texFiles, readDoc),
     )
     this.files = new FileService(info.root, this.git)
     this.snippets = new SnippetCompiler(runner, info.root)

@@ -658,10 +658,10 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
     void client.claudeRun({ instruction, spans, imageDataUrl: image }).then(
       (res) => {
         dispatch({ type: 'op-started', taskId, opId: res.opId })
-        if (res.proposal) dispatch({ type: 'proposal', taskId, proposal: res.proposal, note: res.note })
+        if (res.proposal) dispatch({ type: 'proposal', taskId, proposal: res.proposal, note: res.note, conflict: res.conflict })
         // No proposal: Claude refused (out-of-span) or made no changes — keep
         // the task as a noop card showing the note instead of removing it.
-        else dispatch({ type: 'op-noop', taskId, note: res.note })
+        else dispatch({ type: 'op-noop', taskId, note: res.note, conflict: res.conflict })
         if (!chatOpen) setUnreadNotes((n) => n + 1)
         loadOps()
       },
@@ -822,7 +822,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
             ts: new Date().toISOString(),
             ...(res.proposal ? { opId: res.opId, accepted: null } : {})
           }
-          dispatch({ type: 'turn-result', taskId, turn: agentTurn, proposal: res.proposal, sessionId: res.sessionId })
+          dispatch({ type: 'turn-result', taskId, turn: agentTurn, proposal: res.proposal, sessionId: res.sessionId, conflict: res.conflict })
           if (!chatOpen) setUnreadNotes((n) => n + 1)
         },
         (err: unknown) =>

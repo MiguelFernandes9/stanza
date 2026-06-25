@@ -1,16 +1,19 @@
+import type { BlockSpan } from '../../shared/ipc/claude'
 import { contentHash, parseProjectBlocks } from '../../shared/blocks/parse'
 import type { BlockNode } from '../../shared/blocks/types'
 
 /** One sectioning node (section/subsection/…) for the paper context: a
- *  position-independent `key` (the title-path), its nesting `level`, and the
- *  hash of its OWN prose (excluding nested sub-sections) so a summary is
- *  regenerated only when that node's content changed. */
+ *  position-independent `key` (the title-path), its nesting `level`, the hash of
+ *  its OWN prose (excluding nested sub-sections) so a summary is regenerated only
+ *  when that node's content changed, and its full source `range` (heading through
+ *  its last descendant) so an edit span can be mapped back to the section it sits in. */
 export interface OutlineSection {
   key: string // title-path, e.g. "Methodology > Setup"
   level: number // 1 = top-level section/chapter, 2 = subsection, …
   title: string
   ownText: string // this node's direct prose (leaf children), excluding sub-sections
   hash: string // contentHash(ownText)
+  range: BlockSpan // heading line → last descendant line (covers nested sub-sections)
 }
 
 /** Walk the document's sectioning tree into a flat outline. Keyed by title-path
@@ -53,9 +56,44 @@ function walk(
     }
     const path = [...ancestors, title]
     const ownText = ownProse(node, lines)
-    out.push({ key: path.join(' > '), level: depth + 1, title, ownText, hash: contentHash(ownText) })
+    out.push({
+      key: path.join(' > '),
+      level: depth + 1,
+      title,
+      ownText,
+      hash: contentHash(ownText),
+      range: extentOf(node),
+    })
     walk(node.children, path, depth + 1, lines, out)
   }
+}
+
+/** The section's full line extent in its heading's file: heading start through
+ *  the last line of any descendant (nested sub-sections included). Descendants in
+ *  OTHER files (a `\include`d chapter) don't extend it — they map to their own
+ *  nodes — so the range stays a single-file interval for span containment. */
+function extentOf(node: BlockNode): BlockSpan {
+  let endLine = node.span.endLine
+  const visit = (n: BlockNode): void => {
+    if (n.span.file === node.span.file) endLine = Math.max(endLine, n.span.endLine)
+    for (const child of n.children) visit(child)
+  }
+  for (const child of node.children) visit(child)
+  return { file: node.span.file, startLine: node.span.startLine, endLine }
+}
+
+/** The deepest outline section whose range contains `span`'s start line in the
+ *  same file — i.e. "which section is this edit in". Undefined when the span
+ *  falls outside every titled section (e.g. the preamble). */
+export function sectionForSpan(outline: OutlineSection[], span: BlockSpan): OutlineSection | undefined {
+  let best: OutlineSection | undefined
+  for (const s of outline) {
+    if (s.range.file !== span.file) continue
+    if (s.range.startLine <= span.startLine && span.startLine <= s.range.endLine) {
+      if (!best || s.level > best.level) best = s // prefer the deepest (most specific) section
+    }
+  }
+  return best
 }
 
 /** A section's OWN prose: its direct leaf children (paragraphs/environments)

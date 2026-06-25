@@ -38,7 +38,9 @@ import { Store, GlobalSettingsStore } from './infra/Store'
 import { appendTurns, patchTurnByOpId, removeThread, upsertThread } from './threadStore'
 import { changedFilesInDiff } from './services/diffSpans'
 import { DocumentService } from './services/DocumentService'
-import { ActiveOps } from './services/sessionBus'
+import { buildOutline } from './services/paperOutline'
+import { ActiveOps, describeScope } from './services/sessionBus'
+import type { LiveConflict } from '@shared/ipc'
 import type { Fork, ForkScope } from './fork/Fork'
 import { DocumentSession } from './session'
 import { mapRecents } from './recents'
@@ -511,6 +513,31 @@ function forkScope(spans: BlockSpan[]): ForkScope {
   return spans.length === 0 ? { kind: 'doc' } : { kind: 'blocks', spans }
 }
 
+/** The deterministic conflict signal for a just-started fork: another in-flight
+ *  fork whose scope overlaps this one's (span math, incl. parent/child containment
+ *  and whole-doc). Undefined when nothing overlaps. The location names the OTHER
+ *  edit's section; the outline is built only when an overlap exists (rare). */
+function liveConflictFor(doc: DocumentSession, fork: Fork): LiveConflict | undefined {
+  const others = activeOps.overlaps(doc.info.root, fork.scope, fork.forkId)
+  if (others.length === 0) return undefined
+  const other = others[0]! // one representative — the badge is a "go check" nudge, not a manifest
+  const read = (rel: string): string | null => {
+    try {
+      return readFileSync(join(doc.info.root, rel), 'utf8')
+    } catch {
+      return null
+    }
+  }
+  const location = describeScope(buildOutline(doc.info.texFiles, read), other.scope) ?? 'another part of the document'
+  return { location, instruction: oneLineInstruction(other.instruction) }
+}
+
+/** Collapse an instruction to a single bounded line for the conflict badge. */
+function oneLineInstruction(s: string, max = 120): string {
+  const t = s.replace(/\s+/g, ' ').trim()
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t
+}
+
 /** The shared per-fork pipeline (FR7, §11): wip-commit the user tree → sync THIS
  *  fork's worktree to HEAD → run the edit `body` THERE (a settle watcher catches
  *  writes that flush after claude exits) → capture the worktree onto a proposal
@@ -554,6 +581,11 @@ async function runClaudeOp(
   doc.review.assertSpansFree(req.spans) // interim overlap guard (vs PENDING proposals)
   const fork = doc.forks.create(forkScope(req.spans), 'ephemeral')
 
+  // Deterministic conflict signal, snapshotted at trigger time (before THIS fork
+  // is added): which already-in-flight forks edit overlapping content. Carried back
+  // on the result for the renderer's ⚠ badge — the model's own "⚠ possible conflict"
+  // note adds the semantic cases the span math can't see.
+  const conflict = liveConflictFor(doc, fork)
   // Write-on-prompt (session bus): record this op as in-flight the moment it's
   // triggered, so a sibling session that starts an op meanwhile sees it's editing.
   activeOps.start({ forkId: fork.forkId, root: doc.info.root, instruction: req.instruction, scope: fork.scope, startedAt: new Date().toISOString(), windowId: doc.sessionId })
@@ -591,7 +623,7 @@ async function runClaudeOp(
       })
       // The proposal travels back on this return — the initiating renderer wires it
       // into the busy task. Do NOT also broadcast review:proposal here (BUG-18).
-      return { opId: op!.opId, note: op!.note, proposal }
+      return { opId: op!.opId, note: op!.note, proposal, ...(conflict ? { conflict } : {}) }
     })
   } finally {
     activeOps.end(fork.forkId) // op no longer in flight (session bus)
@@ -672,6 +704,9 @@ async function runClaudeTurn(
   // A PERSISTENT fork keyed by the thread id: its worktree + session live across
   // turns (a live chat), and survive a relaunch (the path is stable per thread).
   const fork = doc.forks.getOrCreate(req.threadId, forkScope(req.spans), 'persistent')
+  // Deterministic conflict signal at trigger time (see runClaudeOp). Excludes THIS
+  // fork by id, so a persistent thread's own prior turn never self-flags.
+  const conflict = liveConflictFor(doc, fork)
   // Write-on-prompt (session bus): mark this turn in-flight so siblings see it.
   activeOps.start({ forkId: fork.forkId, root: doc.info.root, instruction: req.instruction, scope: fork.scope, startedAt: new Date().toISOString(), windowId: doc.sessionId })
   doc.beginOp()
@@ -718,7 +753,7 @@ async function runClaudeTurn(
       )
       if (proposal) doc.diffPreview.prime(proposal.opId, proposal.branch, proposal.blocks)
       persistThreadTurn(doc.info.root, req, turn!, proposal)
-      return { opId: turn!.opId, note: turn!.note, sessionId: turn!.sessionId, proposal }
+      return { opId: turn!.opId, note: turn!.note, sessionId: turn!.sessionId, proposal, ...(conflict ? { conflict } : {}) }
     })
   } finally {
     activeOps.end(fork.forkId) // turn no longer in flight (session bus)

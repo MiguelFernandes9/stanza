@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { buildOutline } from '../paperOutline'
+import { buildOutline, sectionForSpan } from '../paperOutline'
 
 const TEX = `\\documentclass{article}
 \\begin{document}
@@ -36,6 +36,38 @@ describe('buildOutline', () => {
     expect(methods.ownText).toContain('Methodology overview prose.')
     expect(methods.ownText).not.toContain('Setup prose.') // belongs to the subsection
     expect(methods.ownText).not.toContain('Architecture prose.')
+  })
+
+  test("a section's range covers its nested sub-sections", () => {
+    const outline = buildOutline(['main.tex'], read(TEX))
+    const meth = outline.find((s) => s.key === 'Methodology')!
+    const setup = outline.find((s) => s.key === 'Methodology > Setup')!
+    expect(meth.range.file).toBe('main.tex')
+    expect(meth.range.startLine).toBeLessThan(setup.range.startLine) // heading precedes the subsection
+    expect(meth.range.endLine).toBeGreaterThanOrEqual(setup.range.endLine) // extends to cover it
+  })
+
+  describe('sectionForSpan', () => {
+    const outline = buildOutline(['main.tex'], read(TEX))
+    const setup = outline.find((s) => s.key === 'Methodology > Setup')!
+    const meth = outline.find((s) => s.key === 'Methodology')!
+    const at = (line: number, file = 'main.tex') => sectionForSpan(outline, { file, startLine: line, endLine: line })
+
+    test('maps a span to the DEEPEST section that contains it', () => {
+      expect(at(setup.range.startLine)?.key).toBe('Methodology > Setup') // subsection wins over its parent
+    })
+
+    test("maps a span in a section's own prose to that section, not a sibling subsection", () => {
+      expect(at(meth.range.startLine)?.key).toBe('Methodology') // the heading line sits in Methodology only
+    })
+
+    test('returns undefined for a span outside every titled section (preamble)', () => {
+      expect(at(1)).toBeUndefined()
+    })
+
+    test('returns undefined for a span in a different file', () => {
+      expect(at(setup.range.startLine, 'other.tex')).toBeUndefined()
+    })
   })
 
   test('hash changes only for the node whose own prose changed', () => {
