@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, webContents } from 'electron'
 import type { IpcMainInvokeEvent, WebContents } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
@@ -22,6 +22,7 @@ import type {
   RecentProject,
   ReviewDecision,
   ReviewProposal,
+  SummaryStatus,
   ThreadRecord,
   ThreadTurn,
   GlobalSettings,
@@ -92,6 +93,17 @@ export function getGlobalSettings(): GlobalSettings {
 /** Patch app-wide settings — the quit dialog persists "Don't ask again". */
 export function setGlobalSettings(patch: Partial<GlobalSettings>): void {
   globalSettings?.set(patch)
+}
+
+/** Push a paper-context refresh status to every window showing `root` (a doc can
+ *  be open in more than one window). Keyed by webContents id — the session map's
+ *  key — resolved back to its WebContents to send. */
+function emitSummaryStatus(root: string, building: boolean): void {
+  for (const [id, s] of sessions) {
+    if (s.info.root !== root) continue
+    const wc = webContents.fromId(id)
+    if (wc) sendTo(wc, IpcChannels.summaryStatus, { building } satisfies SummaryStatus)
+  }
 }
 
 /** Drop a window's session when it closes (index.ts wires win.on('closed')). */
@@ -398,7 +410,7 @@ export function registerIpcHandlers(): void {
         // recompile from the new file. open() honors the override just written.
         const info = await documents.open(root)
         if (info) {
-          sessions.set(event.sender.id, new DocumentSession(info, runner, store, globalSettings, activeOps))
+          sessions.set(event.sender.id, new DocumentSession(info, runner, store, globalSettings, activeOps, emitSummaryStatus))
           return { doc: info }
         }
         return { doc: null }
@@ -461,7 +473,7 @@ async function loadDoc(
 }
 
 function bindSession(wc: WebContents, info: DocumentInfo): void {
-  const session = new DocumentSession(info, runner, store, globalSettings, activeOps)
+  const session = new DocumentSession(info, runner, store, globalSettings, activeOps, emitSummaryStatus)
   sessions.set(wc.id, session)
   void session.forks.sweepStale().catch(() => {}) // drop fork worktrees left by a crash/quit
   store.setProject(info.root, { primed: true }) // a reopen now takes the instant path

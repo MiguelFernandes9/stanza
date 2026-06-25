@@ -49,6 +49,10 @@ interface Props {
    *  is dropped — PaperPane draws an SVG bezier from the page to the bubble. */
   side?: 'left' | 'right'
   adding: boolean
+  /** True while the paper-context summarizer is refreshing — the composer shows a
+   *  pulsing "Updating context…" hint so the user knows a Run now would carry
+   *  provisional summaries (Part A). */
+  contextBuilding?: boolean
   onToggleAdding: () => void
   onRemoveBlock: (blockId: string) => void
   onActivate: () => void
@@ -129,6 +133,7 @@ export function TaskCard({
   expanded,
   side,
   adding,
+  contextBuilding,
   onToggleAdding,
   onRemoveBlock,
   onActivate,
@@ -420,6 +425,14 @@ export function TaskCard({
               <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>run ·</span>
               <Kbd>esc</Kbd>
               <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>dismiss</span>
+              {contextBuilding && (
+                <Tooltip label="The paper summaries are refreshing — an edit run now may use provisional context." side="top">
+                  <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 5, font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-500)', cursor: 'default' }}>
+                    <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--clay-400)', animation: 'stz-pulse 1s var(--ease-in-out) infinite' }} />
+                    Updating context…
+                  </span>
+                </Tooltip>
+              )}
             </div>
           </div>
         )}

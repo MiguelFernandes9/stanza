@@ -30,6 +30,7 @@ import type {
   ReviewResolution,
   SettingsChanged,
   SourceLocation,
+  SummaryStatus,
   ThreadRecord
 } from '@shared/ipc'
 import type { BlockNode } from '@shared/blocks/types'
@@ -127,6 +128,7 @@ export const api = {
   settingsSetDocument: (patch: DocumentSettings) =>
     invoke<DocumentSettingsResult>(IpcChannels.settingsSetDocument, patch),
   onCompileStatus: on<CompileStatus>(IpcChannels.compileStatus),
+  onSummaryStatus: on<SummaryStatus>(IpcChannels.summaryStatus),
   onSettingsChanged: on<SettingsChanged>(IpcChannels.settingsChanged),
   /** External fs change under the doc root — the renderer re-fetches document:files. */
   onDocumentFilesChanged: on<void>(IpcChannels.documentFilesChanged),

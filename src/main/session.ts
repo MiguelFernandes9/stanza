@@ -84,6 +84,9 @@ export class DocumentSession {
     /** Shared across windows by ipc-registry so a session sees its siblings' in-flight
      *  ops; defaults to a private registry for isolated callers (tests). */
     activeOps: ActiveOps = new ActiveOps(),
+    /** Notified when this doc's paper-summary refresh starts/ends, so ipc-registry
+     *  can push a "context updating" hint to the window. Optional (tests omit it). */
+    onSummaryBusy?: (root: string, busy: boolean) => void,
   ) {
     this.info = info
     // Per-doc worktree namespace; each fork gets <forkBase>/<forkId>. Stable per
@@ -96,7 +99,7 @@ export class DocumentSession {
     this.git = new GitClient(runner, info.root)
     this.review = new ReviewService(this.git)
     this.forks = new ForkManager(this.git, forkBase, globalSettings.get().forkConcurrency ?? 12)
-    this.summaries = new SummaryService(runner, store)
+    this.summaries = new SummaryService(runner, store, onSummaryBusy)
     const readDoc = (rel: string): string | null => {
       try {
         return readFileSync(join(info.root, rel), 'utf8')

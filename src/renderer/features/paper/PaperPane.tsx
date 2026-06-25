@@ -49,6 +49,9 @@ interface Props {
   state: TaskState
   /** Compile lifecycle — drives the filler's honest status while pdfUrl is null. */
   compile: { state: CompileState; errors: number }
+  /** True while the paper-context summarizer is refreshing — the composer shows a
+   *  "context updating" hint (provisional summaries, Part A). */
+  contextBuilding?: boolean
   /** stanza-doc:// url with compile nonce; null before the first ok compile. */
   pdfUrl: string | null
   /** Read-mode click on the page → synctex inverse (F7). PDF pt. */
@@ -883,6 +886,7 @@ export function PaperPane(props: Props): JSX.Element {
                           expanded
                           side={side}
                           adding={state.adding}
+                          contextBuilding={props.contextBuilding}
                           onToggleAdding={props.onToggleAdding}
                           onRemoveBlock={(bid) => props.onRemoveBlock(t.id, bid)}
                           onActivate={() => props.onActivateTask(t.id)}

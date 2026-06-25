@@ -22,6 +22,9 @@ export class SummaryService {
   constructor(
     private runner: ProcessRunner,
     private store: Store,
+    /** Notified when a background refresh for `root` starts (true) and ends (false),
+     *  so the UI can show a "context updating" hint. Optional — tests omit it. */
+    private onBusy?: (root: string, busy: boolean) => void,
   ) {}
 
   /** The outline + current gists block for the prime prompt. Schedules a
@@ -40,7 +43,11 @@ export class SummaryService {
   private scheduleRefresh(root: string, texFiles: string[], read: Read): void {
     if (this.refreshing.has(root)) return
     this.refreshing.add(root)
-    void this.refresh(root, texFiles, read).finally(() => this.refreshing.delete(root))
+    this.onBusy?.(root, true)
+    void this.refresh(root, texFiles, read).finally(() => {
+      this.refreshing.delete(root)
+      this.onBusy?.(root, false)
+    })
   }
 
   /** Re-summarize the sections whose own content changed since their cached gist,

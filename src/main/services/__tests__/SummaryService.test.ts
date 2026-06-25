@@ -160,6 +160,17 @@ Setup prose.
     expect(ctx).not.toContain('still being generated') // nothing provisional → no banner
   })
 
+  test('signals onBusy(true) when a refresh is scheduled and onBusy(false) when it ends', async () => {
+    const events: [string, boolean][] = []
+    const svc = new SummaryService(new StubRunner(), store, (r, busy) => events.push([r, busy]))
+
+    svc.contextFor(root, ['main.tex'], read(TEX)) // no cache → drift → schedules a refresh
+    expect(events[0]).toEqual([root, true]) // emitted synchronously at schedule time
+
+    await new Promise((r) => setTimeout(r, 30)) // let the background refresh settle
+    expect(events.at(-1)).toEqual([root, false]) // cleared when the refresh finishes
+  })
+
   test('returns empty string for a document with no titled sections', () => {
     const ctx = new SummaryService(new StubRunner(), store).contextFor(root, ['main.tex'], () => '\\documentclass{article}\n\\begin{document}\nhi\n\\end{document}\n')
     expect(ctx).toBe('')

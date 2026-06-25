@@ -87,6 +87,10 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
   // geometry; PaperPane reports that window so the pill stays "Compiling…" until
   // the new page swaps in (compile = LaTeX + block render, one status).
   const [blocksRendering, setBlocksRendering] = useState(false)
+  // True while the paper-context summarizer is refreshing this doc (main pushes
+  // summary:status). The bubble composer shows a "context updating" hint so the
+  // user knows an op run now would carry provisional summaries (Part A).
+  const [contextBuilding, setContextBuilding] = useState(false)
   // The block tree is being reparsed after a compile (loadBlocks in flight). The
   // paper pane gates its geometry recompute on this so it never bins fresh spans
   // against the previous PDF (or stale spans against the fresh PDF) — see loadBlocks.
@@ -352,6 +356,9 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
     () => client.onReviewProposal((proposal) => dispatch({ type: 'restore-proposal', proposal })),
     []
   )
+
+  // Paper-context refresh status → the composer's "context updating" hint.
+  useEffect(() => client.onSummaryStatus((s) => setContextBuilding(s.building)), [])
 
   useEffect(
     () =>
@@ -965,6 +972,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           blocks={blocks}
           state={state}
           compile={compile}
+          contextBuilding={contextBuilding}
           blocksReloading={blocksReloading}
           onRenderingChange={setBlocksRendering}
           pdfUrl={pdfUrl}
