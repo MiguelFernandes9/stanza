@@ -540,6 +540,19 @@ export function PaperPane(props: Props): JSX.Element {
     }
   }, [geo, twoCol, pageWidth, zoom, centerW, originX])
 
+  // When the LAST bubble closes (Esc, or re-clicking the block to deselect it), undo the F5
+  // reveal pan: glide the page back to centre — the rail no longer needs to be on-screen. Same
+  // target as the seed-centre above; clamps to 0 so a single-column page returns to its
+  // flex-centred rest. Fires only on the open→closed edge, so manual h-scroll is left alone.
+  const hadOpenRef = useRef(false)
+  useEffect(() => {
+    const el = scrollRef.current
+    const open = openIds.length > 0
+    if (el && geo && hadOpenRef.current && !open)
+      el.scrollTo({ left: Math.max(0, originX + pageWidth / 2 - el.clientWidth / 2), behavior: 'smooth' })
+    hadOpenRef.current = open
+  }, [openIds, geo, originX, pageWidth])
+
   const toggleOpen = (taskId: number): void => {
     setOpenIds((s) => (s.includes(taskId) ? s.filter((x) => x !== taskId) : [...s, taskId]))
     if (!openIds.includes(taskId)) props.onActivateTask(taskId)
