@@ -77,7 +77,7 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
   const command = `tectonic ${effectiveFlags(mainFile || '<main>.tex', compile)}`
 
   return (
-    <Modal title="Settings" onClose={onClose} testid="settings-modal">
+    <Modal title="Settings" onClose={onClose} testid="settings-modal" width="min(720px, 94vw)">
       <div style={{ padding: '6px 18px 18px' }}>
         <Section title="Editor" testid="section-editor-font">
           <Field label="Font family">
@@ -87,7 +87,7 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
               value={global.editorFontFamily ?? ''}
               options={FONT_FAMILIES}
               onChange={(v) => patchGlobal({ editorFontFamily: v || undefined })}
-              wrapStyle={{ minWidth: 190 }}
+              wrapStyle={{ minWidth: 240 }}
             />
           </Field>
           <Field label="Size">
@@ -115,7 +115,7 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
               value={mainFile}
               options={(doc?.texFiles ?? []).map((f) => ({ label: f, value: f }))}
               onChange={(v) => patchDoc({ mainFile: v })}
-              wrapStyle={{ minWidth: 190 }}
+              wrapStyle={{ minWidth: 240 }}
             />
           </Field>
         </Section>
@@ -130,7 +130,7 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
               value={compile.paperSize ?? ''}
               options={[{ label: 'Default', value: '' }, ...PAPER_SIZES.map((p) => ({ label: p, value: p }))]}
               onChange={(v) => patchCompile({ paperSize: v || undefined })}
-              wrapStyle={{ minWidth: 130 }}
+              wrapStyle={{ minWidth: 160 }}
             />
           </Field>
           <Field label="Shell escape" hint="Allow packages to run external commands (e.g. minted).">
@@ -189,7 +189,7 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
               value={global.claudeModel ?? ''}
               options={CLAUDE_MODELS}
               onChange={(v) => patchGlobal({ claudeModel: (v || undefined) as GlobalSettings['claudeModel'] })}
-              wrapStyle={{ minWidth: 170 }}
+              wrapStyle={{ minWidth: 200 }}
             />
           </Field>
           <Field label="Effort">
@@ -199,7 +199,7 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
               value={global.claudeEffort ?? ''}
               options={CLAUDE_EFFORTS}
               onChange={(v) => patchGlobal({ claudeEffort: (v || undefined) as GlobalSettings['claudeEffort'] })}
-              wrapStyle={{ minWidth: 170 }}
+              wrapStyle={{ minWidth: 200 }}
             />
           </Field>
           <Field label="Project history" hint="Commits of project history shown to the model.">
