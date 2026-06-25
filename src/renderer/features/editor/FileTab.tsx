@@ -81,12 +81,11 @@ export function FileTab({
         // Active = editor surface; inactive = chrome (blends into the strip),
         // lifting to the hover wash on hover.
         background: active ? 'var(--surface-card)' : hover ? 'var(--hover-fill)' : 'transparent',
-        // Clay top-accent on the active tab; its bottom border matches the
-        // editor surface so it overpaints the strip hairline and merges below.
+        // Clay top-accent on the active tab. The tab is full-height with an
+        // opaque surface, so it paints over the strip's inset bottom hairline
+        // beneath it — merging with the editor — without any negative margin
+        // (which would overflow the strip and trip a stray scrollbar).
         boxShadow: active ? 'inset 0 2px 0 var(--clay-500)' : undefined,
-        marginBottom: active ? -1 : undefined,
-        borderBottom: active ? '1px solid var(--surface-card)' : undefined,
-        zIndex: active ? 1 : undefined,
         whiteSpace: 'nowrap',
         cursor: 'grab',
         // Source ghost — "what is moving".

@@ -350,9 +350,13 @@ export function EditorPane({
           gap: 0,
           height: 'var(--rail-toolbar)',
           flex: '0 0 auto',
-          borderBottom: '1px solid var(--border-default)',
+          // Bottom hairline drawn as an inset shadow (behind the tabs), so the
+          // opaque active tab paints over it and merges with the editor below.
+          boxShadow: 'inset 0 -1px 0 var(--border-default)',
           background: 'var(--surface-app)',
-          overflowX: 'auto'
+          // Horizontal scroll for many tabs; never a vertical scrollbar.
+          overflowX: 'auto',
+          overflowY: 'hidden'
         }}
       >
         {openFiles.map((file, i) => (
