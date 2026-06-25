@@ -831,6 +831,32 @@ export function binBlocks(
     }
   }
 
+  // Galley-overhang trim. A display equation's \begin emits a thin galley strut that synctex
+  // forward-maps onto the PRECEDING paragraph's last line (most visible when that line is a
+  // single wrapped word). The strut is a valid-looking forward line-rect, so extent-fill pulls
+  // the equation's box TOP up over that line — there is no local signal (height, ink) that
+  // separates it from the doc's many real galley collisions without regressing them. But the
+  // strut overhang is the ONLY part of the box that (a) sits above the block's own rendered ink
+  // AND (b) overlaps ANOTHER block's box (the paragraph that owns the line under it). A real
+  // dropped-row recovery extends into empty space the block owns (no overlap); the few-pt
+  // rect-top-vs-glyph-top offset every box has is below its own ink. So cede only that overlap:
+  // clamp the top down to the block's own topmost unit. One rule, no constant, no kind gate.
+  const finalBoxes: { id: string; b: PdfRect }[] = []
+  for (const [id, bs] of boxesById) for (const b of bs) finalBoxes.push({ id, b })
+  for (const [id, bs] of boxesById) {
+    const us = byBlock.get(id)
+    if (!us) continue
+    for (const b of bs) {
+      const col = b.col ?? 'full'
+      let ownTop = Infinity
+      for (const u of us) if (u.page === b.page && (col === 'full' || colOfUnit(u) === 'full' || colOfUnit(u) === col)) ownTop = Math.min(ownTop, u.yTop)
+      if (ownTop === Infinity || b.y >= ownTop - 2) continue // no overhang above own ink
+      const ceded = finalBoxes.some(({ id: oid, b: o }) => oid !== id && o.page === b.page &&
+        o.x < b.x + b.width && b.x < o.x + o.width && o.y < ownTop && o.y + o.height > b.y)
+      if (ceded) { b.height = b.y + b.height - ownTop; b.y = ownTop }
+    }
+  }
+
   const contentTopByPage = new Map<number, number>()
   for (const arr of boxesById.values())
     for (const b of arr) {
@@ -1270,6 +1296,21 @@ export function environmentInteriorSpan(block: PageBlock): BlockSpan | null {
     : block.contentStartLine ?? block.span.startLine + 1
   const endLine = block.span.endLine - 1
   return endLine >= startLine ? { ...block.span, startLine, endLine } : null
+}
+
+/** True when a backward-map hit (file, line) landed on an environment block's
+ *  LEADING delimiter region — its \begin line (or leading invisible-macro lines
+ *  before contentStartLine) that environmentInteriorSpan excludes. Those lines
+ *  draw nothing; the env's opening galley strut forward-maps onto the PRECEDING
+ *  paragraph's dropped last wrapped line, so that line's row backward-maps INTO
+ *  the env (an off-by-one that makes the equation box steal the line above — most
+ *  visible when the line is a single wrapped word). Attribution detaches such a
+ *  unit (→ null) so the spatial-orphan pass re-homes it to its real paragraph, the
+ *  contiguous box above. Only the LEADING edge: a hit past the interior (the \end
+ *  line) is the env's own content rows (their galley origin), which it keeps. */
+export function mapsToLeadingDelimiter(block: PageBlock, file: string, line: number): boolean {
+  const interior = environmentInteriorSpan(block)
+  return interior !== null && file === interior.file && line < interior.startLine
 }
 
 /** Forward-map a block to its PDF rects, excluding environment delimiter

@@ -13,6 +13,7 @@ import {
   flattenBlocks,
   isMathEnvName,
   isTightAbove,
+  mapsToLeadingDelimiter,
   padBoxClamped,
   parentOf,
   PILL_MARGIN_GAP,
@@ -1201,6 +1202,54 @@ describe('environmentInteriorSpan — exclude \\begin/\\end delimiter lines (BUG
   })
 })
 
+describe('mapsToLeadingDelimiter — backward-map hit on an env \\begin galley', () => {
+  const align: PageBlock = {
+    id: 'eq#1', kind: 'environment', envName: 'align',
+    span: { file: 'ch.tex', startLine: 117, endLine: 123 },
+    sectionId: null, parentId: null, depth: 0
+  }
+
+  it('flags a hit on the \\begin line (the galley strut that steals the line above)', () => {
+    // interior is 118–122; a row backward-mapping to 117 (\begin) is the off-by-one
+    // that lands the preceding paragraph's last wrapped line onto the equation.
+    expect(mapsToLeadingDelimiter(align, 'ch.tex', 117)).toBe(true)
+  })
+
+  it('flags a leading invisible-macro line before contentStartLine', () => {
+    const eqn: PageBlock = {
+      id: 'eq#2', kind: 'environment', envName: 'equation',
+      span: { file: 'ch.tex', startLine: 239, endLine: 244 }, contentStartLine: 241,
+      sectionId: null, parentId: null, depth: 0
+    }
+    expect(mapsToLeadingDelimiter(eqn, 'ch.tex', 240)).toBe(true) // the \label line
+    expect(mapsToLeadingDelimiter(eqn, 'ch.tex', 241)).toBe(false) // first content line
+  })
+
+  it('does NOT flag an interior content line or the \\end line (those are real rows)', () => {
+    expect(mapsToLeadingDelimiter(align, 'ch.tex', 118)).toBe(false) // first equation
+    expect(mapsToLeadingDelimiter(align, 'ch.tex', 122)).toBe(false) // last equation
+    expect(mapsToLeadingDelimiter(align, 'ch.tex', 123)).toBe(false) // \end — equation rows map here
+  })
+
+  it('does NOT flag a non-environment block or a hit in another file', () => {
+    const para: PageBlock = {
+      id: 'p#1', kind: 'paragraph', span: { file: 'ch.tex', startLine: 110, endLine: 116 },
+      sectionId: null, parentId: null, depth: 0
+    }
+    expect(mapsToLeadingDelimiter(para, 'ch.tex', 110)).toBe(false) // paragraphs have no delimiter
+    expect(mapsToLeadingDelimiter(align, 'other.tex', 117)).toBe(false) // wrong file
+  })
+
+  it('does NOT flag a heading env (its \\begin renders the title, so it is content)', () => {
+    const abstract: PageBlock = {
+      id: 'abs#1', kind: 'environment', envName: 'abstract',
+      span: { file: 'ch.tex', startLine: 43, endLine: 51 },
+      sectionId: null, parentId: null, depth: 0
+    }
+    expect(mapsToLeadingDelimiter(abstract, 'ch.tex', 43)).toBe(false) // \begin draws "Abstract"
+  })
+})
+
 describe('blockGeometryRects — query interior, exclude \\end phantom (BUG-21)', () => {
   const rect = (top: number, bottom: number): PdfRect => ({
     page: 6,
@@ -1540,5 +1589,55 @@ describe('binBlocks — front-matter title/footnote split (Bug B)', () => {
     const fm = [...boxesById.get('env1#fm')!].sort((a, b) => a.y - b.y)
     expect(fm).toHaveLength(2) // split fired (title + footnote)
     expect(boxBottom(fm[1]!)).toBeCloseTo(626, 0) // footnote box extent-fills to the dropped line (raw bbox stops at 613)
+  })
+})
+
+describe('binBlocks — galley-overhang trim (display equation steals the line above)', () => {
+  // The reported bug: a display equation's \begin emits a thin galley strut that
+  // forward-maps onto the PRECEDING paragraph's last wrapped line ("are", one word).
+  // The strut is ink-backed by that line, so extent-fill pulls the equation box TOP up
+  // over it — overlapping the paragraph. The trim cedes that overlap (the equation has
+  // no own ink there) back to the paragraph that owns the line. (The detach of "are"
+  // itself is mapsToLeadingDelimiter, upstream in attribution — here it arrives null.)
+  const conv = trow(74, 84, 72, 540) // paragraph's "convergence ..." line
+  const are = trow(88, 96, 72, 100) //  its one-word last wrapped line, synctex-null
+  const eqRows = [trow(109, 120, 72, 540), trow(123, 134, 72, 540), trow(137, 148, 72, 540), trow(151, 162, 72, 540)]
+  const pageRows = [conv, are, ...eqRows]
+  const rowsByPage = new Map([[1, pageRows], [2, bodyRun(45, 640, 90, 520)]])
+
+  it('clamps the equation box top to its own ink and leaves the paragraph owning the line', () => {
+    const units: AttributedUnit[] = [
+      aunit(1, conv.xLeft, conv.yTop, conv.xRight, conv.yBottom, 'par#a'),
+      aunit(1, are.xLeft, are.yTop, are.xRight, are.yBottom, null), // detached upstream
+      ...eqRows.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'eq#1'))
+    ]
+    const regionsById = new Map<string, PdfRect[]>([
+      ['par#a', [prect(1, 72, 75, 468, 10)]], // synctex dropped the "are" line's rect
+      // the equation's galley strut sits on the "are" line (y92), then its real line rects
+      ['eq#1', [prect(1, 72, 92, 468, 5), ...eqRows.map((r) => prect(1, 72, r.yTop, 468, 13))]]
+    ])
+    const { boxesById } = binBlocks(units, rowsByPage, new Set(), regionsById, new Set())
+    const eq = boxesById.get('eq#1')!
+    const par = boxesById.get('par#a')!
+    expect(eq).toHaveLength(1)
+    expect(eq[0]!.y).toBeGreaterThan(105) // top sits at the first equation, NOT the strut (y92)
+    expect(boxBottom(par[par.length - 1]!)).toBeGreaterThan(95) // paragraph reclaims the "are" line
+    expect(eq[0]!.y).toBeGreaterThanOrEqual(boxBottom(par[par.length - 1]!) - 2) // no overlap
+  })
+
+  it('does NOT trim a legitimate upward recovery (own dropped line, no other box there)', () => {
+    // Same strut, but the line above is the equation's OWN dropped first row (null) with
+    // NO paragraph overlapping — the box must keep the recovered extent.
+    const units: AttributedUnit[] = [
+      aunit(1, are.xLeft, are.yTop, 540, are.yBottom, null), // eq's own dropped row, full width
+      ...eqRows.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'eq#1'))
+    ]
+    const rows = new Map([[1, [trow(88, 96, 72, 540), ...eqRows]], [2, bodyRun(45, 640, 90, 520)]])
+    const regionsById = new Map<string, PdfRect[]>([
+      ['eq#1', [prect(1, 72, 92, 468, 5), ...eqRows.map((r) => prect(1, 72, r.yTop, 468, 13))]]
+    ])
+    const { boxesById } = binBlocks(units, rows, new Set(), regionsById, new Set())
+    const eq = boxesById.get('eq#1')!
+    expect(eq[0]!.y).toBeLessThan(100) // keeps the strut-recovered top (no foreign box to cede to)
   })
 })
