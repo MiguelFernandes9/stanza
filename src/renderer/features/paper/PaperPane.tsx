@@ -767,20 +767,38 @@ export function PaperPane(props: Props): JSX.Element {
               style={{
                 position: 'absolute',
                 inset: 0,
-                // Clip the rail to the pane while no bubble is open, so the
+                // Clip the rail to the pane while NOTHING is selected, so the
                 // always-cW-wide connector svg can't spawn a spurious h-scrollbar
-                // (#70). When a bubble IS open, switch to visible so the rail
-                // extends the scroll container's scrollWidth and the bubble — which
-                // hangs off the page's right edge — becomes reachable by scrolling
-                // (BUG-46). The page is a separate flow child, so its centring is
-                // unaffected either way.
-                overflow: openTasks.length > 0 ? 'visible' : 'clip',
+                // (#70). While a block is selected (a bubble is open OR about to be),
+                // switch to visible so the rail extends the scroll container's
+                // scrollWidth and the bubble — which hangs off the page's right edge —
+                // becomes reachable (BUG-46). Gating on `activeTask`, not the live
+                // bubble count, keeps scrollWidth STABLE across a block→block switch:
+                // openTasks briefly empties between the old bubble closing and the new
+                // opening, and clipping on that transient collapsed scrollWidth → the
+                // browser clamped scrollLeft, snapping the page to centre before the
+                // new bubble's reveal panned it back (the "centre, then scroll" jank).
+                // The page is a separate flow child, so its centring is unaffected.
+                overflow: openTasks.length > 0 || state.activeTask != null ? 'visible' : 'clip',
                 display: 'flex',
                 justifyContent: 'safe center',
                 pointerEvents: 'none'
               }}
             >
               <div style={{ position: 'relative', width: centerW, height: contentH, flex: '0 0 auto' }}>
+                {/* Scroll-extent keeper: while a block is selected, pin the
+                    scrollable width out to the rail's far edge (+ gutter) — the same
+                    extent an open bubble reaches — so it never collapses in the
+                    no-bubble frame of a block→block switch and clamps the page to
+                    centre. Absolute + zero-size, so it touches neither layout nor the
+                    page's flex centring; gated with the overflow above on `activeTask`. */}
+                {state.activeTask != null && (
+                  <div
+                    aria-hidden
+                    data-testid="rail-scroll-extent"
+                    style={{ position: 'absolute', top: 0, left: cW + RAIL_GUTTER - 1, width: 1, height: 1, pointerEvents: 'none' }}
+                  />
+                )}
                 {/* connector lines: one bezier per open bubble */}
                 <svg
                   width={centerW}
