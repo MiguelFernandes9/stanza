@@ -76,6 +76,10 @@ export function baseExtensions(): Extension[] {
       indentWithTab
     ]),
     stanzaTheme,
-    EditorView.lineWrapping
+    EditorView.lineWrapping,
+    // Never spellcheck source: red squiggles under every \command are noise, and
+    // the app's spelling context menu keys off misspelledWord, so off here also
+    // keeps that menu away from the editor (it has its own right-click menu).
+    EditorView.contentAttributes.of({ spellcheck: 'false', autocorrect: 'off', autocapitalize: 'off' })
   ]
 }

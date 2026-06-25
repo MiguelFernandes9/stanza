@@ -73,4 +73,9 @@ describe('ChatPane — the one whole-document assistant (⌘J)', () => {
     act(() => textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true })))
     expect(onSubmit).not.toHaveBeenCalled()
   })
+
+  it('opts the composer into native spellcheck', () => {
+    render(<ChatPane {...props()} />)
+    expect(container.querySelector('textarea')!.getAttribute('spellcheck')).toBe('true')
+  })
 })

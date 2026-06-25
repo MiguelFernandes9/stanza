@@ -244,6 +244,16 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
               onChange={(c) => patchGlobal({ confirmBeforeQuit: c })}
             />
           </Field>
+          <Field
+            label="Check spelling as you type"
+            hint="Native macOS spellcheck on the prompt and chat boxes. Right-click a flagged word for suggestions."
+          >
+            <Toggle
+              aria-label="Check spelling as you type"
+              checked={global.spellcheckEnabled ?? true}
+              onChange={(c) => patchGlobal({ spellcheckEnabled: c })}
+            />
+          </Field>
         </Section>
       </div>
     </Modal>

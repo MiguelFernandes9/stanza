@@ -134,6 +134,7 @@ export function ThreadCard({
           }}
         >
           <textarea
+            spellCheck
             value={draft}
             disabled={locked}
             onChange={(e) => setDraft(e.target.value)}

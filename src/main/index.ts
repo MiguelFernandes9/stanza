@@ -12,6 +12,7 @@ import {
 import { buildAppMenu } from './menu'
 import { handleDocProtocol, registerDocScheme } from './protocol'
 import { quitDialogOptions, shouldPromptQuit } from './quitGuard'
+import { installSpellcheckMenu, setSpellcheckEnabled } from './spellcheck'
 
 registerDocScheme() // must precede app ready
 
@@ -98,6 +99,10 @@ function createWindow(): BrowserWindow {
     return { action: 'deny' }
   })
 
+  // Right-click a misspelled word → native spelling suggestions. Fires only over
+  // a flagged word, so it never touches the editor (spellcheck off there).
+  installSpellcheckMenu(win)
+
   if (process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
@@ -118,6 +123,8 @@ void app.whenReady().then(() => {
   // build the menu (also frees ⌘R from the default reload accelerator) and
   // register the rebuild hook so opens/creates refresh Open Recent.
   registerIpcHandlers()
+  // Apply the persisted spellcheck preference (default-on) now the store exists.
+  setSpellcheckEnabled(getGlobalSettings().spellcheckEnabled !== false)
   setRecentsListener(buildAppMenu)
   setWindowSpawner(createWindow) // open-in-new-window path (ipc-registry)
   buildAppMenu()

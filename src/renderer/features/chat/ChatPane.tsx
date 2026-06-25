@@ -210,6 +210,7 @@ export function ChatPane({ messages, busy, onSubmit, onResolveOp }: Props): JSX.
           }}
         >
           <textarea
+            spellCheck
             value={instruction}
             onChange={(e) => setInstruction(e.target.value)}
             onKeyDown={(e) => {

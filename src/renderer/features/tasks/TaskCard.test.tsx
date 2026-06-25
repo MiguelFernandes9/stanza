@@ -109,3 +109,10 @@ describe('TaskCard header X — collapse vs close', () => {
     expect(h.onDismiss).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('TaskCard spellcheck', () => {
+  it('the compose textarea opts into native spellcheck', () => {
+    renderPhase('compose', handlers())
+    expect(container.querySelector('textarea')!.getAttribute('spellcheck')).toBe('true')
+  })
+})

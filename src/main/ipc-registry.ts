@@ -45,6 +45,7 @@ import type { LiveConflict } from '@shared/ipc'
 import type { Fork, ForkScope } from './fork/Fork'
 import { DocumentSession } from './session'
 import { mapRecents } from './recents'
+import { setSpellcheckEnabled } from './spellcheck'
 
 const runner = new DefaultProcessRunner()
 let store: Store
@@ -391,6 +392,8 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IpcChannels.settingsSetGlobal, (_e, patch: Partial<GlobalSettings>): GlobalSettings => {
     const next = globalSettings.set(patch)
+    // Spellcheck is a session-level master switch → flip it live, no restart.
+    if (patch.spellcheckEnabled !== undefined) setSpellcheckEnabled(patch.spellcheckEnabled)
     // Global font/theme is app-wide → broadcast so EVERY window applies it live.
     broadcast(IpcChannels.settingsChanged, { global: next } satisfies SettingsChanged)
     return next
