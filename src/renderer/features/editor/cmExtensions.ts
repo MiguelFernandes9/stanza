@@ -10,6 +10,7 @@ import { projectContextField } from './completion/contextFacet'
 import { filePathSource } from './completion/filePathSource'
 import { AUTO_CLOSE_TAGS, latexConfig } from './completion/latexConfig'
 import { refSource } from './completion/refSource'
+import { inlineCodeHighlight } from './inlineCode'
 
 /** Editor chrome per design §2 SourceEditor: JetBrains Mono 13px/1.75,
  *  46px right-aligned gutter in ink-300, paper surfaces. */
@@ -56,6 +57,8 @@ export function baseExtensions(): Extension[] {
     bracketMatching(),
     syntaxHighlighting(defaultHighlightStyle),
     latex(latexConfig()),
+    // Tint \texttt{…} inline code (the grammar leaves it flat — see inlineCode).
+    inlineCodeHighlight,
     projectContextField,
     autocompletion({
       override: [filePathSource, refSource, citeSource, latexCompletionSource(AUTO_CLOSE_TAGS)],
