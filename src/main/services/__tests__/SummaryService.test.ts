@@ -160,6 +160,25 @@ Setup prose.
     expect(ctx).not.toContain('still being generated') // nothing provisional → no banner
   })
 
+  test('warm() schedules a refresh + signals busy when stale, and is a no-op when fresh', async () => {
+    // Seed every node so the cache matches current content → fresh.
+    const outline = buildOutline(['main.tex'], read(TEX))
+    store.setProject(root, {
+      summaries: Object.fromEntries(outline.map((s) => [s.key, { gist: `gist of ${s.key}`, hash: s.hash }])),
+    })
+    const events: boolean[] = []
+    const svc = new SummaryService(new StubRunner(), store, (_r, busy) => events.push(busy))
+
+    svc.warm(root, ['main.tex'], read(TEX)) // nothing drifted
+    expect(events).toEqual([]) // no refresh, no busy signal
+
+    const edited = TEX.replace('Intro prose here.', 'Intro prose, changed.')
+    svc.warm(root, ['main.tex'], read(edited)) // Introduction drifted
+    expect(events[0]).toBe(true) // refresh scheduled → busy on
+    await new Promise((r) => setTimeout(r, 30))
+    expect(events.at(-1)).toBe(false) // and cleared when it finishes
+  })
+
   test('signals onBusy(true) when a refresh is scheduled and onBusy(false) when it ends', async () => {
     const events: [string, boolean][] = []
     const svc = new SummaryService(new StubRunner(), store, (r, busy) => events.push([r, busy]))

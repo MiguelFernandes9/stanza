@@ -221,7 +221,11 @@ export function registerIpcHandlers(): void {
   )
 
   ipcMain.handle(IpcChannels.documentSave, (event, relPath: string, content: string) => {
-    atomicWrite(join(sessionFor(event).info.root, relPath), content)
+    const doc = sessionFor(event)
+    atomicWrite(join(doc.info.root, relPath), content)
+    // A manual .tex save changes content → refresh paper summaries (cheap drift
+    // check; no-op when the saved file holds no sectioning changes).
+    if (relPath.endsWith('.tex')) doc.warmSummaries()
   })
 
   ipcMain.handle(IpcChannels.documentRead, (event, relPath: string) =>
@@ -292,6 +296,10 @@ export function registerIpcHandlers(): void {
     // edit the worktree, not this tree — which is what unblocks Accept (§11).
     const resolution = await doc.runMainTreeExclusive(() => doc.review.resolve(decision))
     doc.diffPreview.invalidate(decision.opId) // free the op's cached block previews
+    // A committed accept merged an edit into the user tree — the .tex content changed,
+    // so refresh the paper summaries now (the bubble's "context updating" hint reflects
+    // it) instead of waiting for the next op to prime. No-op when nothing drifted.
+    if (resolution.committed) doc.warmSummaries()
     if (resolution.committed || !decision.accept) {
       // An op belongs to EITHER the doc history (ops) or a persistent thread —
       // patch both; the non-owner is a no-op.

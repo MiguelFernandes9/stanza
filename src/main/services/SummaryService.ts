@@ -31,13 +31,26 @@ export class SummaryService {
    *  background refresh when any node's content drifted. Returns '' when the
    *  document has no titled sections. */
   contextFor(root: string, texFiles: string[], read: Read): string {
+    const { outline, cached } = this.scheduleIfStale(root, texFiles, read)
+    return outline.length === 0 ? '' : renderContext(outline, cached)
+  }
+
+  /** Schedule a refresh if the document drifted, WITHOUT rendering a context block.
+   *  Called on content-change events (accept / save) so the cache and the UI hint
+   *  refresh promptly instead of waiting for the next prime. */
+  warm(root: string, texFiles: string[], read: Read): void {
+    this.scheduleIfStale(root, texFiles, read)
+  }
+
+  /** Build the outline, read the cache, and kick a background refresh when any
+   *  node's content hash drifted from its cached gist. Shared by contextFor/warm. */
+  private scheduleIfStale(root: string, texFiles: string[], read: Read): { outline: OutlineSection[]; cached: Gists } {
     const outline = buildOutline(texFiles, read)
-    if (outline.length === 0) return ''
     const cached = this.store.getProject(root).summaries ?? {}
-    if (outline.some((s) => cached[s.key]?.hash !== s.hash)) {
+    if (outline.length > 0 && outline.some((s) => cached[s.key]?.hash !== s.hash)) {
       this.scheduleRefresh(root, texFiles, read)
     }
-    return renderContext(outline, cached)
+    return { outline, cached }
   }
 
   private scheduleRefresh(root: string, texFiles: string[], read: Read): void {

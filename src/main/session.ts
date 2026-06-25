@@ -100,23 +100,17 @@ export class DocumentSession {
     this.review = new ReviewService(this.git)
     this.forks = new ForkManager(this.git, forkBase, globalSettings.get().forkConcurrency ?? 12)
     this.summaries = new SummaryService(runner, store, onSummaryBusy)
-    const readDoc = (rel: string): string | null => {
-      try {
-        return readFileSync(join(info.root, rel), 'utf8')
-      } catch {
-        return null
-      }
-    }
     // The bus digest reads the document repo's recent commits fresh per op (the
     // shared, always-live "what changed" source); `this.git` targets info.root.
     // Each fork runs Claude in its OWN worktree (passed per call to runForkTurn);
     // every prime also carries the paper outline + per-section summaries (cached,
-    // refreshed in the background when a section's content drifts).
+    // refreshed in the background when a section's content drifts). All read THIS.info
+    // so a rename that re-derives the file set is reflected without rebuilding.
     this.claude = new ClaudeService(
       runner, globalSettings, info, undefined, activeOps,
       (n) => this.git.log(n),
-      () => this.summaries.contextFor(info.root, info.texFiles, readDoc),
-      () => buildOutline(info.texFiles, readDoc),
+      () => this.summaries.contextFor(this.info.root, this.info.texFiles, this.readDoc),
+      () => buildOutline(this.info.texFiles, this.readDoc),
     )
     this.files = new FileService(info.root, this.git)
     this.snippets = new SnippetCompiler(runner, info.root)
@@ -125,6 +119,25 @@ export class DocumentSession {
     // (⌘S / accept / ⌘R) — disk is the source of truth, and an external edit
     // surfaces on the next save or recompile (docs/compile-triggers.md). This
     // also removes the watcher's mid-op recompile that stranded the bubble (M2-2).
+  }
+
+  /** Read a doc-relative file from the CURRENT checkout (this.info.root). Bound so
+   *  it can be passed as a callback; reads `this.info` at call time so a re-derived
+   *  file set is honoured. */
+  private readDoc = (rel: string): string | null => {
+    try {
+      return readFileSync(join(this.info.root, rel), 'utf8')
+    } catch {
+      return null
+    }
+  }
+
+  /** Kick a paper-summary refresh if the document drifted — call after content
+   *  changes (an accepted edit, a manual save) so the cache (and the bubble's
+   *  "context updating" hint) reflect reality promptly, instead of waiting for the
+   *  next op to prime. No-op when nothing drifted; the refresh is background. */
+  warmSummaries(): void {
+    this.summaries.warm(this.info.root, this.info.texFiles, this.readDoc)
   }
 
   /** Tear down every fork worktree when the window closes. Best-effort: a failed
