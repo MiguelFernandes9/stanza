@@ -1,8 +1,10 @@
 import { useRef, useState } from 'react'
 import type { JSX } from 'react'
-import { ArrowUp, Camera, Check, MessagesSquare, Trash2, X } from 'lucide-react'
+import { ArrowUp, Camera, Check, MessagesSquare, Paperclip, Trash2, X } from 'lucide-react'
 import { BlockTag, Button, IconButton, Tooltip } from '@renderer/components'
+import type { Attachment } from '@shared/ipc'
 import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
+import { useAttachmentIntake } from '@renderer/hooks/useComposerAttachments'
 import { combinedSpanLabel, spanLabel } from '../paper/paperModel'
 import type { PageBlock } from '../paper/paperModel'
 import type { EditTask } from './taskStore'
@@ -24,6 +26,8 @@ interface Props {
   onSnapshot?: () => void
   /** Remove one staged attachment (chip ×) by id. */
   onRemoveAttachment?: (id: string) => void
+  /** Stage user-picked / pasted / dropped files on this turn. */
+  onAddAttachments?: (items: Attachment[]) => void
   /** Fold the bubble back to its badge (the thread stays alive + persisted). */
   onCollapse: () => void
   /** Remove the thread entirely (deletes the persisted record). */
@@ -45,6 +49,7 @@ export function ThreadCard({
   onResolve,
   onSnapshot,
   onRemoveAttachment,
+  onAddAttachments,
   onCollapse,
   onDelete,
   onOpenReview,
@@ -52,6 +57,7 @@ export function ThreadCard({
 }: Props): JSX.Element {
   const [draft, setDraft] = useState('')
   const snapshot = taskSnapshot(task)
+  const intake = useAttachmentIntake((items) => onAddAttachments?.(items))
   const taRef = useRef<HTMLTextAreaElement | null>(null)
   useAutoGrowTextarea(taRef, draft, 140)
   const busy = task.phase === 'busy'
@@ -137,12 +143,15 @@ export function ThreadCard({
         </div>
         <div
           className="stz-field"
+          onDragOver={locked ? undefined : intake.onDragOver}
+          onDragLeave={locked ? undefined : intake.onDragLeave}
+          onDrop={locked ? undefined : intake.onDrop}
           style={{
             display: 'flex',
             alignItems: 'flex-start',
             gap: 6,
-            background: 'var(--surface-card)',
-            border: '1px solid var(--border-strong)',
+            background: intake.dragging ? 'var(--clay-50)' : 'var(--surface-card)',
+            border: `1px solid ${intake.dragging ? 'var(--clay-400)' : 'var(--border-strong)'}`,
             borderRadius: 'var(--radius-md)',
             padding: '5px 6px',
             opacity: locked ? 0.55 : 1
@@ -162,11 +171,19 @@ export function ThreadCard({
               </IconButton>
             </Tooltip>
           )}
+          {onAddAttachments && (
+            <Tooltip label="Attach files" side="top">
+              <IconButton size="sm" variant="ghost" disabled={locked} label="Attach files" onClick={intake.pick}>
+                <Paperclip size={14} />
+              </IconButton>
+            </Tooltip>
+          )}
           <textarea
             ref={taRef}
             value={draft}
             disabled={locked}
             onChange={(e) => setDraft(e.target.value)}
+            onPaste={intake.onPaste}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()

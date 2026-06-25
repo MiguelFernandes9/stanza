@@ -20,6 +20,7 @@ export const IpcChannels = {
   synctexForward: 'synctex:forward',  // invoke BlockSpan → PdfRect[]
   claudeRun: 'claude:run',            // invoke ClaudeRequest → ClaudeResult
   claudeRunTurn: 'claude:runTurn',    // invoke ClaudeTurnRequest → ClaudeTurnResult (persistent thread bubble)
+  attachmentsPick: 'attachments:pick', // invoke → PickedAttachment[] (OS file picker; no repo copy)
   claudeStatus: 'claude:status',      // main→renderer event: ClaudeStatus
   summaryStatus: 'summary:status',    // main→renderer event: SummaryStatus — paper-context refresh in flight
   claudeHistory: 'claude:history',    // invoke → OpRecord[] (chat pane, F9)

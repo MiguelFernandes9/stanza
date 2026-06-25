@@ -20,6 +20,7 @@ import type {
   HistoryDiff,
   InversePoint,
   OpRecord,
+  PickedAttachment,
   PdfRect,
   PreviewRequest,
   PreviewResult,
@@ -104,6 +105,8 @@ export const api = {
   /** One turn of a persistent conversation bubble (its own session). */
   claudeRunTurn: (req: ClaudeTurnRequest) =>
     invoke<ClaudeTurnResult>(IpcChannels.claudeRunTurn, req),
+  /** OS file picker for chat-prompt attachments (no repo copy). */
+  attachmentsPick: () => invoke<PickedAttachment[]>(IpcChannels.attachmentsPick),
   claudeHistory: () => invoke<OpRecord[]>(IpcChannels.claudeHistory),
   /** Persistent bubbles for the open project, restored on workspace open. */
   threadsList: () => invoke<ThreadRecord[]>(IpcChannels.threadsList),

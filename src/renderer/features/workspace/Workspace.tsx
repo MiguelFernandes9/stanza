@@ -1028,6 +1028,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
               : dispatch({ type: 'remove-attachment', taskId, id: SNAPSHOT_ID })
           }
           onRemoveAttachment={(taskId, id) => dispatch({ type: 'remove-attachment', taskId, id })}
+          onAddAttachments={(taskId, items) => dispatch({ type: 'add-attachments', taskId, items })}
           onSnapshotError={() =>
             setToast({
               title: "Couldn't snapshot the block",

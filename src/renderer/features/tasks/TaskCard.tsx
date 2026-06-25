@@ -1,9 +1,11 @@
 import { useEffect, useRef } from 'react'
 import type { CSSProperties, JSX } from 'react'
-import { AlertTriangle, ArrowUp, Camera, Check, CircleSlash, FileText, Maximize2, Pin, Plus, Sparkles, X } from 'lucide-react'
+import { AlertTriangle, ArrowUp, Camera, Check, CircleSlash, FileText, Maximize2, Paperclip, Pin, Plus, Sparkles, X } from 'lucide-react'
 import { BlockTag, Button, DiffHunk, IconButton, Kbd, Tooltip } from '@renderer/components'
 import type { BlockTagKind } from '@renderer/components'
+import type { Attachment } from '@shared/ipc'
 import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
+import { useAttachmentIntake } from '@renderer/hooks/useComposerAttachments'
 import { combinedSpanLabel, spanLabel } from '../paper/paperModel'
 import type { PageBlock } from '../paper/paperModel'
 import type { EditTask } from './taskStore'
@@ -77,6 +79,8 @@ interface Props {
   onSnapshot?: () => void
   /** Remove one staged attachment (chip ×) by id. */
   onRemoveAttachment?: (id: string) => void
+  /** Stage user-picked / pasted / dropped files on this task. */
+  onAddAttachments?: (items: Attachment[]) => void
   refCb: (el: HTMLDivElement | null) => void
 }
 
@@ -190,10 +194,12 @@ export function TaskCard({
   onOpenReview,
   onSnapshot,
   onRemoveAttachment,
+  onAddAttachments,
   refCb
 }: Props): JSX.Element {
   const taRef = useRef<HTMLTextAreaElement | null>(null)
   const snapshot = taskSnapshot(task)
+  const intake = useAttachmentIntake((items) => onAddAttachments?.(items))
   useEffect(() => {
     // preventScroll: the card paints at top:0 before PaperPane's layout effect
     // sets its rail offset; a plain focus() would scroll the PDF pane to the
@@ -413,12 +419,15 @@ export function TaskCard({
             />
             <div
               className="stz-field"
+              onDragOver={intake.onDragOver}
+              onDragLeave={intake.onDragLeave}
+              onDrop={intake.onDrop}
               style={{
                 display: 'flex',
                 alignItems: 'flex-start',
                 gap: 6,
-                background: 'var(--surface-card)',
-                border: '1px solid var(--border-strong)',
+                background: intake.dragging ? 'var(--clay-50)' : 'var(--surface-card)',
+                border: `1px solid ${intake.dragging ? 'var(--clay-400)' : 'var(--border-strong)'}`,
                 borderRadius: 'var(--radius-md)',
                 padding: '5px 6px'
               }}
@@ -436,10 +445,18 @@ export function TaskCard({
                   </IconButton>
                 </Tooltip>
               )}
+              {onAddAttachments && (
+                <Tooltip label="Attach files" side="top">
+                  <IconButton size="sm" variant="ghost" label="Attach files" onClick={intake.pick}>
+                    <Paperclip size={14} />
+                  </IconButton>
+                </Tooltip>
+              )}
               <textarea
                 ref={taRef}
                 value={task.instruction}
                 onChange={(e) => onUpdate(e.target.value)}
+                onPaste={intake.onPaste}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()

@@ -29,6 +29,16 @@ export interface StagedAttachment {
   kind: AttachmentKind
 }
 
+/** One file returned by the OS file picker (`attachments:pick`). The bytes stay
+ *  on disk (`path`) — only a small image preview crosses IPC — so a large PDF
+ *  never round-trips as base64; the bytes are copied at send time. */
+export interface PickedAttachment {
+  path: string
+  name: string
+  kind: Exclude<AttachmentKind, 'snapshot'>
+  thumbDataUrl?: string
+}
+
 const IMAGE_EXT = /\.(png|jpe?g|gif|svg|webp)$/i
 
 /** Extensions the headless Read tool opens with no preprocessing: images (viewed

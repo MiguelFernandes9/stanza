@@ -3,7 +3,7 @@ import type { JSX } from 'react'
 import { Check, CircleSlash, MessagesSquare, PenLine, Sparkles } from 'lucide-react'
 import { client } from '@renderer/lib/client'
 import type { CompileState } from '@renderer/components'
-import type { PdfRect, InversePoint, SourceLocation, BlockSpan } from '@shared/ipc'
+import type { Attachment, PdfRect, InversePoint, SourceLocation, BlockSpan } from '@shared/ipc'
 import type { BlockNode } from '@shared/blocks/types'
 import { usePdfDocument } from '../pdf/usePdfDocument'
 import { PdfPageStack } from '../pdf/PdfPageStack'
@@ -83,6 +83,8 @@ interface Props {
   onAttachImage: (taskId: number, image: string) => void
   /** Remove one staged attachment (a chip ×) by its id. */
   onRemoveAttachment: (taskId: number, id: string) => void
+  /** Stage user-picked / pasted / dropped files on a task. */
+  onAddAttachments: (taskId: number, items: Attachment[]) => void
   /** Snapshot couldn't be captured (block off-screen / canvas error) — surface it. */
   onSnapshotError?: () => void
   onView: (view: PaneView) => void
@@ -907,6 +909,7 @@ export function PaperPane(props: Props): JSX.Element {
                           onOpenReview={() => setReviewId(t.id)}
                           onSnapshot={() => captureBlock(t.id)}
                           onRemoveAttachment={(id) => props.onRemoveAttachment(t.id, id)}
+                          onAddAttachments={(items) => props.onAddAttachments(t.id, items)}
                         />
                       ) : (
                         <TaskCard
@@ -934,6 +937,7 @@ export function PaperPane(props: Props): JSX.Element {
                           onOpenReview={() => setReviewId(t.id)}
                           onSnapshot={() => captureBlock(t.id)}
                           onRemoveAttachment={(id) => props.onRemoveAttachment(t.id, id)}
+                          onAddAttachments={(items) => props.onAddAttachments(t.id, items)}
                         />
                       )}
                     </div>

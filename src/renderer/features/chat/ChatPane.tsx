@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import type { JSX } from 'react'
-import { ArrowUp, Check, FileText, GitCommitHorizontal, Sparkles, Undo2, X } from 'lucide-react'
-import { Avatar, Button, DiffHunk, Kbd, StatusDot } from '@renderer/components'
-import type { ReviewProposal } from '@shared/ipc'
+import { ArrowUp, Check, FileText, GitCommitHorizontal, Paperclip, Sparkles, Undo2, X } from 'lucide-react'
+import { Avatar, Button, DiffHunk, IconButton, Kbd, StatusDot, Tooltip } from '@renderer/components'
+import type { Attachment, ReviewProposal } from '@shared/ipc'
 import { summarizeBlocks } from '@shared/blocks/changes'
 import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
+import { useComposerAttachments } from '@renderer/hooks/useComposerAttachments'
+import { AttachmentChips } from './AttachmentChips'
 
 export interface ChatMessage {
   role: 'user' | 'claude'
@@ -17,7 +19,7 @@ export interface ChatMessage {
 interface Props {
   messages: ChatMessage[]
   busy: boolean
-  onSubmit: (instruction: string) => void
+  onSubmit: (instruction: string, attachments?: Attachment[]) => void
   onResolveOp: (opId: string, accept: boolean) => void
 }
 
@@ -86,6 +88,7 @@ export function ChatPane({ messages, busy, onSubmit, onResolveOp }: Props): JSX.
   const [instruction, setInstruction] = useState('')
   const streamRef = useRef<HTMLDivElement | null>(null)
   const taRef = useRef<HTMLTextAreaElement | null>(null)
+  const att = useComposerAttachments()
 
   useEffect(() => {
     if (streamRef.current) streamRef.current.scrollTop = streamRef.current.scrollHeight
@@ -95,8 +98,9 @@ export function ChatPane({ messages, busy, onSubmit, onResolveOp }: Props): JSX.
 
   const submit = (): void => {
     if (!instruction.trim() || busy) return
-    onSubmit(instruction.trim())
+    onSubmit(instruction.trim(), att.attachments.length ? att.attachments : undefined)
     setInstruction('')
+    att.clear()
   }
 
   return (
@@ -200,23 +204,33 @@ export function ChatPane({ messages, busy, onSubmit, onResolveOp }: Props): JSX.
             <FileText size={11} /> Whole document
           </span>
         </div>
+        <AttachmentChips attachments={att.attachments} onRemove={att.remove} />
         <div
           className="stz-field"
+          onDragOver={att.onDragOver}
+          onDragLeave={att.onDragLeave}
+          onDrop={att.onDrop}
           style={{
             display: 'flex',
             alignItems: 'flex-start',
             gap: 8,
-            background: 'var(--surface-card)',
-            border: '1px solid var(--border-strong)',
+            background: att.dragging ? 'var(--clay-50)' : 'var(--surface-card)',
+            border: `1px solid ${att.dragging ? 'var(--clay-400)' : 'var(--border-strong)'}`,
             borderRadius: 'var(--radius-lg)',
-            padding: '8px 8px 8px 12px',
+            padding: '8px 8px 8px 10px',
             boxShadow: 'var(--shadow-inset)'
           }}
         >
+          <Tooltip label="Attach files" side="top">
+            <IconButton size="sm" variant="ghost" label="Attach files" onClick={() => void att.pick()}>
+              <Paperclip size={15} />
+            </IconButton>
+          </Tooltip>
           <textarea
             ref={taRef}
             value={instruction}
             onChange={(e) => setInstruction(e.target.value)}
+            onPaste={att.onPaste}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault()
@@ -224,7 +238,7 @@ export function ChatPane({ messages, busy, onSubmit, onResolveOp }: Props): JSX.
               }
             }}
             rows={1}
-            placeholder="Ask a question or edit the whole document…"
+            placeholder="Ask a question, attach a file, or edit the whole document…"
             style={{
               flex: 1,
               resize: 'none',
