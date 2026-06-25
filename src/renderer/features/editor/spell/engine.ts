@@ -1,11 +1,13 @@
 import nspell from 'nspell'
 import { LATEX_TERMS } from './latexTerms'
 
-/** Self-contained spell engine: nspell (Hunspell in JS) + the bundled en_US
- *  dictionary. We run our own checker instead of the OS spellchecker because
- *  only we know which ranges are LaTeX prose vs markup — the native checker
- *  squiggles the whole text box indiscriminately. The ~550KB .dic is a `?raw`
- *  asset loaded as a separate chunk on first use, so it never weighs on startup. */
+/** Self-contained spell engine: nspell (Hunspell in JS) + the bundled
+ *  American-English (en-US) dictionary — British spellings (colour, organise,
+ *  centre) are intentionally flagged. We run our own checker instead of the OS
+ *  spellchecker because only we know which ranges are LaTeX prose vs markup — the
+ *  native checker squiggles the whole text box indiscriminately. The ~540KB .dic
+ *  is a `?raw` asset loaded as a separate chunk on first use, off the startup path.
+ *  Source: wooorm `dictionary-en` (the maintained en-US dictionary; see LICENSE). */
 
 type Speller = ReturnType<typeof nspell>
 
