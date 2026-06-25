@@ -32,11 +32,16 @@
     },
     "win": {
       "icon": "build/icon.ico",
-      "target": ["nsis"]
+      "target": [
+        "nsis"
+      ]
     },
     "linux": {
       "icon": "build/icon.png",
-      "target": ["AppImage", "deb"],
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "category": "Office"
     }
   },
@@ -47,6 +52,7 @@
     "chokidar": "^5.0.0",
     "codemirror": "^6.0.2",
     "codemirror-lang-latex": "^0.4.1",
+    "cross-spawn": "^7.0.6",
     "diff": "^9.0.0",
     "lucide-react": "^1.18.0",
     "pdfjs-dist": "^6.0.227",
@@ -55,6 +61,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
+    "@types/cross-spawn": "^6.0.6",
     "@types/node": "^25.0.10",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",

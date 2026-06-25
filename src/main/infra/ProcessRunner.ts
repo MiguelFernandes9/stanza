@@ -1,4 +1,23 @@
-import { spawn } from 'node:child_process'
+import spawn from 'cross-spawn'
+import type { ChildProcess } from 'node:child_process'
+import { isWindows } from '../../shared/platform'
+
+/** Force-kill a child and its descendants. On Windows `child.kill` terminates only
+ *  the direct process — for the npm `claude` shim that's the `.cmd`/node wrapper, and
+ *  for tectonic the parent, leaving the real workers orphaned — so use `taskkill /T`
+ *  to take down the whole tree. POSIX gets SIGKILL (process-group kill isn't needed:
+ *  these children don't fork detached workers). */
+function killTree(child: ChildProcess): void {
+  if (isWindows(process.platform) && child.pid != null) {
+    try {
+      spawn('taskkill', ['/pid', String(child.pid), '/T', '/F']).on('error', () => undefined)
+    } catch {
+      child.kill('SIGKILL') // taskkill unexpectedly missing → best-effort direct kill
+    }
+  } else {
+    child.kill('SIGKILL')
+  }
+}
 
 export interface ProcResult {
   code: number | null
@@ -65,10 +84,10 @@ export class DefaultProcessRunner implements ProcessRunner {
 
       const timer = setTimeout(() => {
         timedOut = true
-        child.kill('SIGKILL')
+        killTree(child)
       }, spec.timeoutMs ?? DEFAULT_TIMEOUT_MS)
 
-      const onAbort = () => child.kill('SIGKILL')
+      const onAbort = () => killTree(child)
       spec.signal?.addEventListener('abort', onAbort, { once: true })
 
       const cleanup = () => {
@@ -85,7 +104,7 @@ export class DefaultProcessRunner implements ProcessRunner {
           const room = maxBytes - soFar
           if (room > 0) chunks.push(chunk.subarray(0, room))
           truncated = true
-          child.kill('SIGKILL')
+          killTree(child)
           return maxBytes
         }
         chunks.push(chunk)

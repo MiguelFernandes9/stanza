@@ -1,9 +1,14 @@
 import { realpathSync } from 'node:fs'
 import type { CommitInfo } from '../../shared/ipc/document'
+import { isWindows } from '../../shared/platform'
 import type { ProcessRunner, ProcResult } from './ProcessRunner'
 
 /** Git's canonical empty tree — the diff base for a root commit (no parent). */
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+
+/** The OS null device — `git diff --no-index` against it renders an untracked
+ *  file as one all-additions hunk. `/dev/null` on POSIX, `nul` on Windows. */
+const NULL_DEVICE = isWindows(process.platform) ? 'nul' : '/dev/null'
 
 /** Stanza's own scratch files (preview snippet + chapter-scope compiles) are
  *  written into the doc root for path resolution but must never be staged,
@@ -65,7 +70,7 @@ export class GitClient {
     }
     for (const file of await this.untrackedFiles()) {
       // --no-index exits 1 when the files differ — that's the normal case
-      const res = await this.run(['diff', '--no-index', '--', '/dev/null', file])
+      const res = await this.run(['diff', '--no-index', '--', NULL_DEVICE, file])
       parts.push(res.stdout)
     }
     return parts.join('')
