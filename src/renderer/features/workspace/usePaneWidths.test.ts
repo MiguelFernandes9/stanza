@@ -7,9 +7,11 @@ import {
   DEFAULT_CONSOLE,
   DEFAULT_EDITOR,
   DEFAULT_SIDEBAR,
+  editorMaxFor,
   EDITOR_MAX,
   EDITOR_MIN,
   loadPaneWidths,
+  PAPER_MIN,
   savePaneWidths,
   SIDEBAR_MAX,
   SIDEBAR_MIN
@@ -59,6 +61,40 @@ describe('clampPaneWidths', () => {
       editor: 500,
       consoleHeight: 250
     })
+  })
+
+  it('honours an explicit editorMax (the window-relative cap)', () => {
+    // A tight window-relative max pulls an over-wide editor in...
+    expect(clampPaneWidths({ sidebar: 240, editor: 1200, consoleHeight: 250 }, 600).editor).toBe(600)
+    // ...and leaves an editor already within the cap untouched.
+    expect(clampPaneWidths({ sidebar: 240, editor: 500, consoleHeight: 250 }, 1200).editor).toBe(500)
+  })
+})
+
+describe('editorMaxFor', () => {
+  it('lets the editor grow well past half on a wide window', () => {
+    // 1920-wide screen, 240 sidebar → editor max ≫ the old 760 "half page"
+    // and past half the viewport (960).
+    const max = editorMaxFor(1920, 240)
+    expect(max).toBe(1920 - 240 - PAPER_MIN - 10)
+    expect(max).toBeGreaterThan(960)
+  })
+
+  it('caps at the absolute EDITOR_MAX ceiling on an enormous display', () => {
+    expect(editorMaxFor(99999, 240)).toBe(EDITOR_MAX)
+  })
+
+  it('reserves PAPER_MIN for the PDF pane on a narrow window', () => {
+    // 1100 wide, 240 sidebar → PDF keeps PAPER_MIN, editor gets the rest.
+    expect(editorMaxFor(1100, 240)).toBe(1100 - 240 - PAPER_MIN - 10)
+  })
+
+  it('never drops below EDITOR_MIN even when the window is tiny', () => {
+    expect(editorMaxFor(500, 240)).toBe(EDITOR_MIN)
+  })
+
+  it('shrinks the editor budget as the sidebar widens', () => {
+    expect(editorMaxFor(1600, 460)).toBeLessThan(editorMaxFor(1600, 180))
   })
 })
 
