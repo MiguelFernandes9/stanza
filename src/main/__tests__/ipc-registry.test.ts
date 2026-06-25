@@ -216,10 +216,13 @@ esac`)
   // into one branch — the bug where accepting one proposal also applied another.
   // Each op appends its own marker (printf BEFORE sleep so both edits would
   // coexist in the shared tree if the branch-dance weren't serialized).
+  // Match the OWN instruction line (opPrompt's "Instruction: …"), not a bare token:
+  // the bus digest now correctly carries the other in-flight op's instruction, so a
+  // bare *ALPHA* would match B's prompt too. The digest has no "Instruction:" label.
   const dualStub = () =>
     makeClaudeStub(`case "$*" in
-  *ALPHA*) printf 'ALPHA-edit\\n' >> main.tex; sleep 0.3; echo '{"result":"A"}' ;;
-  *BETA*) printf 'BETA-edit\\n' >> main.tex; sleep 0.3; echo '{"result":"B"}' ;;
+  *Instruction:*ALPHA*) printf 'ALPHA-edit\\n' >> main.tex; sleep 0.3; echo '{"result":"A"}' ;;
+  *Instruction:*BETA*) printf 'BETA-edit\\n' >> main.tex; sleep 0.3; echo '{"result":"B"}' ;;
   *) echo '{"result":"primed"}' ;;
 esac`)
 
