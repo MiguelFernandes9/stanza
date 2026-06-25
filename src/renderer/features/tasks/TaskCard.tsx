@@ -107,10 +107,11 @@ function ConflictBanner({ conflict }: { conflict: NonNullable<EditTask['conflict
   )
 }
 
-/** Always-on paper-context status, shown above the composer's prompt bar: a steady
- *  grey dot when the summaries are up to date, a pulsing amber dot + "Updating
- *  context…" while they refresh (a Run then carries provisional context, Part A). */
-function ContextStatus({ building }: { building?: boolean }): JSX.Element {
+/** Always-on paper-context status: a steady grey dot when the summaries are up
+ *  to date, a pulsing amber dot while they refresh (a Run then carries
+ *  provisional context, Part A). `dotOnly` drops the label to a bare dot for
+ *  the footer; the tooltip still explains the state on hover. */
+function ContextStatus({ building, dotOnly = false }: { building?: boolean; dotOnly?: boolean }): JSX.Element {
   return (
     <Tooltip
       label={
@@ -139,7 +140,7 @@ function ContextStatus({ building }: { building?: boolean }): JSX.Element {
             ...(building ? { animation: 'stz-pulse 1s var(--ease-in-out) infinite' } : {})
           }}
         />
-        {building ? 'Updating context…' : 'Context ready'}
+        {!dotOnly && (building ? 'Updating context…' : 'Context ready')}
       </span>
     </Tooltip>
   )
@@ -400,11 +401,6 @@ export function TaskCard({
                 {task.error}
               </div>
             )}
-            {/* Context status sits on top of the prompt bar so it's the first thing
-                the eye lands on before typing an instruction. */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
-              <ContextStatus building={contextBuilding} />
-            </div>
             <div
               className="stz-field"
               style={{
@@ -472,6 +468,9 @@ export function TaskCard({
               <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>run ·</span>
               <Kbd>esc</Kbd>
               <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>dismiss</span>
+              <span style={{ marginLeft: 'auto' }}>
+                <ContextStatus building={contextBuilding} dotOnly />
+              </span>
             </div>
           </div>
         )}
