@@ -767,16 +767,14 @@ export function binBlocks(
     }
   }
 
-  // Spatial orphan pass. A rendered text row that synctex maps NOWHERE — null inverse AND no
-  // forward rect (a paragraph's dropped last wrapped line like "...high-value sectors.", or a
-  // math-heavy tail) — is left unattributed and unboxed. Its only signal is position: it is the
-  // dropped tail of the block whose box sits directly above it in the same column. Attach each
-  // such row to that box (extend it down) when contiguous (within MAX_LINE_GAP). But cluster the
-  // orphans into same-column runs first and attach only SMALL runs: a LONG run is the BibTeX
-  // references (every line synctex-null) — attaching it would chain the whole bibliography into
-  // the conclusion box above it. References have no source block, so a long null run is unboxed.
-  // RUNS LAST, after the displaced-split rebuilds boxes from units — the split's per-unit rebuild
-  // can't see a null row, so this extension must be the final word on box extent or it is lost.
+  // Spatial orphan pass: a row synctex maps NOWHERE (null inverse AND no forward rect — a
+  // dropped last wrapped line or a math tail) is the trailing tail of the block whose box sits
+  // directly above it in the same column. Attach each to that box (extend it down) when
+  // contiguous (within MAX_LINE_GAP), but only for SMALL same-column runs: a LONG null run is
+  // the bibliography (every .bbl line is synctex-null) — attaching it would chain the whole
+  // reference list into the conclusion box above, so it stays unboxed. RUNS LAST: the
+  // displaced-split rebuilds boxes from units and can't see a null row, so this must be the
+  // final word on box extent.
   const placed: PdfRect[] = []
   for (const bs of boxesById.values()) for (const b of bs) placed.push(b)
   const covered = (u: AttributedUnit): boolean =>
