@@ -11,7 +11,9 @@ import { setProjectContext } from './completion/contextFacet'
 import type { ProjectContext } from './completion/projectContext'
 import { AssetView } from './AssetView'
 import { FileTab } from './FileTab'
+import { buildEditorMenu } from './editorMenuActions'
 import { insertionBarIndex } from './openFilesModel'
+import { FileContextMenu } from '../workspace/FileContextMenu'
 
 /** Drop-between insertion indicator rendered in a tab-strip gap — a 2px blue
  *  bar at the computed insertion index (drag-drop affordances). */
@@ -105,6 +107,10 @@ export function EditorPane({
   const [dirty, setDirty] = useState<Set<string>>(new Set())
   const [cursor, setCursor] = useState({ line: 1, col: 1 })
   const [lineCount, setLineCount] = useState(0)
+  // Right-click menu over the editor surface (Cut/Copy/Paste/Select All/…).
+  // Anchored at the cursor; the items are rebuilt on open so disabled state
+  // reflects the live selection.
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
 
   activeFileRef.current = activeFile
 
@@ -339,14 +345,19 @@ export function EditorPane({
         }}
         style={{
           display: 'flex',
-          alignItems: 'center',
-          gap: 2,
+          // Tabs are raised "folder" cards bottom-aligned to the strip floor.
+          alignItems: 'flex-end',
+          gap: 3,
           height: 'var(--rail-toolbar)',
           flex: '0 0 auto',
-          padding: '0 8px',
-          borderBottom: '1px solid var(--border-default)',
+          padding: '0 0 0 6px',
+          // Bottom hairline drawn as an inset shadow (behind the tabs), so the
+          // opaque active tab paints over it and merges with the editor below.
+          boxShadow: 'inset 0 -1px 0 var(--border-default)',
           background: 'var(--surface-app)',
-          overflowX: 'auto'
+          // Horizontal scroll for many tabs; never a vertical scrollbar.
+          overflowX: 'auto',
+          overflowY: 'hidden'
         }}
       >
         {openFiles.map((file, i) => (
@@ -377,6 +388,13 @@ export function EditorPane({
             just hidden behind the placeholder when nothing is open. */}
         <div
           ref={hostRef}
+          onContextMenu={(e) => {
+            // Only over real editor text — let the asset viewer / empty
+            // placeholder keep the native menu.
+            if (openFiles.length === 0 || showAsset || !viewRef.current) return
+            e.preventDefault()
+            setMenu({ x: e.clientX, y: e.clientY })
+          }}
           style={{
             position: 'absolute',
             inset: 0,
@@ -384,6 +402,14 @@ export function EditorPane({
             visibility: openFiles.length === 0 || showAsset ? 'hidden' : 'visible'
           }}
         />
+        {menu && viewRef.current && (
+          <FileContextMenu
+            x={menu.x}
+            y={menu.y}
+            items={buildEditorMenu(viewRef.current)}
+            onClose={() => setMenu(null)}
+          />
+        )}
         {showAsset && <AssetView relPath={activeFile} root={doc.root} />}
         {openFiles.length === 0 && (
           <div
