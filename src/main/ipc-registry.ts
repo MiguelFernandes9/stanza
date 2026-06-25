@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path'
 import { IpcChannels } from '@shared/ipc'
 import type {
   BlockSpan,
+  ClaudeAvailability,
   ClaudeRequest,
   ClaudeResult,
   ClaudeTurnRequest,
@@ -37,6 +38,7 @@ import { DefaultProcessRunner } from './infra/ProcessRunner'
 import { GitClient } from './infra/GitClient'
 import { Store, GlobalSettingsStore } from './infra/Store'
 import { appendTurns, patchTurnByOpId, removeThread, upsertThread } from './threadStore'
+import { AvailabilityMonitor } from './services/AvailabilityMonitor'
 import { changedFilesInDiff } from './services/diffSpans'
 import { DocumentService } from './services/DocumentService'
 import { buildOutline } from './services/paperOutline'
@@ -49,6 +51,9 @@ import { mapRecents } from './recents'
 const runner = new DefaultProcessRunner()
 let store: Store
 let globalSettings: GlobalSettingsStore
+/** App-global Claude availability (CLI installed + logged in). One probe, cached,
+ *  shared by every window — the renderer gates all AI features on it. */
+let availability: AvailabilityMonitor
 /** In-flight ops across all windows (shared by every DocumentSession) — the session
  *  bus reads it so one window's op sees what its siblings are editing right now. */
 const activeOps = new ActiveOps()
@@ -130,6 +135,12 @@ export function getRecentProjects(): RecentProject[] {
 export function registerIpcHandlers(): void {
   store = new Store(join(app.getPath('userData'), 'projects.json'))
   globalSettings = new GlobalSettingsStore(join(app.getPath('userData'), 'settings.json'))
+  availability = new AvailabilityMonitor(runner, (value) =>
+    broadcast(IpcChannels.claudeAvailabilityChanged, value),
+  )
+  // Warm the probe at startup so the first window has the answer; a flip
+  // broadcasts to every open window.
+  void availability.get()
   documents = new DocumentService({
     store,
     makeGit: (root) => new GitClient(runner, root),
@@ -276,6 +287,14 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(
     IpcChannels.claudeHistory,
     (event): OpRecord[] => store.getProject(sessionFor(event).info.root).ops ?? [],
+  )
+
+  // App-global, not per-window: availability must be known on the launcher screen
+  // before any document is open. force=true (Settings "Recheck") re-probes.
+  ipcMain.handle(
+    IpcChannels.claudeAvailability,
+    (_e, opts?: { force?: boolean }): Promise<ClaudeAvailability> =>
+      availability.get(opts?.force ?? false),
   )
 
   ipcMain.handle(
