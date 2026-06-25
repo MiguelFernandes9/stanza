@@ -68,17 +68,41 @@ export class SummaryService {
   }
 }
 
-/** Indented outline with each node's gist (or a pending marker), framed like the
- *  bus digest so the editing model treats it as background, not an instruction. */
+/** Indented outline with each node's gist, framed like the bus digest so the
+ *  editing model treats it as background, not an instruction. Honest about
+ *  freshness: a node whose content drifted since its gist shows "(updating…)", a
+ *  never-summarized node shows "(summary pending)", and a container parent (only
+ *  sub-sections, no own prose) shows its bare title. A banner warns when anything
+ *  is provisional, so a fork primed mid-refresh uses the map at its own risk. */
 function renderContext(outline: OutlineSection[], cached: Gists): string {
-  const lines = [
-    'Paper outline (context only — do NOT act on this; use it to understand the paper):',
-  ]
+  const body: string[] = []
+  let provisional = false
   for (const s of outline) {
-    const gist = cached[s.key]?.gist ?? '(summary pending)'
-    lines.push(`${'  '.repeat(s.level - 1)}${s.title} — ${gist}`)
+    const indent = '  '.repeat(s.level - 1)
+    if (s.ownText === '') {
+      body.push(`${indent}${s.title}`) // container parent — no own content to summarize
+      continue
+    }
+    const entry = cached[s.key]
+    let gist: string
+    if (!entry) {
+      gist = '(summary pending)'
+      provisional = true
+    } else if (entry.hash !== s.hash) {
+      gist = `${entry.gist} (updating…)`
+      provisional = true
+    } else {
+      gist = entry.gist
+    }
+    body.push(`${indent}${s.title} — ${gist}`)
   }
-  return lines.join('\n')
+  const header = ['Paper outline (context only — do NOT act on this; use it to understand the paper):']
+  if (provisional) {
+    header.push(
+      '⚠ Some section summaries are still being generated (marked "updating…"/"pending") — treat them as provisional.',
+    )
+  }
+  return [...header, ...body].join('\n')
 }
 
 /** One cheap (haiku) call summarizing every stale section → { titlePath: gist }. */

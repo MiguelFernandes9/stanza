@@ -115,8 +115,49 @@ describe('SummaryService.contextFor', () => {
     expect(ctx).toContain('Introduction — the intro gist')
     expect(ctx).toContain('Setup — (summary pending)') // uncached node
     expect(ctx).toContain('  Setup') // indented under Methodology (level 2)
+    expect(ctx).toContain('still being generated') // banner: something is provisional
 
     await new Promise((r) => setTimeout(r, 20)) // let the scheduled background refresh settle
+  })
+
+  test('marks a section whose content drifted as "(updating…)", not stale-as-current', async () => {
+    const outline = buildOutline(['main.tex'], read(TEX))
+    // Seed EVERY node so nothing is pending — then the only provisional signal is drift.
+    const summaries = Object.fromEntries(
+      outline.map((s) => [s.key, { gist: `gist of ${s.key}`, hash: s.hash }]),
+    )
+    // Introduction's content changes → its cached hash no longer matches.
+    const edited = TEX.replace('Intro prose here.', 'Intro prose, rewritten.')
+    store.setProject(root, { summaries })
+
+    const ctx = new SummaryService(new StubRunner(), store).contextFor(root, ['main.tex'], read(edited))
+
+    expect(ctx).toContain('Introduction — gist of Introduction (updating…)') // drifted, flagged
+    expect(ctx).toContain('Methodology — gist of Methodology') // unchanged → no marker
+    expect(ctx).not.toContain('Methodology — gist of Methodology (updating…)')
+    expect(ctx).toContain('still being generated') // banner present
+
+    await new Promise((r) => setTimeout(r, 20))
+  })
+
+  test('renders a container parent (no own prose) as a bare title and adds no banner', () => {
+    // Methodology here has only sub-sections, no own prose → ownText === ''.
+    const tex = `\\documentclass{article}
+\\begin{document}
+\\section{Methodology}
+\\subsection{Setup}
+Setup prose.
+\\end{document}
+`
+    const outline = buildOutline(['main.tex'], read(tex))
+    const setup = outline.find((s) => s.key === 'Methodology > Setup')!
+    store.setProject(root, { summaries: { 'Methodology > Setup': { gist: 'the setup gist', hash: setup.hash } } })
+
+    const ctx = new SummaryService(new StubRunner(), store).contextFor(root, ['main.tex'], read(tex))
+
+    expect(ctx).toContain('Methodology\n') // bare title, no " — " gist
+    expect(ctx).not.toContain('Methodology — ')
+    expect(ctx).not.toContain('still being generated') // nothing provisional → no banner
   })
 
   test('returns empty string for a document with no titled sections', () => {
