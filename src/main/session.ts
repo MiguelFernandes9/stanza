@@ -1,12 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, rmSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { DocumentInfo } from '../shared/ipc/document'
 import type { ProcessRunner } from './infra/ProcessRunner'
 import { GitClient } from './infra/GitClient'
 import type { GlobalSettingsStore, Store } from './infra/Store'
+import { ForkManager } from './fork/ForkManager'
 import { ClaudeService } from './services/ClaudeService'
+import { buildOutline } from './services/paperOutline'
+import { SummaryService } from './services/SummaryService'
 import { ActiveOps } from './services/sessionBus'
 import { CompileService } from './services/CompileService'
 import { DiffPreviewService } from './services/DiffPreviewService'
@@ -25,11 +28,14 @@ export class DocumentSession {
   readonly files: FileService
   readonly snippets: SnippetCompiler
   readonly diffPreview: DiffPreviewService
-  /** The doc's persistent op worktree: Claude is primed + every op runs HERE, so
-   *  the user's checkout is never touched mid-op and Accept (which merges into
-   *  the checkout) never waits on a running op (spec §11). Stable path per root
-   *  so the primed session resumes across app launches. */
-  readonly worktreeDir: string
+  /** Per-section/subsection paper summaries injected into each fork's prime so it
+   *  "knows the paper"; a cheap model refreshes only the nodes whose content drifted. */
+  readonly summaries: SummaryService
+  /** Every fork (parallel edit / chat) for this document: its per-fork worktree
+   *  pool + bounded scheduler. Replaces the single shared op worktree — each fork
+   *  edits its OWN worktree, so the user's checkout is never touched mid-op and
+   *  Accept (which merges into the checkout) never waits on a running op (§11). */
+  readonly forks: ForkManager
   /** This window's session id for the per-project session bus: every op it runs is
    *  tagged with it, and the cross-session digest excludes it. One per window/session
    *  (in-memory; a reopened project is legitimately a new session). */
@@ -70,20 +76,6 @@ export class DocumentSession {
     return result
   }
 
-  /** Serialises the WHOLE op (sync worktree → run claude → capture), which all
-   *  share the single op worktree, so a second op can't reset/clobber the
-   *  worktree mid-run. Distinct from runMainTreeExclusive: this never holds the
-   *  user tree, so Accept (which uses that mutex) never waits on a running op. */
-  private opChain: Promise<unknown> = Promise.resolve()
-  runOpExclusive<T>(fn: () => Promise<T>): Promise<T> {
-    const result = this.opChain.then(fn, fn)
-    this.opChain = result.then(
-      () => undefined,
-      () => undefined,
-    )
-    return result
-  }
-
   constructor(
     info: DocumentInfo,
     runner: ProcessRunner,
@@ -92,19 +84,33 @@ export class DocumentSession {
     /** Shared across windows by ipc-registry so a session sees its siblings' in-flight
      *  ops; defaults to a private registry for isolated callers (tests). */
     activeOps: ActiveOps = new ActiveOps(),
+    /** Notified when this doc's paper-summary refresh starts/ends, so ipc-registry
+     *  can push a "context updating" hint to the window. Optional (tests omit it). */
+    onSummaryBusy?: (root: string, busy: boolean) => void,
   ) {
     this.info = info
-    this.worktreeDir = join(tmpdir(), 'stanza-wt', createHash('sha1').update(info.root).digest('hex').slice(0, 16))
+    // Per-doc worktree namespace; each fork gets <forkBase>/<forkId>. Stable per
+    // root so a persistent chat's worktree (keyed by its thread id) survives a
+    // relaunch and its session resumes there.
+    const forkBase = join(tmpdir(), 'stanza-wt', createHash('sha1').update(info.root).digest('hex').slice(0, 16))
     this.compiler = new CompileService(runner, info)
     // Per-document compiler knobs persisted by settings:setDocument (Lane S).
     this.compiler.setOptions(store.getProject(info.root).compile ?? {})
     this.git = new GitClient(runner, info.root)
     this.review = new ReviewService(this.git)
+    this.forks = new ForkManager(this.git, forkBase, globalSettings.get().forkConcurrency ?? 12)
+    this.summaries = new SummaryService(runner, store, onSummaryBusy)
     // The bus digest reads the document repo's recent commits fresh per op (the
     // shared, always-live "what changed" source); `this.git` targets info.root.
+    // Each fork runs Claude in its OWN worktree (passed per call to runForkTurn);
+    // every prime also carries the paper outline + per-section summaries (cached,
+    // refreshed in the background when a section's content drifts). All read THIS.info
+    // so a rename that re-derives the file set is reflected without rebuilding.
     this.claude = new ClaudeService(
-      runner, store, globalSettings, info, this.worktreeDir, undefined, this.sessionId, activeOps,
+      runner, globalSettings, info, undefined, activeOps,
       (n) => this.git.log(n),
+      () => this.summaries.contextFor(this.info.root, this.info.texFiles, this.readDoc),
+      () => buildOutline(this.info.texFiles, this.readDoc),
     )
     this.files = new FileService(info.root, this.git)
     this.snippets = new SnippetCompiler(runner, info.root)
@@ -115,20 +121,29 @@ export class DocumentSession {
     // also removes the watcher's mid-op recompile that stranded the bubble (M2-2).
   }
 
-  /** Create (or reuse) the persistent op worktree. Idempotent: a live worktree
-   *  has a `.git` file at its root → reuse; otherwise clear any stale dir/admin
-   *  entry and add fresh. Called at open + before the first op. */
-  async ensureWorktree(): Promise<void> {
-    if (!(await this.git.isRepo())) return // not a repo yet — first op's prepare() inits it
-    if (existsSync(join(this.worktreeDir, '.git'))) return
-    await this.git.removeWorktree(this.worktreeDir) // tolerant if absent
-    rmSync(this.worktreeDir, { recursive: true, force: true })
-    await this.git.pruneWorktrees() // drop stale admin so add doesn't collide
-    await this.git.addWorktree(this.worktreeDir)
+  /** Read a doc-relative file from the CURRENT checkout (this.info.root). Bound so
+   *  it can be passed as a callback; reads `this.info` at call time so a re-derived
+   *  file set is honoured. */
+  private readDoc = (rel: string): string | null => {
+    try {
+      return readFileSync(join(this.info.root, rel), 'utf8')
+    } catch {
+      return null
+    }
   }
 
-  /** Tear down the op worktree when the window closes. */
+  /** Kick a paper-summary refresh if the document drifted — call after content
+   *  changes (an accepted edit, a manual save) so the cache (and the bubble's
+   *  "context updating" hint) reflect reality promptly, instead of waiting for the
+   *  next op to prime. No-op when nothing drifted; the refresh is background. */
+  warmSummaries(): void {
+    this.summaries.warm(this.info.root, this.info.texFiles, this.readDoc)
+  }
+
+  /** Tear down every fork worktree when the window closes. Best-effort: a failed
+   *  cleanup (e.g. git missing) is non-fatal — sweepStale recovers leftovers on
+   *  the next open. */
   dispose(): void {
-    void this.git.removeWorktree(this.worktreeDir)
+    void this.forks.disposeAll().catch(() => {})
   }
 }

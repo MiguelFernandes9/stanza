@@ -6,13 +6,13 @@ import type { DocumentInfo } from '../../shared/ipc/document'
 // stating d.root here made Claude resolve span paths under the user's checkout,
 // which isn't granted → "Permission denied on read". Default keeps d.root for any
 // caller still running there.
-export const primePrompt = (d: DocumentInfo, root: string = d.root) =>
+export const primePrompt = (d: DocumentInfo, root: string = d.root, context?: string) =>
   `You are the editing engine inside Stanza, a LaTeX editor. Project root: ${root}.
 Main file: ${d.mainFile}. Files: ${d.texFiles.join(', ')}.
 You will receive editing instructions scoped to line spans. Edit ONLY within the
 given spans unless the instruction explicitly requires updating cross-references,
 labels, or the bibliography. Never run git. Never compile. Reply with a one-paragraph
-summary of what you changed.`
+summary of what you changed.${context ? `\n\n${context}` : ''}`
 
 export const opPrompt = (req: ClaudeRequest, imagePath?: string, injectedContext?: string) => {
   const wholeDoc = req.spans.length === 0

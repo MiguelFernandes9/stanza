@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, webContents } from 'electron'
 import type { IpcMainInvokeEvent, WebContents } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
@@ -22,6 +22,7 @@ import type {
   RecentProject,
   ReviewDecision,
   ReviewProposal,
+  SummaryStatus,
   ThreadRecord,
   ThreadTurn,
   GlobalSettings,
@@ -38,7 +39,10 @@ import { Store, GlobalSettingsStore } from './infra/Store'
 import { appendTurns, patchTurnByOpId, removeThread, upsertThread } from './threadStore'
 import { changedFilesInDiff } from './services/diffSpans'
 import { DocumentService } from './services/DocumentService'
-import { ActiveOps } from './services/sessionBus'
+import { buildOutline } from './services/paperOutline'
+import { ActiveOps, describeScope } from './services/sessionBus'
+import type { LiveConflict } from '@shared/ipc'
+import type { Fork, ForkScope } from './fork/Fork'
 import { DocumentSession } from './session'
 import { mapRecents } from './recents'
 
@@ -89,6 +93,17 @@ export function getGlobalSettings(): GlobalSettings {
 /** Patch app-wide settings — the quit dialog persists "Don't ask again". */
 export function setGlobalSettings(patch: Partial<GlobalSettings>): void {
   globalSettings?.set(patch)
+}
+
+/** Push a paper-context refresh status to every window showing `root` (a doc can
+ *  be open in more than one window). Keyed by webContents id — the session map's
+ *  key — resolved back to its WebContents to send. */
+function emitSummaryStatus(root: string, building: boolean): void {
+  for (const [id, s] of sessions) {
+    if (s.info.root !== root) continue
+    const wc = webContents.fromId(id)
+    if (wc) sendTo(wc, IpcChannels.summaryStatus, { building } satisfies SummaryStatus)
+  }
 }
 
 /** Drop a window's session when it closes (index.ts wires win.on('closed')). */
@@ -153,13 +168,16 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IpcChannels.documentHistory, (event) => sessionFor(event).git.log(50))
 
-  // Reset the doc's Claude session: the next op primes a fresh one (drops
-  // accumulated context when the model degrades). Goes through the live service so
-  // its in-memory priming latch is cleared too, not just the persisted id. The
-  // worktree is untouched; ensureSession re-primes there. Headless claude has no
-  // /compact, so a fresh prime IS the "compact".
+  // "Compact" the document's chats: drop every persistent thread's stored session
+  // so its next turn re-primes fresh (headless claude has no /compact, so a fresh
+  // prime IS the compact). Ephemeral block edits already prime a throwaway session
+  // per run, so there's nothing else to reset. The worktrees are untouched.
   ipcMain.handle(IpcChannels.assistantReset, (event): void => {
-    sessionFor(event).claude.resetSession()
+    const root = sessionFor(event).info.root
+    const threads = store.getProject(root).threads ?? []
+    store.setProject(root, {
+      threads: threads.map((t) => ({ ...t, sessionId: undefined, primedWorkdir: undefined })),
+    })
   })
 
   // HISTORY diff viewer: the change a commit introduced (its diff vs its
@@ -203,7 +221,11 @@ export function registerIpcHandlers(): void {
   )
 
   ipcMain.handle(IpcChannels.documentSave, (event, relPath: string, content: string) => {
-    atomicWrite(join(sessionFor(event).info.root, relPath), content)
+    const doc = sessionFor(event)
+    atomicWrite(join(doc.info.root, relPath), content)
+    // A manual .tex save changes content → refresh paper summaries (cheap drift
+    // check; no-op when the saved file holds no sectioning changes).
+    if (relPath.endsWith('.tex')) doc.warmSummaries()
   })
 
   ipcMain.handle(IpcChannels.documentRead, (event, relPath: string) =>
@@ -274,6 +296,10 @@ export function registerIpcHandlers(): void {
     // edit the worktree, not this tree — which is what unblocks Accept (§11).
     const resolution = await doc.runMainTreeExclusive(() => doc.review.resolve(decision))
     doc.diffPreview.invalidate(decision.opId) // free the op's cached block previews
+    // A committed accept merged an edit into the user tree — the .tex content changed,
+    // so refresh the paper summaries now (the bubble's "context updating" hint reflects
+    // it) instead of waiting for the next op to prime. No-op when nothing drifted.
+    if (resolution.committed) doc.warmSummaries()
     if (resolution.committed || !decision.accept) {
       // An op belongs to EITHER the doc history (ops) or a persistent thread —
       // patch both; the non-owner is a no-op.
@@ -392,7 +418,7 @@ export function registerIpcHandlers(): void {
         // recompile from the new file. open() honors the override just written.
         const info = await documents.open(root)
         if (info) {
-          sessions.set(event.sender.id, new DocumentSession(info, runner, store, globalSettings, activeOps))
+          sessions.set(event.sender.id, new DocumentSession(info, runner, store, globalSettings, activeOps, emitSummaryStatus))
           return { doc: info }
         }
         return { doc: null }
@@ -445,7 +471,8 @@ async function loadDoc(
   kind: 'open' | 'create',
   emitTo: WebContents | undefined,
 ): Promise<DocumentInfo | null> {
-  if (kind === 'open' && store.getProject(folder).sessionId) {
+  const rec = store.getProject(folder)
+  if (kind === 'open' && (rec.primed || rec.sessionId)) {
     const info = await documents.open(folder)
     if (info) store.setProject(folder, { lastOpened: new Date().toISOString() })
     return info
@@ -454,9 +481,10 @@ async function loadDoc(
 }
 
 function bindSession(wc: WebContents, info: DocumentInfo): void {
-  const session = new DocumentSession(info, runner, store, globalSettings, activeOps)
+  const session = new DocumentSession(info, runner, store, globalSettings, activeOps, emitSummaryStatus)
   sessions.set(wc.id, session)
-  void session.ensureWorktree() // create/reuse the doc's op worktree (crash-safe)
+  void session.forks.sweepStale().catch(() => {}) // drop fork worktrees left by a crash/quit
+  store.setProject(info.root, { primed: true }) // a reopen now takes the instant path
   // Replace any prior watcher (re-opening a doc in the same window), then watch
   // the new root for external changes → tell this window to re-list its files.
   fileWatchers.get(wc.id)?.()
@@ -500,73 +528,127 @@ function windowForRoot(root: string): BrowserWindow | undefined {
   return undefined
 }
 
-/** Diff-gated op pipeline (FR7, §11): lock check → wip-commit the user tree →
- *  sync the op worktree to HEAD → arm watcher on it → run op THERE → await file
- *  settle → capture the worktree onto a proposal branch → emit. The user's tree
- *  is never touched, so Accept never waits on this. The watcher is armed BEFORE
- *  the op so an edit that flushes after claude exits is still seen (B11.2). */
+/** A fork's scope from its requested spans (whole-doc when empty). */
+function forkScope(spans: BlockSpan[]): ForkScope {
+  return spans.length === 0 ? { kind: 'doc' } : { kind: 'blocks', spans }
+}
+
+/** The deterministic conflict signal for a just-started fork: another in-flight
+ *  fork whose scope overlaps this one's (span math, incl. parent/child containment
+ *  and whole-doc). Undefined when nothing overlaps. The location names the OTHER
+ *  edit's section; the outline is built only when an overlap exists (rare). */
+function liveConflictFor(doc: DocumentSession, fork: Fork): LiveConflict | undefined {
+  const others = activeOps.overlaps(doc.info.root, fork.scope, fork.forkId)
+  if (others.length === 0) return undefined
+  const other = others[0]! // one representative — the badge is a "go check" nudge, not a manifest
+  const read = (rel: string): string | null => {
+    try {
+      return readFileSync(join(doc.info.root, rel), 'utf8')
+    } catch {
+      return null
+    }
+  }
+  const location = describeScope(buildOutline(doc.info.texFiles, read), other.scope) ?? 'another part of the document'
+  return { location, instruction: oneLineInstruction(other.instruction) }
+}
+
+/** Collapse an instruction to a single bounded line for the conflict badge. */
+function oneLineInstruction(s: string, max = 120): string {
+  const t = s.replace(/\s+/g, ' ').trim()
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t
+}
+
+/** The shared per-fork pipeline (FR7, §11): wip-commit the user tree → sync THIS
+ *  fork's worktree to HEAD → run the edit `body` THERE (a settle watcher catches
+ *  writes that flush after claude exits) → capture the worktree onto a proposal
+ *  branch. `body` returns the op id (claude's, or a fresh one for a restore). The
+ *  user's tree is never touched, so Accept never waits on a running fork; and each
+ *  fork has its OWN worktree, so forks run concurrently (bounded by the pool). */
+async function captureOnFork(
+  doc: DocumentSession,
+  fork: Fork,
+  instruction: string,
+  spans: BlockSpan[],
+  body: (workDir: string) => Promise<string>,
+  opts: { watch: boolean; subject?: string },
+): Promise<{ opId: string; proposal: ReviewProposal | null }> {
+  await doc.forks.ensureWorktree(fork)
+  // wip-commit manual edits (narrow user-tree mutex), then sync the fork worktree
+  // to that HEAD so the edit forks from the latest accepted + manual state.
+  await doc.runMainTreeExclusive(() => doc.review.prepare())
+  await doc.review.syncWorktree(fork.worktreeDir)
+  const watcher = opts.watch ? armSettleWatcher(fork.worktreeDir, { quietMs: 400, capMs: 3000 }) : null
+  let opId: string
+  try {
+    opId = await body(fork.worktreeDir)
+    await watcher?.settled()
+  } finally {
+    watcher?.dispose()
+  }
+  const proposal = await doc.review.captureWorktree(fork.worktreeDir, opId, instruction, spans, opts.subject)
+  return { opId, proposal }
+}
+
+/** A block edit / whole-doc op: an EPHEMERAL fork (its own worktree + a fresh
+ *  one-shot session). Runs through the bounded pool, so disjoint ops run
+ *  concurrently. The worktree is torn down after capture — the proposal lives on
+ *  its branch, and Accept/Reject operate on that via the main tree. */
 async function runClaudeOp(
   doc: DocumentSession,
   wc: WebContents,
   req: ClaudeRequest,
 ): Promise<ClaudeResult> {
-  doc.review.assertSpansFree(req.spans)
+  doc.review.assertSpansFree(req.spans) // interim overlap guard (vs PENDING proposals)
+  const fork = doc.forks.create(forkScope(req.spans), 'ephemeral')
 
+  // Deterministic conflict signal, snapshotted at trigger time (before THIS fork
+  // is added): which already-in-flight forks edit overlapping content. Carried back
+  // on the result for the renderer's ⚠ badge — the model's own "⚠ possible conflict"
+  // note adds the semantic cases the span math can't see.
+  const conflict = liveConflictFor(doc, fork)
   // Write-on-prompt (session bus): record this op as in-flight the moment it's
   // triggered, so a sibling session that starts an op meanwhile sees it's editing.
-  activeOps.start({ sessionId: doc.sessionId, root: doc.info.root, instruction: req.instruction, startedAt: new Date().toISOString() })
-  // Mark the op active so the file watcher ignores the brief user-tree churn
-  // (accept merge / wip-commit) — the op's OWN edits land in the worktree and
-  // never churn this tree. Release a beat after the body so the settle fires muted.
+  activeOps.start({ forkId: fork.forkId, root: doc.info.root, instruction: req.instruction, scope: fork.scope, startedAt: new Date().toISOString(), windowId: doc.sessionId })
+  // Mark active so the file watcher ignores the brief user-tree churn (wip-commit
+  // / accept merge) — the fork's OWN edits land in its worktree, never this tree.
   doc.beginOp()
   try {
-    // The whole worktree section is serialised (runOpExclusive): ops share ONE
-    // worktree, so a second op must not sync/clobber it mid-run. This never holds
-    // the user tree, so Accept (runMainTreeExclusive) still never waits on it.
-    return await doc.runOpExclusive(async () => {
-      // wip-commit manual edits (narrow user-tree mutex), then sync the worktree
-      // to that HEAD so the op forks from the latest accepted + manual state.
-      await doc.runMainTreeExclusive(() => doc.review.prepare())
-      await doc.ensureWorktree()
-      await doc.review.syncWorktree(doc.worktreeDir)
-
-      // Arm the settle watcher on the WORKTREE (where claude writes), so a flush
-      // after claude exits is still awaited. It only waits for writes to land — it
-      // never recompiles; compile fires on accept (docs/compile-triggers.md).
-      const watcher = armSettleWatcher(doc.worktreeDir, { quietMs: 400, capMs: 3000 })
-      let op: { opId: string; note: string }
-      try {
-        // claude:status is per-document → only the owning window. The op runs with
-        // cwd = the worktree (ClaudeService.workDir).
-        op = await doc.claude.runOp(req, (status) => sendTo(wc, IpcChannels.claudeStatus, status))
-        await watcher.settled() // wait for claude's writes to land (and stop)
-      } finally {
-        watcher.dispose()
-      }
-
-      const proposal = await doc.review.captureWorktree(doc.worktreeDir, op.opId, req.instruction, req.spans)
+    return await doc.forks.schedule(fork, async () => {
+      let op: { opId: string; note: string; sessionId: string }
+      const { proposal } = await captureOnFork(
+        doc,
+        fork,
+        req.instruction,
+        req.spans,
+        async (workDir) => {
+          op = await doc.claude.runForkTurn(workDir, fork.forkId, fork.claudeSessionId, req, (status) =>
+            sendTo(wc, IpcChannels.claudeStatus, status),
+          )
+          fork.claudeSessionId = op.sessionId
+          return op.opId
+        },
+        { watch: true },
+      )
       // Eager: start compiling every changed block's marked preview now, so opening
       // Review is instant (the renders are cached by the time the user clicks).
       if (proposal) doc.diffPreview.prime(proposal.opId, proposal.branch, proposal.blocks)
       appendOpRecord(doc.info.root, {
-        opId: op.opId,
+        opId: op!.opId,
         ts: new Date().toISOString(),
         instruction: req.instruction,
-        note: op.note,
+        note: op!.note,
         accepted: null,
         scope: req.spans.length === 0 ? 'doc' : 'blocks',
         sessionId: doc.sessionId, // tag for the per-project session bus
       })
       // The proposal travels back on this return — the initiating renderer wires it
-      // into the busy task. Do NOT also broadcast review:proposal here: that
-      // duplicate raced op-started's opId and spawned a twin review card whose
-      // second accept hit an already-merged branch (BUG-18). The broadcast path is
-      // reserved for reEmitPendingProposals (open-time crash recovery).
-      return { opId: op.opId, note: op.note, proposal }
+      // into the busy task. Do NOT also broadcast review:proposal here (BUG-18).
+      return { opId: op!.opId, note: op!.note, proposal, ...(conflict ? { conflict } : {}) }
     })
   } finally {
-    activeOps.end(doc.sessionId) // op no longer in flight (session bus)
+    activeOps.end(fork.forkId) // op no longer in flight (session bus)
     setTimeout(() => doc.endOp(), FILE_WATCH_SETTLE_MS + 300)
+    void doc.forks.resolve(fork.forkId).catch(() => {}) // ephemeral → tear the worktree down
   }
 }
 
@@ -582,26 +664,28 @@ async function runRestoreOp(
   wc: WebContents,
   sha: string,
 ): Promise<ReviewProposal | null> {
-  doc.review.assertSpansFree([]) // a restore owns the whole tree (v1 serial execution)
+  doc.review.assertSpansFree([]) // a restore owns the whole tree (interim guard)
+  const fork = doc.forks.create({ kind: 'doc' }, 'ephemeral')
   doc.beginOp()
   try {
-    return await doc.runOpExclusive(async () => {
-      await doc.runMainTreeExclusive(() => doc.review.prepare())
-      await doc.ensureWorktree()
-      await doc.review.syncWorktree(doc.worktreeDir)
-
-      // Set the worktree to the target commit's tree, then capture that as the
-      // proposal's edits — its diff vs HEAD undoes every change since `sha`.
-      await doc.git.worktreeClient(doc.worktreeDir).readTreeReset(sha)
+    return await doc.forks.schedule(fork, async () => {
       const subject = await doc.git.subject(sha)
       const instruction = `Restore to "${subject}"`
-      const opId = randomUUID()
-      const proposal = await doc.review.captureWorktree(
-        doc.worktreeDir,
-        opId,
+      let opId = ''
+      // No watcher: read-tree is synchronous, there's no external writer to settle.
+      const { proposal } = await captureOnFork(
+        doc,
+        fork,
         instruction,
         [],
-        `restore: ${subject}`,
+        async (workDir) => {
+          opId = randomUUID()
+          // Set the worktree to the target commit's tree → its diff vs HEAD undoes
+          // every change since `sha`.
+          await doc.git.worktreeClient(workDir).readTreeReset(sha)
+          return opId
+        },
+        { watch: false, subject: `restore: ${subject}` },
       )
       if (proposal) {
         doc.diffPreview.prime(proposal.opId, proposal.branch, proposal.blocks)
@@ -614,15 +698,15 @@ async function runRestoreOp(
           scope: 'doc',
           sessionId: doc.sessionId, // tag for the per-project session bus
         })
-        // Surface as a review card via the broadcast path (the same one open-time
-        // crash recovery uses): there's no busy task to thread it through, so this
-        // is the single delivery — the renderer's onReviewProposal → restore-proposal.
+        // Surface as a review card via the broadcast path (open-time crash recovery
+        // uses the same one): no busy task to thread it through.
         sendTo(wc, IpcChannels.reviewProposal, proposal)
       }
       return proposal
     })
   } finally {
     setTimeout(() => doc.endOp(), FILE_WATCH_SETTLE_MS + 300)
+    void doc.forks.resolve(fork.forkId).catch(() => {}) // ephemeral → tear the worktree down
   }
 }
 
@@ -637,62 +721,64 @@ async function runClaudeTurn(
 ): Promise<ClaudeTurnResult> {
   const claudeReq: ClaudeRequest = { instruction: req.instruction, spans: req.spans, imageDataUrl: req.imageDataUrl }
   doc.review.assertSpansFree(req.spans)
+  // A PERSISTENT fork keyed by the thread id: its worktree + session live across
+  // turns (a live chat), and survive a relaunch (the path is stable per thread).
+  const fork = doc.forks.getOrCreate(req.threadId, forkScope(req.spans), 'persistent')
+  // Deterministic conflict signal at trigger time (see runClaudeOp). Excludes THIS
+  // fork by id, so a persistent thread's own prior turn never self-flags.
+  const conflict = liveConflictFor(doc, fork)
   // Write-on-prompt (session bus): mark this turn in-flight so siblings see it.
-  activeOps.start({ sessionId: doc.sessionId, root: doc.info.root, instruction: req.instruction, startedAt: new Date().toISOString() })
+  activeOps.start({ forkId: fork.forkId, root: doc.info.root, instruction: req.instruction, scope: fork.scope, startedAt: new Date().toISOString(), windowId: doc.sessionId })
   doc.beginOp()
   try {
-    return await doc.runOpExclusive(async () => {
-      await doc.runMainTreeExclusive(() => doc.review.prepare())
-      await doc.ensureWorktree()
-      await doc.review.syncWorktree(doc.worktreeDir)
-
-      // Resume the thread's session only if it was primed in THIS worktree.
-      // Otherwise re-prime a fresh one: a session's sandbox + baked root are
-      // pinned to its prime dir, so a relocated worktree — or a pre-fix session
-      // primed at the user checkout (no primedWorkdir) — can't be resumed and
-      // would fail "Permission denied on read". Mirrors ClaudeService's doc-session
-      // self-heal (ensureSession re-primes on primedWorkdir mismatch).
-      // The Store record is the authority for the resume id (not the renderer's
-      // req.sessionId, which may be stale after a heal).
+    return await doc.forks.schedule(fork, async () => {
+      // Resume the thread's session only if it was primed in THIS fork's worktree.
+      // Otherwise re-prime: a session's sandbox is pinned to its prime dir, so a
+      // pre-fix session (primed at the old shared worktree / the user checkout)
+      // can't be resumed here. The Store record is the authority for the resume id
+      // (not the renderer's req.sessionId, which may be stale after a heal).
       const rec = (store.getProject(doc.info.root).threads ?? []).find((t) => t.threadId === req.threadId)
-      const resumeId = rec?.primedWorkdir === doc.worktreeDir ? (rec.sessionId ?? null) : null
+      const resumeId = rec?.primedWorkdir === fork.worktreeDir ? (rec.sessionId ?? null) : null
 
-      const watcher = armSettleWatcher(doc.worktreeDir, { quietMs: 400, capMs: 3000 })
       let turn: { opId: string; note: string; sessionId: string }
-      try {
-        turn = await doc.claude.runThreadTurn(resumeId, claudeReq, (status) =>
-          sendTo(wc, IpcChannels.claudeStatus, status),
-        )
-        await watcher.settled()
-      } finally {
-        watcher.dispose()
-      }
-
-      // A fresh prime (first turn OR self-heal) yields a new session id — persist
-      // it AND the worktree it was primed in BEFORE capture, so a capture failure
-      // can't orphan it (the next turn must resume the same one). A resumed turn
-      // already has both persisted, so skip.
-      if (resumeId == null) {
-        const ts = new Date().toISOString()
-        const threads = store.getProject(doc.info.root).threads ?? []
-        store.setProject(doc.info.root, {
-          threads: upsertThread(threads, {
-            threadId: req.threadId,
-            sessionId: turn.sessionId,
-            primedWorkdir: doc.worktreeDir,
-            blockIds: req.blockIds,
-            ts,
-          }),
-        })
-      }
-      const proposal = await doc.review.captureWorktree(doc.worktreeDir, turn.opId, req.instruction, req.spans)
+      const { proposal } = await captureOnFork(
+        doc,
+        fork,
+        req.instruction,
+        req.spans,
+        async (workDir) => {
+          turn = await doc.claude.runForkTurn(workDir, fork.forkId, resumeId, claudeReq, (status) =>
+            sendTo(wc, IpcChannels.claudeStatus, status),
+          )
+          fork.claudeSessionId = turn.sessionId
+          // A fresh prime (first turn OR self-heal) yields a new session id —
+          // persist it AND the worktree BEFORE capture, so a capture failure can't
+          // orphan it (the next turn must resume the same one).
+          if (resumeId == null) {
+            const ts = new Date().toISOString()
+            const threads = store.getProject(doc.info.root).threads ?? []
+            store.setProject(doc.info.root, {
+              threads: upsertThread(threads, {
+                threadId: req.threadId,
+                sessionId: turn.sessionId,
+                primedWorkdir: fork.worktreeDir,
+                blockIds: req.blockIds,
+                ts,
+              }),
+            })
+          }
+          return turn.opId
+        },
+        { watch: true },
+      )
       if (proposal) doc.diffPreview.prime(proposal.opId, proposal.branch, proposal.blocks)
-      persistThreadTurn(doc.info.root, req, turn, proposal)
-      return { opId: turn.opId, note: turn.note, sessionId: turn.sessionId, proposal }
+      persistThreadTurn(doc.info.root, req, turn!, proposal)
+      return { opId: turn!.opId, note: turn!.note, sessionId: turn!.sessionId, proposal, ...(conflict ? { conflict } : {}) }
     })
   } finally {
-    activeOps.end(doc.sessionId) // turn no longer in flight (session bus)
+    activeOps.end(fork.forkId) // turn no longer in flight (session bus)
     setTimeout(() => doc.endOp(), FILE_WATCH_SETTLE_MS + 300)
+    // Persistent fork: keep its worktree + session alive for the next turn.
   }
 }
 

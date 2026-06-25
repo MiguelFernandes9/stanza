@@ -49,6 +49,13 @@ export interface PrimeStep {
   detail?: string            // e.g. "7 files", "142 blocks"
 }
 
+/** main→renderer event (`summary:status`): whether the paper-context summarizer is
+ *  refreshing this document right now. The renderer shows a "context updating" hint
+ *  so the user knows an op primed now would carry provisional summaries (Part A). */
+export interface SummaryStatus {
+  building: boolean
+}
+
 /** Result of a structural file op (rename/duplicate/delete/create). `files`
  *  is the post-op listing (drop-in for the sidebar). `doc` is set only when
  *  the op changed DocumentInfo (mainFile/texFiles) — e.g. renaming a .tex.

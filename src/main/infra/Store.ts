@@ -12,6 +12,11 @@ export interface ProjectRecord {
    *  pinned there — so a stored session whose `primedWorkdir` ≠ the current
    *  worktree must be re-primed. */
   primedWorkdir?: string
+  /** Set once the doc has been opened+parsed, so a reopen takes the instant
+   *  `documents.open` path instead of re-running the prime pipeline. (Pre-fork
+   *  this was inferred from `sessionId`, which the per-fork model no longer sets
+   *  at the doc level.) */
+  primed?: boolean
   ops?: OpRecord[]
   /** Persistent conversation bubbles ("Keep chat") — each its own session +
    *  transcript + block anchor, restored when the project reopens. */
@@ -21,6 +26,10 @@ export interface ProjectRecord {
   /** Per-document settings: main-file override + compiler options (Lane S). */
   mainFile?: string
   compile?: CompileOptions
+  /** Per-section/subsection paper summaries, keyed by title-path (e.g.
+   *  "Methodology > Setup"). `hash` is the FNV-1a of that node's own prose when
+   *  it was summarized — a model re-summarizes only nodes whose hash drifted. */
+  summaries?: Record<string, { gist: string; hash: string }>
 }
 
 /** Atomic temp+rename write so a crash never leaves a half-written file. */

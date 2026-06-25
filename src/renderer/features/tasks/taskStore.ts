@@ -1,4 +1,4 @@
-import type { ReviewProposal, ThreadTurn } from '../../../shared/ipc'
+import type { LiveConflict, ReviewProposal, ThreadTurn } from '../../../shared/ipc'
 import { restoredTask, withResolvedTurn, withTurnError, withTurnResult, withUserTurn } from './taskStore.threads'
 
 /** Margin-rail task model — design "Task model": every edit is a task
@@ -26,6 +26,9 @@ export interface EditTask {
   proposal: ReviewProposal | null
   /** Claude's response note (review phase). */
   note?: string
+  /** Set when another fork was editing overlapping content as this op started
+   *  (deterministic span check) — drives the card's ⚠ conflict badge. */
+  conflict?: LiveConflict
   /** Last op error (task returned to compose). */
   error?: string
   /** "Keep chat": this task is a persistent multi-turn conversation bubble. */
@@ -73,8 +76,8 @@ export type TaskAction =
   | { type: 'submit'; taskId: number }
   | { type: 'start-whole-doc'; instruction: string }
   | { type: 'op-started'; taskId: number; opId: string }
-  | { type: 'proposal'; taskId: number; proposal: ReviewProposal; note: string }
-  | { type: 'op-noop'; taskId: number; note: string }
+  | { type: 'proposal'; taskId: number; proposal: ReviewProposal; note: string; conflict?: LiveConflict }
+  | { type: 'op-noop'; taskId: number; note: string; conflict?: LiveConflict }
   | { type: 'op-failed'; taskId: number; error: string }
   | { type: 'restore-proposal'; proposal: ReviewProposal }
   | { type: 'reanchor'; remap: Record<string, string> }
@@ -88,7 +91,7 @@ export type TaskAction =
   // Persistent conversation bubbles ("Keep chat") — see taskStore.threads.ts.
   | { type: 'toggle-persistent'; taskId: number }
   | { type: 'add-user-turn'; taskId: number; turn: ThreadTurn; threadId: string }
-  | { type: 'turn-result'; taskId: number; turn: ThreadTurn; proposal: ReviewProposal | null; sessionId: string }
+  | { type: 'turn-result'; taskId: number; turn: ThreadTurn; proposal: ReviewProposal | null; sessionId: string; conflict?: LiveConflict }
   | { type: 'turn-failed'; taskId: number; error: string }
   | { type: 'resolve-thread-turn'; taskId: number; accept: boolean }
   | {
@@ -232,12 +235,12 @@ export function taskReducer(s: TaskState, a: TaskAction): TaskState {
       return patchTask(s, a.taskId, { opId: a.opId })
     case 'proposal':
       return {
-        ...patchTask(s, a.taskId, { phase: 'review', proposal: a.proposal, note: a.note }),
+        ...patchTask(s, a.taskId, { phase: 'review', proposal: a.proposal, note: a.note, conflict: a.conflict }),
         activeTask: a.taskId
       }
     case 'op-noop':
       // No proposal (refusal / no changes) — surface the note on the card.
-      return { ...patchTask(s, a.taskId, { phase: 'noop', note: a.note }), activeTask: a.taskId }
+      return { ...patchTask(s, a.taskId, { phase: 'noop', note: a.note, conflict: a.conflict }), activeTask: a.taskId }
     case 'op-failed':
       return patchTask(s, a.taskId, { phase: 'compose', error: a.error })
     case 'restore-proposal': {
@@ -325,7 +328,7 @@ export function taskReducer(s: TaskState, a: TaskAction): TaskState {
       const t = s.tasks.find((x) => x.id === a.taskId)
       if (!t) return s
       return {
-        ...patchTask(s, a.taskId, withTurnResult(t, a.turn, a.proposal, a.sessionId)),
+        ...patchTask(s, a.taskId, { ...withTurnResult(t, a.turn, a.proposal, a.sessionId), conflict: a.conflict }),
         activeTask: a.taskId,
       }
     }

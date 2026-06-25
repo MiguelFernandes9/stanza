@@ -2,6 +2,7 @@ import type { BlockChange } from '../../shared/blocks/changes'
 import { splitPreamble } from '../../shared/blocks/changes'
 import type { DocumentInfo } from '../../shared/ipc/document'
 import type { GitClient } from '../infra/GitClient'
+import { Semaphore } from '../infra/Semaphore'
 import type { SnippetCompiler, SnippetResult } from './SnippetCompiler'
 
 /** Eager, cached "complete edit" preview. The moment a proposal is captured,
@@ -131,19 +132,3 @@ function sliceRegion(text: string, range: { start: number; end: number } | null)
   return text.split('\n').slice(range.start - 1, range.end).join('\n')
 }
 
-/** Caps concurrent builds: extra calls wait until a slot frees. */
-class Semaphore {
-  private active = 0
-  private queue: (() => void)[] = []
-  constructor(private max: number) {}
-  async run<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.active >= this.max) await new Promise<void>((resolve) => this.queue.push(resolve))
-    this.active++
-    try {
-      return await fn()
-    } finally {
-      this.active--
-      this.queue.shift()?.()
-    }
-  }
-}

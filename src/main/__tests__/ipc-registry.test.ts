@@ -216,10 +216,13 @@ esac`)
   // into one branch — the bug where accepting one proposal also applied another.
   // Each op appends its own marker (printf BEFORE sleep so both edits would
   // coexist in the shared tree if the branch-dance weren't serialized).
+  // Match the OWN instruction line (opPrompt's "Instruction: …"), not a bare token:
+  // the bus digest now correctly carries the other in-flight op's instruction, so a
+  // bare *ALPHA* would match B's prompt too. The digest has no "Instruction:" label.
   const dualStub = () =>
     makeClaudeStub(`case "$*" in
-  *ALPHA*) printf 'ALPHA-edit\\n' >> main.tex; sleep 0.3; echo '{"result":"A"}' ;;
-  *BETA*) printf 'BETA-edit\\n' >> main.tex; sleep 0.3; echo '{"result":"B"}' ;;
+  *Instruction:*ALPHA*) printf 'ALPHA-edit\\n' >> main.tex; sleep 0.3; echo '{"result":"A"}' ;;
+  *Instruction:*BETA*) printf 'BETA-edit\\n' >> main.tex; sleep 0.3; echo '{"result":"B"}' ;;
   *) echo '{"result":"primed"}' ;;
 esac`)
 
@@ -240,6 +243,48 @@ esac`)
     expect(rB.proposal!.diff).not.toContain('ALPHA-edit')
     // neither edit is in the working tree until accepted
     expect(readFileSync(join(root, 'main.tex'), 'utf8')).toBe(ARTICLE)
+  }, 30_000)
+
+  // A slow op B holds an overlapping span in flight; op A, started while B runs,
+  // must carry the deterministic `conflict` tag (span overlap). Match B by its OWN
+  // "Instruction:" line — A's digest now quotes B's instruction, so a bare *SLOWMARK*
+  // would mis-route A onto the slow branch.
+  const overlapStub = () =>
+    makeClaudeStub(`case "$*" in
+  *Instruction:*SLOWMARK*) sleep 1.2; printf 's\\n' >> main.tex; echo '{"result":"slow"}' ;;
+  *--resume*) printf 'f\\n' >> main.tex; echo '{"result":"fast"}' ;;
+  *) echo '{"result":"primed"}' ;;
+esac`)
+
+  test('an op started while an overlapping op is in flight is tagged with a live conflict', async () => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', overlapStub())
+    const root = makeProject()
+    await invoke('document:open', root)
+
+    // B: slow op holding lines 2-3, registered in activeOps the moment it's invoked.
+    const bRunning = Promise.resolve(
+      invoke('claude:run', { instruction: 'SLOWMARK rewrite the body', spans: [{ file: 'main.tex', startLine: 2, endLine: 3 }] }),
+    )
+    await new Promise((r) => setTimeout(r, 200)) // let B register + reach its sleep
+
+    // A: overlaps B's span → its result carries the deterministic conflict tag.
+    const a = (await invoke('claude:run', {
+      instruction: 'A tweak',
+      spans: [{ file: 'main.tex', startLine: 3, endLine: 3 }],
+    })) as ClaudeResult
+    expect(a.conflict).toBeDefined()
+    expect(a.conflict!.instruction).toContain('SLOWMARK rewrite the body') // names the clashing edit
+    expect(typeof a.conflict!.location).toBe('string')
+    expect(a.proposal).not.toBeNull() // it still made its edit (warn, not block)
+
+    await bRunning.catch(() => {})
+
+    // A disjoint op, started after B finished, gets no conflict.
+    const c = (await invoke('claude:run', {
+      instruction: 'C tweak',
+      spans: [{ file: 'main.tex', startLine: 1, endLine: 1 }],
+    })) as ClaudeResult
+    expect(c.conflict).toBeUndefined()
   }, 30_000)
 
   test('a pending whole-doc proposal blocks a later scoped op (SPANS_LOCKED)', async () => {
@@ -307,9 +352,10 @@ case "$*" in
   *) echo '{"result":"primed"}' ;;
 esac`)
 
-  // The op worktree session.ts derives for a root (stable hash under tmpdir).
-  const worktreeFor = (root: string) =>
-    join(tmpdir(), 'stanza-wt', createHash('sha1').update(root).digest('hex').slice(0, 16))
+  // The fork worktree the session derives for a thread: <base>/<threadId>, base
+  // = stable hash under tmpdir. A persistent chat resumes in its own worktree.
+  const worktreeFor = (root: string, threadId: string) =>
+    join(tmpdir(), 'stanza-wt', createHash('sha1').update(root).digest('hex').slice(0, 16), threadId)
 
   const seedThread = (root: string, rec: Record<string, unknown>): void => {
     writeFileSync(join(h.userData, 'projects.json'), JSON.stringify({ [root]: { threads: [rec] } }))
@@ -350,7 +396,7 @@ esac`)
     expect(res.proposal).not.toBeNull() // the fresh session did the edit
     expect(res.sessionId).not.toBe('poison-session-id') // a new id took over
     const rec = readThread(root, 'T1')
-    expect(rec.primedWorkdir).toBe(worktreeFor(root)) // re-primed in the op worktree
+    expect(rec.primedWorkdir).toBe(worktreeFor(root, 'T1')) // re-primed in the fork worktree
     expect(rec.sessionId).toBe(res.sessionId)
   }, 20_000)
 
@@ -361,7 +407,7 @@ esac`)
     seedThread(root, {
       threadId: 'T2',
       sessionId: 'good-session-id',
-      primedWorkdir: worktreeFor(root), // already primed in THIS worktree
+      primedWorkdir: worktreeFor(root, 'T2'), // already primed in THIS fork worktree
       blockIds: ['main.tex#h'],
       turns: [],
       ts: '2026-01-01',
@@ -387,7 +433,7 @@ esac`)
     seedThread(root, {
       threadId: 'T3',
       sessionId: 'shot-session-id',
-      primedWorkdir: worktreeFor(root),
+      primedWorkdir: worktreeFor(root, 'T3'),
       blockIds: ['main.tex#h'],
       turns: [],
       ts: '2026-01-01',

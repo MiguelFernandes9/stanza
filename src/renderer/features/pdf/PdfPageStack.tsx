@@ -5,6 +5,20 @@ import { observeDevicePixelRatio } from './devicePixelRatio'
 import { pagesToEvict, visiblePageRange } from './pageWindow'
 import type { PDFDocumentProxy, PDFPageProxy } from './pdfjsSetup'
 
+/** getPage on a proxy that's mid-teardown (transport already null) throws
+ *  SYNCHRONOUSLY — "Cannot read properties of null (reading 'sendWithPromise')".
+ *  PaperPane's consumer-driven retirement should prevent a destroyed proxy from
+ *  ever reaching here, but there's no error boundary above this component, so guard
+ *  defensively: a stray torn-down proxy degrades to "this page doesn't load this
+ *  frame" (the live proxy renders on the next commit) instead of crashing the app. */
+function getPageSafe(pdf: PDFDocumentProxy, n: number): Promise<PDFPageProxy> | null {
+  try {
+    return pdf.getPage(n)
+  } catch {
+    return null
+  }
+}
+
 export interface PageGeometry {
   /** CSS size of every page at the current scale (page 1 measured;
    *  uniform-size assumption recorded in the F5 commit). */
@@ -107,13 +121,15 @@ export function PdfPageStack({ pdf, scale, scrollRef, onGeometry, overlay, onPag
     setRange([1, 0])
     setPages(new Map())
     let alive = true
-    void pdf.getPage(1).then((page) => {
-      if (!alive) return
-      const vp = page.getViewport({ scale })
-      const g = { width: vp.width, height: vp.height, gap: PAGE_GAP }
-      setGeo(g)
-      onGeometry(g, pdf.numPages)
-    })
+    void getPageSafe(pdf, 1)
+      ?.then((page) => {
+        if (!alive) return
+        const vp = page.getViewport({ scale })
+        const g = { width: vp.width, height: vp.height, gap: PAGE_GAP }
+        setGeo(g)
+        onGeometry(g, pdf.numPages)
+      })
+      .catch(() => {}) // proxy torn down mid-load; the live one re-measures on the next commit
     return () => {
       alive = false
     }
@@ -149,10 +165,12 @@ export function PdfPageStack({ pdf, scale, scrollRef, onGeometry, overlay, onPag
     let alive = true
     for (let n = range[0]; n <= range[1]; n++) {
       if (pagesRef.current.has(n)) continue
-      void pdf.getPage(n).then((page) => {
-        if (alive) setPages((prev) => (prev.has(n) ? prev : new Map(prev).set(n, page)))
-        else page.cleanup()
-      })
+      void getPageSafe(pdf, n)
+        ?.then((page) => {
+          if (alive) setPages((prev) => (prev.has(n) ? prev : new Map(prev).set(n, page)))
+          else page.cleanup()
+        })
+        .catch(() => {}) // torn-down proxy: skip this page; live proxy renders on the next commit
     }
     const evict = pagesToEvict(new Set(pagesRef.current.keys()), range)
     if (evict.size > 0) {

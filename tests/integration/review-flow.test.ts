@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { copyFixture } from './fixtureCopy'
 import { DefaultProcessRunner } from '../../src/main/infra/ProcessRunner'
 import { GitClient } from '../../src/main/infra/GitClient'
-import { Store } from '../../src/main/infra/Store'
+import { GlobalSettingsStore } from '../../src/main/infra/Store'
 import { ClaudeService } from '../../src/main/services/ClaudeService'
 import { ReviewService } from '../../src/main/services/ReviewService'
 import type { DocumentInfo } from '../../src/shared/ipc/document'
@@ -47,11 +47,11 @@ function makeHarness(fixture: string, texFiles: string[]): Harness {
   const doc: DocumentInfo = { root, mainFile: 'main.tex', texFiles }
   const git = new GitClient(runner, root)
   const review = new ReviewService(git)
-  // store lives OUTSIDE the doc repo (like <userData>) — inside it,
-  // the session-id write would pollute the proposal diff
-  const store = new Store(join(mkdtempSync(join(tmpdir(), 'stanza-t5-store-')), 'projects.json'))
+  // Settings live OUTSIDE the doc repo (like <userData>); ClaudeService no longer
+  // persists a session id anywhere, so there's nothing here to pollute the diff.
+  const settings = new GlobalSettingsStore(join(mkdtempSync(join(tmpdir(), 'stanza-t5-settings-')), 'settings.json'))
   const wt = join(tmpdir(), `stanza-t5-wt-${randomUUID()}`)
-  const claude = new ClaudeService(runner, store, doc, wt, 10_000)
+  const claude = new ClaudeService(runner, settings, doc, 10_000)
   const statuses: ClaudeStatus[] = []
   let worktreeReady: Promise<void> | undefined
   const ensureWt = () => (worktreeReady ??= git.addWorktree(wt))
@@ -60,7 +60,9 @@ function makeHarness(fixture: string, texFiles: string[]): Harness {
     async runOp(instruction, spans) {
       await ensureWt()
       await review.syncWorktree(wt)
-      const { opId } = await claude.runOp({ instruction, spans }, (s) => statuses.push(s))
+      // Ephemeral fork: prime (sessionId=null) then op in the worktree — the
+      // priming status is what makes the sequence priming→running→done.
+      const { opId } = await claude.runForkTurn(wt, randomUUID(), null, { instruction, spans }, (s) => statuses.push(s))
       return opId
     },
     capture(opId, instruction, spans) {

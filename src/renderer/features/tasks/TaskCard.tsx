@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { CSSProperties, JSX } from 'react'
-import { ArrowUp, Camera, Check, CircleSlash, FileText, Maximize2, Pin, Plus, Sparkles, X } from 'lucide-react'
+import { AlertTriangle, ArrowUp, Camera, Check, CircleSlash, FileText, Maximize2, Pin, Plus, Sparkles, X } from 'lucide-react'
 import { BlockTag, Button, DiffHunk, IconButton, Kbd, Tooltip } from '@renderer/components'
 import type { BlockTagKind } from '@renderer/components'
 import { combinedSpanLabel, spanLabel } from '../paper/paperModel'
@@ -49,6 +49,10 @@ interface Props {
    *  is dropped — PaperPane draws an SVG bezier from the page to the bubble. */
   side?: 'left' | 'right'
   adding: boolean
+  /** True while the paper-context summarizer is refreshing — the composer shows a
+   *  pulsing "Updating context…" hint so the user knows a Run now would carry
+   *  provisional summaries (Part A). */
+  contextBuilding?: boolean
   onToggleAdding: () => void
   onRemoveBlock: (blockId: string) => void
   onActivate: () => void
@@ -69,6 +73,75 @@ interface Props {
    *  whole-document cards (no block to snapshot). */
   onSnapshot?: () => void
   refCb: (el: HTMLDivElement | null) => void
+}
+
+/** Non-blocking ⚠ banner: another fork was editing overlapping content when this
+ *  op started (deterministic span overlap). The edit still ran — this tells the
+ *  user to double-check before accepting. Complements the model's own "⚠ possible
+ *  conflict" note inside the summary. */
+function ConflictBanner({ conflict }: { conflict: NonNullable<EditTask['conflict']> }): JSX.Element {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        gap: 7,
+        alignItems: 'flex-start',
+        background: 'rgba(240,180,40,0.12)',
+        border: '1px solid rgba(180,120,0,0.32)',
+        borderRadius: 'var(--radius-md)',
+        padding: '7px 9px',
+        margin: '0 0 8px'
+      }}
+    >
+      <AlertTriangle size={13} style={{ color: '#9a6a00', flex: '0 0 auto', marginTop: 1 }} />
+      <div style={{ minWidth: 0 }}>
+        <div style={{ font: 'var(--weight-semibold) var(--text-2xs)/1.35 var(--font-sans)', color: '#7a5400' }}>
+          Overlaps a live edit on {conflict.location}
+        </div>
+        <div style={{ font: 'var(--text-2xs)/1.4 var(--font-sans)', color: 'var(--ink-500)', marginTop: 1 }}>
+          A parallel edit is running: “{conflict.instruction}”. Review before accepting.
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** Always-on paper-context status, shown above the composer's prompt bar: a steady
+ *  grey dot when the summaries are up to date, a pulsing amber dot + "Updating
+ *  context…" while they refresh (a Run then carries provisional context, Part A). */
+function ContextStatus({ building }: { building?: boolean }): JSX.Element {
+  return (
+    <Tooltip
+      label={
+        building
+          ? 'The paper summaries are refreshing — an edit run now may use provisional context.'
+          : 'Paper context is up to date.'
+      }
+      side="top"
+    >
+      <span
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 5,
+          font: 'var(--text-2xs)/1 var(--font-sans)',
+          color: building ? 'var(--ink-500)' : 'var(--ink-400)',
+          cursor: 'default'
+        }}
+      >
+        <span
+          style={{
+            width: 5,
+            height: 5,
+            borderRadius: '50%',
+            background: building ? 'var(--clay-400)' : 'var(--ink-300)',
+            ...(building ? { animation: 'stz-pulse 1s var(--ease-in-out) infinite' } : {})
+          }}
+        />
+        {building ? 'Updating context…' : 'Context ready'}
+      </span>
+    </Tooltip>
+  )
 }
 
 export const tagKind = (b: PageBlock): BlockTagKind =>
@@ -98,6 +171,7 @@ export function TaskCard({
   expanded,
   side,
   adding,
+  contextBuilding,
   onToggleAdding,
   onRemoveBlock,
   onActivate,
@@ -312,6 +386,10 @@ export function TaskCard({
           )}
         </div>
 
+        {task.conflict && (task.phase === 'review' || task.phase === 'noop') && (
+          <ConflictBanner conflict={task.conflict} />
+        )}
+
         {task.phase === 'compose' && (
           <div>
             {task.error && (
@@ -319,6 +397,11 @@ export function TaskCard({
                 {task.error}
               </div>
             )}
+            {/* Context status sits on top of the prompt bar so it's the first thing
+                the eye lands on before typing an instruction. */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
+              <ContextStatus building={contextBuilding} />
+            </div>
             <div
               style={{
                 display: 'flex',

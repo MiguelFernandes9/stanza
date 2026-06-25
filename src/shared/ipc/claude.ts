@@ -13,10 +13,22 @@ export interface ClaudeStatus {
   state: 'priming' | 'running' | 'done' | 'failed'
   detail?: string
 }
+/** A deterministic live-overlap signal, computed by span math the moment an op
+ *  starts: another fork was editing overlapping content right then. Drives the
+ *  renderer's ⚠ conflict badge. Non-blocking — the edit still ran; this only tells
+ *  the user to double-check. Complements the model's own "⚠ possible conflict"
+ *  note (which can catch semantic clashes the span math can't, e.g. a shared ref). */
+export interface LiveConflict {
+  location: string      // where the other edit is — a section title-path, or "the whole document"
+  instruction: string   // the conflicting edit's instruction (one line)
+}
+
 export interface ClaudeResult {
   opId: string
   note: string                       // Claude's response text for chat pane
   proposal: ReviewProposal | null    // null when no files changed
+  /** Present when another fork was editing overlapping content as this op started. */
+  conflict?: LiveConflict
 }
 
 /** One finished or pending op, as persisted per project (infra/Store).

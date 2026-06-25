@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { DefaultProcessRunner } from '../../src/main/infra/ProcessRunner'
 import { armSettleWatcher } from '../../src/main/infra/FileWatcher'
 import { GitClient } from '../../src/main/infra/GitClient'
-import { Store } from '../../src/main/infra/Store'
+import { GlobalSettingsStore } from '../../src/main/infra/Store'
 import { ClaudeService } from '../../src/main/services/ClaudeService'
 import { ReviewService } from '../../src/main/services/ReviewService'
 import type { ClaudeRequest } from '../../src/shared/ipc/claude'
@@ -30,9 +30,11 @@ async function runOp(req: ClaudeRequest) {
   await review.prepare()
   await review.syncWorktree(wt)
   const watcher = armSettleWatcher(wt, { quietMs: 400, capMs: 3000 })
-  let op: { opId: string; note: string }
+  let op: { opId: string; note: string; sessionId: string }
   try {
-    op = await claude.runOp(req, () => {})
+    // Ephemeral fork: prime a fresh session in the worktree (sessionId=null), then
+    // run the op there — the same primitive the registry's runClaudeOp drives.
+    op = await claude.runForkTurn(wt, 'op-fork', null, req, () => {})
     await watcher.settled()
   } finally {
     watcher.dispose()
@@ -48,11 +50,11 @@ beforeEach(() => {
   })
   doc = { root, mainFile: 'main.tex', texFiles: ['main.tex'] }
   wt = join(tmpdir(), `stanza-opcap-wt-${randomUUID()}`)
-  const store = new Store(join(root, '.stanza-store.json'))
-  store.setProject(root, { sessionId: 'seeded-session', primedWorkdir: wt }) // skip priming
+  // Settings file lives outside the doc repo (never written here — get() defaults).
+  const settings = new GlobalSettingsStore(join(tmpdir(), `stanza-opcap-settings-${randomUUID()}.json`))
   git = new GitClient(runner, root)
   review = new ReviewService(git)
-  claude = new ClaudeService(runner, store, doc, wt)
+  claude = new ClaudeService(runner, settings, doc)
   vi.stubEnv('STANZA_CLAUDE_BIN', MOCK)
 })
 

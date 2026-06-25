@@ -87,6 +87,10 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
   // geometry; PaperPane reports that window so the pill stays "Compiling…" until
   // the new page swaps in (compile = LaTeX + block render, one status).
   const [blocksRendering, setBlocksRendering] = useState(false)
+  // True while the paper-context summarizer is refreshing this doc (main pushes
+  // summary:status). The bubble composer shows a "context updating" hint so the
+  // user knows an op run now would carry provisional summaries (Part A).
+  const [contextBuilding, setContextBuilding] = useState(false)
   // The block tree is being reparsed after a compile (loadBlocks in flight). The
   // paper pane gates its geometry recompute on this so it never bins fresh spans
   // against the previous PDF (or stale spans against the fresh PDF) — see loadBlocks.
@@ -352,6 +356,9 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
     () => client.onReviewProposal((proposal) => dispatch({ type: 'restore-proposal', proposal })),
     []
   )
+
+  // Paper-context refresh status → the composer's "context updating" hint.
+  useEffect(() => client.onSummaryStatus((s) => setContextBuilding(s.building)), [])
 
   useEffect(
     () =>
@@ -658,10 +665,10 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
     void client.claudeRun({ instruction, spans, imageDataUrl: image }).then(
       (res) => {
         dispatch({ type: 'op-started', taskId, opId: res.opId })
-        if (res.proposal) dispatch({ type: 'proposal', taskId, proposal: res.proposal, note: res.note })
+        if (res.proposal) dispatch({ type: 'proposal', taskId, proposal: res.proposal, note: res.note, conflict: res.conflict })
         // No proposal: Claude refused (out-of-span) or made no changes — keep
         // the task as a noop card showing the note instead of removing it.
-        else dispatch({ type: 'op-noop', taskId, note: res.note })
+        else dispatch({ type: 'op-noop', taskId, note: res.note, conflict: res.conflict })
         if (!chatOpen) setUnreadNotes((n) => n + 1)
         loadOps()
       },
@@ -822,7 +829,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
             ts: new Date().toISOString(),
             ...(res.proposal ? { opId: res.opId, accepted: null } : {})
           }
-          dispatch({ type: 'turn-result', taskId, turn: agentTurn, proposal: res.proposal, sessionId: res.sessionId })
+          dispatch({ type: 'turn-result', taskId, turn: agentTurn, proposal: res.proposal, sessionId: res.sessionId, conflict: res.conflict })
           if (!chatOpen) setUnreadNotes((n) => n + 1)
         },
         (err: unknown) =>
@@ -965,6 +972,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           blocks={blocks}
           state={state}
           compile={compile}
+          contextBuilding={contextBuilding}
           blocksReloading={blocksReloading}
           onRenderingChange={setBlocksRendering}
           pdfUrl={pdfUrl}

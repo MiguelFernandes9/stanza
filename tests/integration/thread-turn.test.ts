@@ -7,14 +7,14 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { DefaultProcessRunner } from '../../src/main/infra/ProcessRunner'
 import { armSettleWatcher } from '../../src/main/infra/FileWatcher'
 import { GitClient } from '../../src/main/infra/GitClient'
-import { Store } from '../../src/main/infra/Store'
+import { GlobalSettingsStore } from '../../src/main/infra/Store'
 import { ClaudeService } from '../../src/main/services/ClaudeService'
 import { ReviewService } from '../../src/main/services/ReviewService'
 import type { ClaudeRequest } from '../../src/shared/ipc/claude'
 import type { DocumentInfo } from '../../src/shared/ipc/document'
 
 // End-to-end of a persistent-bubble turn: mirrors registry runClaudeTurn
-// (prepare → sync worktree → runThreadTurn in the worktree → captureWorktree)
+// (prepare → sync worktree → runForkTurn in the worktree → captureWorktree)
 // against the real ClaudeService + ReviewService + git, with the deferred mock.
 // Proves a thread runs on its OWN fresh session, primed in the worktree, and its
 // edit lands on a proposal branch — the user's checkout never touched.
@@ -36,7 +36,9 @@ async function runTurn(sessionId: string | null, req: ClaudeRequest) {
   const watcher = armSettleWatcher(wt, { quietMs: 400, capMs: 3000 })
   let turn: { opId: string; note: string; sessionId: string }
   try {
-    turn = await claude.runThreadTurn(sessionId, req, () => {})
+    // A persistent fork's turn: prime fresh when sessionId is null (turn 1), else
+    // resume it — the registry keys the same fork by thread id across turns.
+    turn = await claude.runForkTurn(wt, 'thread-fork', sessionId, req, () => {})
     await watcher.settled()
   } finally {
     watcher.dispose()
@@ -50,11 +52,11 @@ beforeEach(() => {
   cpSync(fileURLToPath(new URL('../../fixtures/single', import.meta.url)), root, { recursive: true })
   doc = { root, mainFile: 'main.tex', texFiles: ['main.tex'] }
   wt = join(tmpdir(), `stanza-thread-wt-${randomUUID()}`)
-  const store = new Store(join(root, '.stanza-store.json'))
-  store.setProject(root, { sessionId: 'doc-session', primedWorkdir: '/elsewhere' }) // doc session, NOT the thread's
+  // Settings file lives outside the doc repo (never written here — get() defaults).
+  const settings = new GlobalSettingsStore(join(tmpdir(), `stanza-thread-settings-${randomUUID()}.json`))
   git = new GitClient(runner, root)
   review = new ReviewService(git)
-  claude = new ClaudeService(runner, store, doc, wt)
+  claude = new ClaudeService(runner, settings, doc)
   vi.stubEnv('STANZA_CLAUDE_BIN', MOCK)
   vi.stubEnv('STANZA_DEFER_MS', '300')
 })

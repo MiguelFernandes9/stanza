@@ -1,4 +1,4 @@
-import type { BlockSpan } from './claude'
+import type { BlockSpan, LiveConflict } from './claude'
 import type { ReviewProposal } from './review'
 
 /** Persistent conversation bubbles ("Keep chat"). A thread is a multi-turn
@@ -58,4 +58,6 @@ export interface ClaudeTurnResult {
   /** The thread's session id — the freshly-primed one on turn 1, echoed after. */
   sessionId: string
   proposal: ReviewProposal | null
+  /** Present when another fork was editing overlapping content as this turn started. */
+  conflict?: LiveConflict
 }
