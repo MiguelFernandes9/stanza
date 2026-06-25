@@ -556,11 +556,14 @@ export function PaperPane(props: Props): JSX.Element {
       if (!boxes) continue
       // A straddling block gets an overlay (hit-area + pill) on every page it
       // touches; the wash and the rail badge anchor from geometry, no DOM ref.
-      for (const rect of boxes) {
+      for (const [i, rect] of boxes.entries()) {
         if (rect.page !== pageNo) continue
         out.push(
           <BlockOverlay
-            key={`${b.id}@${rect.page}@${rect.col ?? 'full'}`}
+            // Index `i` disambiguates: a block can have >1 rect on the same page
+            // with the same column (two `full` ink regions), which would otherwise
+            // collide on `${id}@${page}@${col}` and duplicate the React key.
+            key={`${b.id}@${rect.page}@${rect.col ?? 'full'}@${i}`}
             block={b}
             rect={{ page: rect.page, x: rect.x * zoom, y: rect.y * zoom, width: rect.width * zoom, height: rect.height * zoom }}
             mark={marks[b.id] ?? null}
