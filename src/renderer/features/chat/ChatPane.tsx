@@ -204,7 +204,7 @@ export function ChatPane({ messages, busy, onSubmit, onResolveOp }: Props): JSX.
           className="stz-field"
           style={{
             display: 'flex',
-            alignItems: 'flex-end',
+            alignItems: 'flex-start',
             gap: 8,
             background: 'var(--surface-card)',
             border: '1px solid var(--border-strong)',

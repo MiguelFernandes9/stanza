@@ -409,7 +409,7 @@ export function TaskCard({
               className="stz-field"
               style={{
                 display: 'flex',
-                alignItems: 'flex-end',
+                alignItems: 'flex-start',
                 gap: 6,
                 background: 'var(--surface-card)',
                 border: '1px solid var(--border-strong)',
