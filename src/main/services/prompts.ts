@@ -1,5 +1,15 @@
 import type { ClaudeRequest } from '../../shared/ipc/claude'
+import type { StagedAttachment } from '../../shared/ipc/attachments'
 import type { DocumentInfo } from '../../shared/ipc/document'
+
+/** The "Read this" note per attachment kind — snapshots get the rendered-output
+ *  wording the single-image prompt used; user files get a plain type hint. */
+const kindNote: Record<StagedAttachment['kind'], string> = {
+  snapshot: 'a screenshot of the selected block as it renders in the PDF',
+  image: 'image',
+  pdf: 'PDF',
+  text: 'text file',
+}
 
 // `root` is the dir the op CLI actually runs in (cwd + the sole --add-dir grant).
 // Under the worktree-op model (#123) that is the doc's op WORKTREE, not d.root —
@@ -14,7 +24,11 @@ given spans unless the instruction explicitly requires updating cross-references
 labels, or the bibliography. Never run git. Never compile. Reply with a one-paragraph
 summary of what you changed.${context ? `\n\n${context}` : ''}`
 
-export const opPrompt = (req: ClaudeRequest, imagePath?: string, injectedContext?: string) => {
+export const opPrompt = (
+  req: ClaudeRequest,
+  attachments: StagedAttachment[] = [],
+  injectedContext?: string,
+) => {
   const wholeDoc = req.spans.length === 0
   const scope = wholeDoc
     ? // The ⌘J chat is the general agent: a session with full access to the whole
@@ -22,13 +36,17 @@ export const opPrompt = (req: ClaudeRequest, imagePath?: string, injectedContext
       'Scope: the whole project — you can read and edit any file. Do whatever the instruction asks: answer a question (changing nothing), make a small targeted edit, or a sweeping document-wide change. Apply edits wherever they belong.'
     : 'Scope (edit only inside these spans):\n' +
       req.spans.map((s) => `- ${s.file} lines ${s.startLine}-${s.endLine}`).join('\n')
-  const image = imagePath
-    ? `\nA screenshot of the selected block as it renders in the PDF is at ${imagePath} — Read it to see the rendered output before editing.`
+  // Each attachment is on disk in a granted dir; list absolute paths + a kind hint
+  // and tell Claude to Read them first so it sees the actual content, not just the
+  // filename.
+  const files = attachments.length
+    ? '\nThe user attached the following file(s) — Read each before responding:\n' +
+      attachments.map((a) => `- ${a.path} (${kindNote[a.kind]})`).join('\n')
     : ''
   const closing = wholeDoc
     ? 'If the instruction calls for changes, apply them directly to the files; if it is a question, make no edits. Reply with a one-paragraph summary — your answer when it was a question.'
     : 'Apply the edits directly to the files. Reply with a one-paragraph summary.'
   return `${injectedContext ? `${injectedContext}\n\n` : ''}Instruction: ${req.instruction}
-${scope}${image}
+${scope}${files}
 ${closing}`
 }

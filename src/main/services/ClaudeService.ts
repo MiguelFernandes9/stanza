@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import type { ClaudeRequest, ClaudeStatus } from '../../shared/ipc/claude'
+import type { Attachment, StagedAttachment } from '../../shared/ipc/attachments'
 import type { CommitInfo, DocumentInfo } from '../../shared/ipc/document'
 import type { ProcessRunner, ProcResult } from '../infra/ProcessRunner'
 import type { GlobalSettingsStore } from '../infra/Store'
@@ -72,10 +73,10 @@ export class ClaudeService {
   /** The --resume CLI call every fork turn runs in its own `workDir` — edits land
    *  in the fork's worktree and capture from there, never the user's checkout.
    *
-   *  A snapshot of the selected block (req.imageDataUrl) travels as a PNG written
-   *  OUTSIDE the worktree (writing it in would leak the image into the captured
-   *  diff); Claude reads it via its Read tool, so the shot dir is granted with a
-   *  second --add-dir and removed once the turn returns. */
+   *  Attachments (user files + the block snapshot) travel as files staged into a
+   *  per-op dir OUTSIDE the worktree (writing them in would leak them into the
+   *  captured diff); Claude reads them via its Read tool, so that dir is granted
+   *  with a second --add-dir and removed once the turn returns. */
   private async runResume(
     workDir: string,
     forkId: string,
@@ -84,12 +85,13 @@ export class ClaudeService {
     req: ClaudeRequest,
     onStatus: (s: ClaudeStatus) => void,
   ): Promise<{ opId: string; note: string }> {
-    let shotPath: string | undefined
+    let shotDir: string | undefined
     try {
       onStatus({ opId, state: 'running' })
-      if (req.imageDataUrl) shotPath = writeShot(opId, req.imageDataUrl)
+      const staged = writeAttachments(opId, normalizeAttachments(req))
+      if (staged) shotDir = staged.dir
       const args = ['-p', '--resume', sessionId, '--add-dir', workDir]
-      if (shotPath) args.push('--add-dir', dirname(shotPath))
+      if (shotDir) args.push('--add-dir', shotDir)
       // Read-on-prompt hook: prepend a digest of recent edits — the document's git
       // history (read fresh from disk, so it's live across every app instance and
       // captures manual edits too) plus any edits in progress in another window now.
@@ -101,14 +103,14 @@ export class ClaudeService {
       // every project file, needless work when no sibling is in flight.
       const outline = others.length > 0 ? this.sections() : []
       const digest = formatSessionDigest(commits, others, limit, outline)
-      args.push('--output-format', 'json', '--permission-mode', 'acceptEdits', opPrompt(req, shotPath, digest ?? undefined))
+      args.push('--output-format', 'json', '--permission-mode', 'acceptEdits', opPrompt(req, staged?.files ?? [], digest ?? undefined))
       const proc = await this.claudeIn(workDir, args)
       assertCompleted(proc, this.timeoutMs)
       const note = extractNote(proc.stdout)
       onStatus({ opId, state: 'done' })
       return { opId, note }
     } finally {
-      if (shotPath) rmSync(shotPath, { force: true })
+      if (shotDir) rmSync(shotDir, { recursive: true, force: true })
     }
   }
 
@@ -162,15 +164,57 @@ export class ClaudeService {
 
 const SHOT_DIR = join(tmpdir(), 'stanza-shots')
 
-/** Persist a captured block PNG (data-URL) to the shot dir so the CLI's Read
- *  tool can open it; returns the absolute path. Kept out of the op worktree so
- *  it never lands in the captured diff. */
-function writeShot(opId: string, dataUrl: string): string {
-  mkdirSync(SHOT_DIR, { recursive: true })
-  const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '')
-  const path = join(SHOT_DIR, `${opId}.png`)
-  writeFileSync(path, Buffer.from(base64, 'base64'))
-  return path
+/** The attachment list for a turn: prefer the new `attachments`; fall back to a
+ *  legacy single `imageDataUrl` (a block snapshot) during the renderer migration. */
+function normalizeAttachments(req: ClaudeRequest): Attachment[] {
+  if (req.attachments?.length) return req.attachments
+  if (req.imageDataUrl) {
+    return [{ id: 'snapshot', name: 'block.png', kind: 'snapshot', dataUrl: req.imageDataUrl }]
+  }
+  return []
+}
+
+/** A filename safe to write into the shot dir: basename only (no path escape),
+ *  exotic chars folded to underscores. */
+function safeName(name: string): string {
+  const base = name.replace(/^.*[/\\]/, '').replace(/[^\w.\- ]/g, '_').trim()
+  return base || 'file'
+}
+
+/** Stage a turn's attachments into a per-op dir under SHOT_DIR (outside any
+ *  worktree, so they never enter the captured diff) for the CLI's Read tool.
+ *  `dataUrl` attachments are base64-decoded; `srcPath` ones are copied. The whole
+ *  dir is granted with one --add-dir and removed after the turn. Returns
+ *  `undefined` when there's nothing to stage (so the caller skips the grant). */
+function writeAttachments(
+  opId: string,
+  attachments: Attachment[],
+): { dir: string; files: StagedAttachment[] } | undefined {
+  if (!attachments.length) return undefined
+  const dir = join(SHOT_DIR, opId)
+  mkdirSync(dir, { recursive: true })
+  const files: StagedAttachment[] = []
+  const used = new Set<string>()
+  for (const att of attachments) {
+    let name = safeName(att.name)
+    while (used.has(name)) name = `_${name}` // keep distinct paths within the dir
+    const path = join(dir, name)
+    if (att.dataUrl) {
+      const base64 = att.dataUrl.replace(/^data:[^;]*;base64,/, '')
+      writeFileSync(path, Buffer.from(base64, 'base64'))
+    } else if (att.srcPath) {
+      copyFileSync(att.srcPath, path)
+    } else {
+      continue // nothing to write — skip
+    }
+    used.add(name)
+    files.push({ path, name, kind: att.kind })
+  }
+  if (!files.length) {
+    rmSync(dir, { recursive: true, force: true }) // nothing written — don't leak the dir
+    return undefined
+  }
+  return { dir, files }
 }
 
 /** The child env for the claude CLI, with the API-key overrides removed so the

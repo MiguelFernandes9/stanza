@@ -719,7 +719,12 @@ async function runClaudeTurn(
   wc: WebContents,
   req: ClaudeTurnRequest,
 ): Promise<ClaudeTurnResult> {
-  const claudeReq: ClaudeRequest = { instruction: req.instruction, spans: req.spans, imageDataUrl: req.imageDataUrl }
+  const claudeReq: ClaudeRequest = {
+    instruction: req.instruction,
+    spans: req.spans,
+    attachments: req.attachments,
+    imageDataUrl: req.imageDataUrl,
+  }
   doc.review.assertSpansFree(req.spans)
   // A PERSISTENT fork keyed by the thread id: its worktree + session live across
   // turns (a live chat), and survive a relaunch (the path is stable per thread).
