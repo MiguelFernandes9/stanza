@@ -345,11 +345,12 @@ export function EditorPane({
         }}
         style={{
           display: 'flex',
-          alignItems: 'center',
-          // Tabs butt together (VS-Code shape) — no gaps, flush to the edge.
-          gap: 0,
+          // Tabs are raised "folder" cards bottom-aligned to the strip floor.
+          alignItems: 'flex-end',
+          gap: 3,
           height: 'var(--rail-toolbar)',
           flex: '0 0 auto',
+          padding: '0 0 0 6px',
           // Bottom hairline drawn as an inset shadow (behind the tabs), so the
           // opaque active tab paints over it and merges with the editor below.
           boxShadow: 'inset 0 -1px 0 var(--border-default)',
