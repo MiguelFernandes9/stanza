@@ -151,12 +151,9 @@ export function PaperPane(props: Props): JSX.Element {
   const geomForSig = useRef<string>('')
 
   const { pdf, loading } = usePdfDocument(pdfUrl)
-  // The PDF actually shown. It lags `pdf` (the freshly loaded doc): we keep the
-  // previous page AND its block overlays on screen, unchanged, through the whole
-  // recompile, then swap the new page and its boxes in together in a single render
-  // (committed with `blockRects` below). So a recompile shows the previous version
-  // intact until everything is ready — never the new PDF before its boxes, never
-  // stale boxes over the new PDF.
+  // The PDF actually shown — lags `pdf` (the freshly loaded doc): the previous page
+  // AND its overlays stay on screen through the recompile, then swap in together in
+  // one render, so it's never the new PDF before its boxes nor stale boxes over it.
   const [displayPdf, setDisplayPdf] = useState<PDFDocumentProxy | null>(null)
 
   const byId = new Map(pageBlocks.map((b) => [b.id, b]))
@@ -277,18 +274,13 @@ export function PaperPane(props: Props): JSX.Element {
   // via the synctex BACKWARD map; a block's box is the bbox of its units per (page,
   // column). Forward EXTENT is never consulted, so a galley/vbox rect can't inflate a box.
   // Hold the old page+boxes until BOTH the new PDF and new spans are fresh, then recompute
-  // once and swap atomically (geomForPdf/geomForSig gate the swap; drop the dim).
+  // once and swap atomically (geomForPdf/geomForSig gate the swap).
   useEffect(() => {
-    // Recompute only when the PDF, the on-disk synctex, and the spans are all from
-    // the SAME compile. `synctexForward` reads the on-disk synctex (always the
-    // LATEST compile); the text/graphics layers come from the React `pdf`; the
-    // spans come from `pageBlocks`. The PDF and the block tree arrive on separate
-    // async pipelines after a compile, so either can lag — binning fresh spans
-    // against the old PDF, or stale spans against the fresh PDF, both map mismatched
-    // regions onto the wrong page → garbage boxes (visible after an accept). Hold
-    // the OLD blockRects + displayPdf until BOTH are fresh (`!loading` =
-    // latest-compile PDF loaded; `!blocksReloading` = latest-compile spans parsed),
-    // then recompute once and swap atomically.
+    // PDF + on-disk synctex + spans must be from the SAME compile. They arrive on
+    // separate async pipelines, so either can lag — binning fresh spans against the
+    // old PDF (or stale spans against the fresh PDF) maps regions onto the wrong page
+    // → garbage boxes (visible after an accept). `!loading` = latest PDF loaded,
+    // `!blocksReloading` = latest spans parsed; hold until both, then swap once.
     if (!pdf || loading || props.blocksReloading) return
     let alive = true
     void (async () => {
@@ -700,16 +692,12 @@ export function PaperPane(props: Props): JSX.Element {
         style={{ flex: 1, overflow: 'auto', scrollbarGutter: 'stable', background: 'var(--surface-canvas)' }}
       >
         {displayPdf ? (
-          // Centre the PAGE, not the page+rail track. A flex row (justify-content:
-          // safe center) holds one item whose width is EXACTLY the page; the rail,
-          // badges and connector svg are absolute children that hang off the page's
-          // right edge (overflow:visible), so they never widen the centred unit nor
-          // pull the page left of centre — #68 centred the 1274pt cW track and so
-          // landed the 918pt page ~178pt left (M2-5). Centring is pure CSS off
-          // pageWidth (no measured width), so a pane toggle can't re-derive a stale
-          // offset → no sideways jitter; `safe center` degrades to start when the
-          // page is wider than the pane, so a narrow pane scrolls from the page's
-          // left edge instead of clipping it.
+          // Centre the PAGE, not the page+rail track: one flow child exactly the page
+          // width; the rail/badges/connector are absolute children hanging off its right
+          // edge, so they never widen the centred unit (#68 centred the cW track and
+          // landed the page ~178pt left, M2-5). Pure CSS off pageWidth (no measured
+          // width) → no stale-offset jitter; `safe center` degrades to start so a narrow
+          // pane scrolls from the page's left edge instead of clipping it.
           <div style={{ position: 'relative', display: 'flex', justifyContent: 'safe center', minHeight: '100%' }}>
             {/* The PAGE is the only flow child, so it alone sets the scroll
                 container's width: centred when it fits the pane, scrolled from
@@ -732,16 +720,13 @@ export function PaperPane(props: Props): JSX.Element {
               </div>
             </div>
 
-            {/* Rail + connector OVERLAY — absolute and clipped to the PANE (not
-                the page). The badges/bubbles/svg hang off the page's right edge
-                and render whenever there's room, but because the clip box is the
-                pane they never extend the scroll container's horizontal
-                scrollWidth — so a hover / ⌘E / ⌘J reflow can't tip a borderline
-                cW-wide overlay into spawning an h-scrollbar (#69 caveat). The
-                inner pageWidth box is centred exactly like the page, so its
-                page-relative offsets (pageRightX, railLeft) still land on the
-                page's right edge. pointer-events:none lets clicks fall through to
-                the page; the interactive badges/bubbles opt back in. */}
+            {/* Rail + connector OVERLAY — absolute, clipped to the PANE (not the
+                page): the badges/bubbles/svg hang off the page's right edge but the
+                pane clip box stops them extending the scroll container's scrollWidth,
+                so a hover / ⌘E / ⌘J reflow can't tip a borderline cW-wide overlay into
+                an h-scrollbar (#69). The inner pageWidth box is centred like the page,
+                so its offsets (pageRightX, railLeft) still land on its right edge.
+                pointer-events:none lets clicks fall through; badges/bubbles opt back in. */}
             <div
               style={{
                 position: 'absolute',

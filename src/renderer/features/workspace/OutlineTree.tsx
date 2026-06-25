@@ -16,15 +16,12 @@ export function outlineLabel(node: BlockNode): string {
   return node.name?.trim() ?? ''
 }
 
-/** Filter the block tree to a structural table of contents: ONLY titled
- *  sections (`\chapter … \subsubsection`, all `kind: 'section'`). Run-in
- *  `\paragraph`/`\subparagraph` are plain paragraph blocks (not sections), so they
- *  don't appear here. Preamble, plain
- *  paragraphs, and every environment (equations, figures, theorems) are dropped
- *  — the outline is navigation over document structure, not content. An untitled
- *  section emits no row but its children are PROMOTED into the parent level, so a
- *  titled descendant is never orphaned. One rule, no per-kind exceptions; nesting
- *  and order are preserved. Pure — unit-tested. */
+/** Filter the block tree to a structural table of contents: ONLY titled sections
+ *  (`\chapter … \subsubsection`, `kind: 'section'`). Run-in `\paragraph` blocks,
+ *  preamble, plain paragraphs and environments are dropped — navigation over
+ *  document structure, not content. An untitled section emits no row but its
+ *  children are PROMOTED to the parent level, so a titled descendant is never
+ *  orphaned. Nesting and order preserved. Pure. */
 export function buildOutline(roots: BlockNode[]): OutlineNode[] {
   const out: OutlineNode[] = []
   for (const node of roots) {
