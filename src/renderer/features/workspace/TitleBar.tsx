@@ -3,7 +3,7 @@ import { Code, RefreshCw, Settings, Sparkles } from 'lucide-react'
 import { CompilePill, IconButton, Tooltip } from '@renderer/components'
 import type { CompileState } from '@renderer/components'
 import { StanzaMark } from '@renderer/features/project/StanzaMark'
-import { isMac, modKey } from '@renderer/lib/platform'
+import { isMac, isWindows, modKey } from '@renderer/lib/platform'
 
 export interface CompileInfo {
   state: CompileState
@@ -26,9 +26,10 @@ interface Props {
   onOpenSettings: () => void
 }
 
-/** Window chrome — design §2. On macOS the native traffic lights (hiddenInset
- *  window) sit in the left inset, so the title bar reserves 84px there; on
- *  Windows/Linux there are no left controls, so it uses the normal 12px gutter. */
+/** Window chrome — design §2. The native window controls sit in a different place
+ *  per OS, so the bar reserves the matching inset: macOS traffic lights on the LEFT
+ *  (hiddenInset, 84px); Windows min/max/close on the RIGHT (titleBarOverlay, ~146px);
+ *  Linux uses the OS frame, so the normal 12px gutter on both sides. */
 export function TitleBar({
   title,
   mainFile,
@@ -42,6 +43,8 @@ export function TitleBar({
   onOpenSettings
 }: Props): JSX.Element {
   const mod = modKey()
+  const padLeft = isMac() ? 84 : 12
+  const padRight = isWindows() ? 146 : 12 // clear the native min/max/close overlay
   return (
     <div
       style={
@@ -51,7 +54,7 @@ export function TitleBar({
           gap: 12,
           height: 'var(--rail-titlebar)',
           flex: '0 0 auto',
-          padding: `0 12px 0 ${isMac() ? 84 : 12}px`,
+          padding: `0 ${padRight}px 0 ${padLeft}px`,
           background: 'var(--surface-app)',
           borderBottom: '1px solid var(--border-default)',
           WebkitAppRegion: 'drag'

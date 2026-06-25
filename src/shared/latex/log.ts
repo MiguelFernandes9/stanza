@@ -1,4 +1,5 @@
 import type { CompileError } from '../ipc/compile'
+import { splitLines, toPosix } from '../platform'
 
 /** Parse TeX/tectonic log text into structured errors.
  *  Tracks the open-file stack via `(path` / `)` nesting so each
@@ -19,7 +20,7 @@ export function parseCompileLog(log: string, mainFile: string): CompileError[] {
     return mainFile
   }
 
-  for (const line of log.split('\n')) {
+  for (const line of splitLines(log)) {
     const errorMatch = /^!\s*(.+)$/.exec(line)
     if (errorMatch) {
       pending = {
@@ -70,10 +71,12 @@ function scanParens(line: string, stack: (string | null)[]): void {
 
 function looksLikeFile(token: string): boolean {
   if (token.startsWith('./') || token.startsWith('../') || token.startsWith('/')) return true
-  if (token.includes('/')) return true // e.g. chapters/ch1 (no extension)
+  if (/^[A-Za-z]:[\\/]/.test(token) || token.startsWith('\\\\')) return true // Windows C:\… or UNC \\host
+  if (token.includes('/') || token.includes('\\')) return true // e.g. chapters/ch1 or chapters\ch1 (no extension)
   return /^[^\s()]+\.[A-Za-z][A-Za-z0-9]*$/.test(token)
 }
 
 function normalize(path: string): string {
-  return path.startsWith('./') ? path.slice(2) : path
+  const p = toPosix(path) // Windows log paths use backslashes; match block files on '/'
+  return p.startsWith('./') ? p.slice(2) : p
 }
