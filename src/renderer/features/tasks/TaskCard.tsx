@@ -3,6 +3,7 @@ import type { CSSProperties, JSX } from 'react'
 import { AlertTriangle, ArrowUp, Camera, Check, CircleSlash, FileText, Maximize2, Pin, Plus, Sparkles, X } from 'lucide-react'
 import { BlockTag, Button, DiffHunk, IconButton, Kbd, Tooltip } from '@renderer/components'
 import type { BlockTagKind } from '@renderer/components'
+import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
 import { combinedSpanLabel, spanLabel } from '../paper/paperModel'
 import type { PageBlock } from '../paper/paperModel'
 import type { EditTask } from './taskStore'
@@ -110,10 +111,11 @@ function ConflictBanner({ conflict }: { conflict: NonNullable<EditTask['conflict
   )
 }
 
-/** Always-on paper-context status, shown above the composer's prompt bar: a steady
- *  grey dot when the summaries are up to date, a pulsing amber dot + "Updating
- *  context…" while they refresh (a Run then carries provisional context, Part A). */
-function ContextStatus({ building }: { building?: boolean }): JSX.Element {
+/** Always-on paper-context status: a steady grey dot when the summaries are up
+ *  to date, a pulsing amber dot while they refresh (a Run then carries
+ *  provisional context, Part A). `dotOnly` drops the label to a bare dot for
+ *  the footer; the tooltip still explains the state on hover. */
+function ContextStatus({ building, dotOnly = false }: { building?: boolean; dotOnly?: boolean }): JSX.Element {
   return (
     <Tooltip
       label={
@@ -142,7 +144,7 @@ function ContextStatus({ building }: { building?: boolean }): JSX.Element {
             ...(building ? { animation: 'stz-pulse 1s var(--ease-in-out) infinite' } : {})
           }}
         />
-        {building ? 'Updating context…' : 'Context ready'}
+        {!dotOnly && (building ? 'Updating context…' : 'Context ready')}
       </span>
     </Tooltip>
   )
@@ -197,6 +199,8 @@ export function TaskCard({
     // top, hiding the just-selected block and making it feel unselectable (BUG-7).
     if (expanded && task.phase === 'compose') taRef.current?.focus({ preventScroll: true })
   }, [task.phase, expanded])
+  // One-line at rest, grows with the instruction up to a cap (then scrolls).
+  useAutoGrowTextarea(taRef, task.instruction, 140)
 
   const phaseColor =
     task.phase === 'review'
@@ -402,23 +406,32 @@ export function TaskCard({
                 {task.error}
               </div>
             )}
-            {/* Context status sits on top of the prompt bar so it's the first thing
-                the eye lands on before typing an instruction. */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
-              <ContextStatus building={contextBuilding} />
-            </div>
             <div
               className="stz-field"
               style={{
                 display: 'flex',
-                alignItems: 'flex-end',
-                gap: 7,
+                alignItems: 'flex-start',
+                gap: 6,
                 background: 'var(--surface-card)',
                 border: '1px solid var(--border-strong)',
                 borderRadius: 'var(--radius-md)',
-                padding: '6px 6px 6px 10px'
+                padding: '5px 6px'
               }}
             >
+              {onSnapshot && blocks.length > 0 && (
+                <Tooltip label={task.image ? 'Remove snapshot' : 'Attach snapshot'} side="top">
+                  <IconButton
+                    size="sm"
+                    variant="ghost"
+                    active={!!task.image}
+                    disabled={!aiEnabled}
+                    label={task.image ? 'Remove snapshot' : 'Attach snapshot'}
+                    onClick={onSnapshot}
+                  >
+                    {task.image ? <Check size={14} /> : <Camera size={14} />}
+                  </IconButton>
+                </Tooltip>
+              )}
               <textarea
                 ref={taRef}
                 value={task.instruction}
@@ -430,8 +443,8 @@ export function TaskCard({
                   }
                   if (e.key === 'Escape') onDismiss()
                 }}
-                rows={2}
-                placeholder="What should change in this block…"
+                rows={1}
+                placeholder="Describe the change…"
                 style={{
                   flex: 1,
                   resize: 'none',
@@ -440,23 +453,9 @@ export function TaskCard({
                   background: 'transparent',
                   font: 'var(--weight-regular) var(--text-sm)/1.45 var(--font-sans)',
                   color: 'var(--ink-900)',
-                  maxHeight: 84,
-                  padding: '3px 0'
+                  padding: '4px 0'
                 }}
               />
-              {onSnapshot && blocks.length > 0 && (
-                <Tooltip label={task.image ? 'Remove snapshot' : 'Attach snapshot'} side="top">
-                  <button
-                    type="button"
-                    onClick={onSnapshot}
-                    disabled={!aiEnabled}
-                    aria-label={task.image ? 'Remove snapshot' : 'Attach snapshot'}
-                    style={{ ...pillStyle(!!task.image), height: 30, ...(aiEnabled ? {} : { opacity: 0.5, cursor: 'default' }) }}
-                  >
-                    {task.image ? <Check size={12} /> : <Camera size={12} />}
-                  </button>
-                </Tooltip>
-              )}
               <Button size="sm" variant="primary" disabled={!task.instruction.trim() || !aiEnabled} onClick={onSubmit} iconLeft={<ArrowUp size={13} />}>
                 Run
               </Button>
@@ -480,6 +479,9 @@ export function TaskCard({
               <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>run ·</span>
               <Kbd>esc</Kbd>
               <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>dismiss</span>
+              <span style={{ marginLeft: 'auto' }}>
+                <ContextStatus building={contextBuilding} dotOnly />
+              </span>
             </div>
           </div>
         )}

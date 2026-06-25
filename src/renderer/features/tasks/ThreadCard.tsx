@@ -1,11 +1,12 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { JSX } from 'react'
 import { ArrowUp, Camera, Check, MessagesSquare, Trash2, X } from 'lucide-react'
 import { BlockTag, Button, IconButton, Tooltip } from '@renderer/components'
+import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
 import { combinedSpanLabel, spanLabel } from '../paper/paperModel'
 import type { PageBlock } from '../paper/paperModel'
 import type { EditTask } from './taskStore'
-import { blockLabel, pillStyle, tagKind } from './TaskCard'
+import { blockLabel, tagKind } from './TaskCard'
 import { ThreadTranscript } from './ThreadTranscript'
 import { AiDisabledNotice } from '@renderer/features/assistant/AiDisabledNotice'
 
@@ -50,6 +51,8 @@ export function ThreadCard({
   refCb
 }: Props): JSX.Element {
   const [draft, setDraft] = useState('')
+  const taRef = useRef<HTMLTextAreaElement | null>(null)
+  useAutoGrowTextarea(taRef, draft, 140)
   const busy = task.phase === 'busy'
   const pending = task.phase === 'review'
   // The composer locks while a turn runs / a proposal is pending (the existing
@@ -128,19 +131,35 @@ export function ThreadCard({
         />
 
         <div
+          className="stz-field"
           style={{
             display: 'flex',
-            alignItems: 'flex-end',
-            gap: 7,
+            alignItems: 'flex-start',
+            gap: 6,
             marginTop: 9,
             background: 'var(--surface-card)',
             border: '1px solid var(--border-strong)',
             borderRadius: 'var(--radius-md)',
-            padding: '6px 6px 6px 10px',
+            padding: '5px 6px',
             opacity: composerLocked ? 0.55 : 1
           }}
         >
+          {onSnapshot && (
+            <Tooltip label={task.image ? 'Remove snapshot' : 'Attach snapshot'} side="top">
+              <IconButton
+                size="sm"
+                variant="ghost"
+                active={!!task.image}
+                disabled={composerLocked}
+                label={task.image ? 'Remove snapshot' : 'Attach snapshot'}
+                onClick={onSnapshot}
+              >
+                {task.image ? <Check size={14} /> : <Camera size={14} />}
+              </IconButton>
+            </Tooltip>
+          )}
           <textarea
+            ref={taRef}
             value={draft}
             disabled={composerLocked}
             onChange={(e) => setDraft(e.target.value)}
@@ -160,23 +179,9 @@ export function ThreadCard({
               background: 'transparent',
               font: 'var(--weight-regular) var(--text-sm)/1.45 var(--font-sans)',
               color: 'var(--ink-900)',
-              maxHeight: 84,
-              padding: '3px 0'
+              padding: '4px 0'
             }}
           />
-          {onSnapshot && (
-            <Tooltip label={task.image ? 'Remove snapshot' : 'Attach snapshot'} side="top">
-              <button
-                type="button"
-                onClick={onSnapshot}
-                disabled={composerLocked}
-                aria-label={task.image ? 'Remove snapshot' : 'Attach snapshot'}
-                style={{ ...pillStyle(!!task.image), height: 30, cursor: composerLocked ? 'default' : 'pointer' }}
-              >
-                {task.image ? <Check size={12} /> : <Camera size={12} />}
-              </button>
-            </Tooltip>
-          )}
           <Button size="sm" variant="primary" disabled={composerLocked || !draft.trim()} onClick={send} iconLeft={<ArrowUp size={13} />}>
             Send
           </Button>
