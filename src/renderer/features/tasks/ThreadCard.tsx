@@ -1,10 +1,11 @@
 import { useRef, useState } from 'react'
 import type { JSX } from 'react'
-import { ArrowUp, Camera, Check, MessagesSquare, Paperclip, Trash2, X } from 'lucide-react'
+import { ArrowUp, MessagesSquare, Trash2, X } from 'lucide-react'
 import { BlockTag, Button, IconButton, Tooltip } from '@renderer/components'
 import type { Attachment } from '@shared/ipc'
 import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
 import { useAttachmentIntake } from '@renderer/hooks/useComposerAttachments'
+import { AttachMenu } from '../chat/AttachMenu'
 import { combinedSpanLabel, spanLabel } from '../paper/paperModel'
 import type { PageBlock } from '../paper/paperModel'
 import type { EditTask } from './taskStore'
@@ -157,27 +158,12 @@ export function ThreadCard({
             opacity: locked ? 0.55 : 1
           }}
         >
-          {onSnapshot && (
-            <Tooltip label={snapshot ? 'Remove snapshot' : 'Attach snapshot'} side="top">
-              <IconButton
-                size="sm"
-                variant="ghost"
-                active={!!snapshot}
-                disabled={locked}
-                label={snapshot ? 'Remove snapshot' : 'Attach snapshot'}
-                onClick={onSnapshot}
-              >
-                {snapshot ? <Check size={14} /> : <Camera size={14} />}
-              </IconButton>
-            </Tooltip>
-          )}
-          {onAddAttachments && (
-            <Tooltip label="Attach files" side="top">
-              <IconButton size="sm" variant="ghost" disabled={locked} label="Attach files" onClick={intake.pick}>
-                <Paperclip size={14} />
-              </IconButton>
-            </Tooltip>
-          )}
+          <AttachMenu
+            onSnapshot={onSnapshot}
+            hasSnapshot={!!snapshot}
+            onPickFiles={onAddAttachments ? intake.pick : undefined}
+            disabled={locked}
+          />
           <textarea
             ref={taRef}
             value={draft}

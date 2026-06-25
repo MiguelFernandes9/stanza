@@ -1,11 +1,12 @@
 import { useEffect, useRef } from 'react'
 import type { CSSProperties, JSX } from 'react'
-import { AlertTriangle, ArrowUp, Camera, Check, CircleSlash, FileText, Maximize2, Paperclip, Pin, Plus, Sparkles, X } from 'lucide-react'
+import { AlertTriangle, ArrowUp, Check, CircleSlash, FileText, Maximize2, Pin, Plus, Sparkles, X } from 'lucide-react'
 import { BlockTag, Button, DiffHunk, IconButton, Kbd, Tooltip } from '@renderer/components'
 import type { BlockTagKind } from '@renderer/components'
 import type { Attachment } from '@shared/ipc'
 import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
 import { useAttachmentIntake } from '@renderer/hooks/useComposerAttachments'
+import { AttachMenu } from '../chat/AttachMenu'
 import { combinedSpanLabel, spanLabel } from '../paper/paperModel'
 import type { PageBlock } from '../paper/paperModel'
 import type { EditTask } from './taskStore'
@@ -432,26 +433,11 @@ export function TaskCard({
                 padding: '5px 6px'
               }}
             >
-              {onSnapshot && blocks.length > 0 && (
-                <Tooltip label={snapshot ? 'Remove snapshot' : 'Attach snapshot'} side="top">
-                  <IconButton
-                    size="sm"
-                    variant="ghost"
-                    active={!!snapshot}
-                    label={snapshot ? 'Remove snapshot' : 'Attach snapshot'}
-                    onClick={onSnapshot}
-                  >
-                    {snapshot ? <Check size={14} /> : <Camera size={14} />}
-                  </IconButton>
-                </Tooltip>
-              )}
-              {onAddAttachments && (
-                <Tooltip label="Attach files" side="top">
-                  <IconButton size="sm" variant="ghost" label="Attach files" onClick={intake.pick}>
-                    <Paperclip size={14} />
-                  </IconButton>
-                </Tooltip>
-              )}
+              <AttachMenu
+                onSnapshot={onSnapshot && blocks.length > 0 ? onSnapshot : undefined}
+                hasSnapshot={!!snapshot}
+                onPickFiles={onAddAttachments ? intake.pick : undefined}
+              />
               <textarea
                 ref={taRef}
                 value={task.instruction}
