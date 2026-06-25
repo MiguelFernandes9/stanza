@@ -1,5 +1,9 @@
-import type { LiveConflict, ReviewProposal, ThreadTurn } from '../../../shared/ipc'
+import type { Attachment, LiveConflict, ReviewProposal, ThreadTurn } from '../../../shared/ipc'
 import { restoredTask, withResolvedTurn, withTurnError, withTurnResult, withUserTurn } from './taskStore.threads'
+
+/** Fixed id for the block snapshot, so re-capturing replaces it and the camera
+ *  button reads a single source of truth. */
+export const SNAPSHOT_ID = 'snapshot'
 
 /** Margin-rail task model — design "Task model": every edit is a task
  *  rendered as a card; phases compose → busy → review; accept/reject
@@ -39,10 +43,15 @@ export interface EditTask {
   threadSessionId?: string
   /** The conversation transcript (persistent tasks only). */
   turns?: ThreadTurn[]
-  /** PNG snapshot (data URL) of the block, staged by the snapshot button and sent
-   *  with the next Run/turn so Claude sees the rendered output. Cleared after send
-   *  (a thread can stage a fresh shot each turn). */
-  image?: string
+  /** Files staged for the next Run/turn — user-picked images/PDFs/text plus the
+   *  block snapshot (one entry, id SNAPSHOT_ID). Sent with the request so Claude
+   *  can Read them; cleared after send (a thread can stage fresh ones each turn). */
+  attachments?: Attachment[]
+}
+
+/** The staged block snapshot, if any (the camera button's on/off source). */
+export function taskSnapshot(task: Pick<EditTask, 'attachments'>): Attachment | undefined {
+  return task.attachments?.find((a) => a.id === SNAPSHOT_ID)
 }
 
 export interface TaskState {
@@ -72,7 +81,8 @@ export type TaskAction =
   | { type: 'toggle-block'; ids: string[]; additive: boolean }
   | { type: 'remove-block'; taskId: number; blockId: string }
   | { type: 'update-instruction'; taskId: number; instruction: string }
-  | { type: 'attach-image'; taskId: number; image: string }
+  | { type: 'add-attachments'; taskId: number; items: Attachment[] }
+  | { type: 'remove-attachment'; taskId: number; id: string }
   | { type: 'submit'; taskId: number }
   | { type: 'start-whole-doc'; instruction: string }
   | { type: 'op-started'; taskId: number; opId: string }
@@ -211,9 +221,21 @@ export function taskReducer(s: TaskState, a: TaskAction): TaskState {
     }
     case 'update-instruction':
       return patchTask(s, a.taskId, { instruction: a.instruction })
-    case 'attach-image':
-      // Empty string clears the staged shot (the snapshot button toggles off).
-      return patchTask(s, a.taskId, { image: a.image || undefined })
+    case 'add-attachments': {
+      const t = s.tasks.find((x) => x.id === a.taskId)
+      if (!t) return s
+      // Append, replacing any prior entry with the same id (re-capturing the
+      // snapshot, or re-picking the same file, updates in place).
+      const incoming = new Set(a.items.map((it) => it.id))
+      const kept = (t.attachments ?? []).filter((at) => !incoming.has(at.id))
+      return patchTask(s, a.taskId, { attachments: [...kept, ...a.items] })
+    }
+    case 'remove-attachment': {
+      const t = s.tasks.find((x) => x.id === a.taskId)
+      if (!t) return s
+      const next = (t.attachments ?? []).filter((at) => at.id !== a.id)
+      return patchTask(s, a.taskId, { attachments: next.length ? next : undefined })
+    }
     case 'submit': {
       const t = s.tasks.find((x) => x.id === a.taskId)
       if (!t || t.phase !== 'compose' || !t.instruction.trim()) return s

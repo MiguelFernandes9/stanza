@@ -1,11 +1,15 @@
 import type { ReviewProposal } from './review'
+import type { Attachment } from './attachments'
 
 export interface BlockSpan { file: string; startLine: number; endLine: number }
 export interface ClaudeRequest {
   instruction: string
   spans: BlockSpan[]    // empty = whole document
-  /** Optional PNG snapshot of the selected block (data URL). The main process
-   *  writes it to a temp file Claude can Read, so it sees the rendered output. */
+  /** Files the user attached this turn (images, PDFs, text, or a block snapshot).
+   *  The main process stages each to a temp dir Claude can Read. */
+  attachments?: Attachment[]
+  /** @deprecated Single block snapshot (data URL) — folded into `attachments`.
+   *  Kept transiently during the renderer migration; the bridge normalizes it. */
   imageDataUrl?: string
 }
 export interface ClaudeStatus {

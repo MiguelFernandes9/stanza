@@ -3,7 +3,7 @@ import type { JSX } from 'react'
 import { Check, CircleSlash, MessagesSquare, PenLine, Sparkles } from 'lucide-react'
 import { client } from '@renderer/lib/client'
 import type { CompileState } from '@renderer/components'
-import type { PdfRect, InversePoint, SourceLocation, BlockSpan } from '@shared/ipc'
+import type { Attachment, PdfRect, InversePoint, SourceLocation, BlockSpan } from '@shared/ipc'
 import type { BlockNode } from '@shared/blocks/types'
 import { usePdfDocument } from '../pdf/usePdfDocument'
 import { PdfPageStack } from '../pdf/PdfPageStack'
@@ -12,7 +12,7 @@ import type { PDFDocumentProxy } from '../pdf/pdfjsSetup'
 import { ReviewOverlay } from '../review/ReviewOverlay'
 import { blockLabel, TaskCard, tagKind } from '../tasks/TaskCard'
 import { ThreadCard } from '../tasks/ThreadCard'
-import { isWholeDocTask } from '../tasks/taskStore'
+import { isWholeDocTask, taskSnapshot } from '../tasks/taskStore'
 import type { PaneView, TaskPhase, TaskState } from '../tasks/taskStore'
 import { BlockOverlay } from './BlockOverlay'
 import { WholeDocRail } from './WholeDocRail'
@@ -80,8 +80,13 @@ interface Props {
   onTogglePersistent: (taskId: number) => void
   onSubmitThreadTurn: (taskId: number, text: string) => void
   onDeleteThread: (taskId: number) => void
-  /** Snapshot the task's first block from the rendered canvas → attach the PNG. */
+  /** Snapshot the task's first block from the rendered canvas → attach the PNG
+   *  (empty string toggles the existing snapshot off). */
   onAttachImage: (taskId: number, image: string) => void
+  /** Remove one staged attachment (a chip ×) by its id. */
+  onRemoveAttachment: (taskId: number, id: string) => void
+  /** Stage user-picked / pasted / dropped files on a task. */
+  onAddAttachments: (taskId: number, items: Attachment[]) => void
   /** Snapshot couldn't be captured (block off-screen / canvas error) — surface it. */
   onSnapshotError?: () => void
   onView: (view: PaneView) => void
@@ -211,7 +216,8 @@ export function PaperPane(props: Props): JSX.Element {
   const captureBlock = (taskId: number): void => {
     // The snapshot button toggles: a second press on an attached shot removes it
     // (empty string clears in the reducer) rather than re-capturing.
-    if (state.tasks.find((t) => t.id === taskId)?.image) {
+    const t = state.tasks.find((x) => x.id === taskId)
+    if (t && taskSnapshot(t)) {
       props.onAttachImage(taskId, '')
       return
     }
@@ -905,6 +911,8 @@ export function PaperPane(props: Props): JSX.Element {
                           }}
                           onOpenReview={() => setReviewId(t.id)}
                           onSnapshot={() => captureBlock(t.id)}
+                          onRemoveAttachment={(id) => props.onRemoveAttachment(t.id, id)}
+                          onAddAttachments={(items) => props.onAddAttachments(t.id, items)}
                         />
                       ) : (
                         <TaskCard
@@ -932,6 +940,8 @@ export function PaperPane(props: Props): JSX.Element {
                           onResolve={(accept) => props.onResolveTask(t.id, accept)}
                           onOpenReview={() => setReviewId(t.id)}
                           onSnapshot={() => captureBlock(t.id)}
+                          onRemoveAttachment={(id) => props.onRemoveAttachment(t.id, id)}
+                          onAddAttachments={(items) => props.onAddAttachments(t.id, items)}
                         />
                       )}
                     </div>

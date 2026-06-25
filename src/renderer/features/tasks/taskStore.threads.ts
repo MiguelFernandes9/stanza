@@ -8,10 +8,10 @@ import type { EditTask } from './taskStore'
  *  the transcript logic is unit-tested in isolation. */
 
 /** Submitting a turn: append the user message, mark the task a (running) thread,
- *  and clear the live composer draft. The staged snapshot is cleared too — the
- *  caller has already attached it to this turn's request, and the permanent
- *  button lets the next turn stage a fresh one. `threadId` is supplied by the
- *  caller (the thread is born on its first turn). */
+ *  and clear the live composer draft. Staged attachments are cleared too — the
+ *  caller has already attached them to this turn's request, and the composer lets
+ *  the next turn stage fresh ones. `threadId` is supplied by the caller (the
+ *  thread is born on its first turn). */
 export function withUserTurn(task: EditTask, turn: ThreadTurn, threadId: string): EditTask {
   return {
     ...task,
@@ -20,7 +20,7 @@ export function withUserTurn(task: EditTask, turn: ThreadTurn, threadId: string)
     phase: 'busy',
     instruction: '',
     error: undefined,
-    image: undefined,
+    attachments: undefined,
     turns: [...(task.turns ?? []), turn],
   }
 }

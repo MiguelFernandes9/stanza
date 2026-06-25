@@ -52,7 +52,8 @@ describe('ChatPane — the one whole-document assistant (⌘J)', () => {
 
     type(textarea, 'tighten the intro')
     act(() => textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true })))
-    expect(onSubmit).toHaveBeenCalledWith('tighten the intro')
+    // No attachments staged → the second arg is undefined.
+    expect(onSubmit).toHaveBeenCalledWith('tighten the intro', undefined)
   })
 
   it('does not submit an empty instruction', () => {

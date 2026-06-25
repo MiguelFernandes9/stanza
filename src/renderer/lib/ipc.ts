@@ -21,6 +21,7 @@ import type {
   HistoryDiff,
   InversePoint,
   OpRecord,
+  PickedAttachment,
   PdfRect,
   PreviewRequest,
   PreviewResult,
@@ -105,6 +106,8 @@ export const api = {
   /** One turn of a persistent conversation bubble (its own session). */
   claudeRunTurn: (req: ClaudeTurnRequest) =>
     invoke<ClaudeTurnResult>(IpcChannels.claudeRunTurn, req),
+  /** OS file picker for chat-prompt attachments (no repo copy). */
+  attachmentsPick: () => invoke<PickedAttachment[]>(IpcChannels.attachmentsPick),
   claudeHistory: () => invoke<OpRecord[]>(IpcChannels.claudeHistory),
   /** Whether Claude is usable (CLI installed + logged in) — gates all AI features.
    *  force=true bypasses the ~45s main-side cache and re-probes (Settings Recheck). */

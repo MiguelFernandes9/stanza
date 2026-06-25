@@ -1,9 +1,9 @@
-import { app, BrowserWindow, dialog, ipcMain, webContents } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, webContents } from 'electron'
 import type { IpcMainInvokeEvent, WebContents } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { IpcChannels } from '@shared/ipc'
+import { basename, dirname, join } from 'node:path'
+import { attachmentKind, IpcChannels } from '@shared/ipc'
 import type {
   BlockSpan,
   ClaudeAvailability,
@@ -19,6 +19,7 @@ import type {
   InversePoint,
   IpcChannel,
   OpRecord,
+  PickedAttachment,
   PreviewRequest,
   RecentProject,
   ReviewDecision,
@@ -405,6 +406,36 @@ export function registerIpcHandlers(): void {
     return fileMutationResult(doc, rels[0])
   })
 
+  // Attachment picker: the OS dialog for files to send WITH a chat prompt. Unlike
+  // documentUpload, this copies nothing into the repo — the bytes stay on disk and
+  // are staged to a temp dir at send time (ClaudeService.writeAttachments). Only a
+  // small image preview crosses IPC so a large PDF never round-trips as base64.
+  ipcMain.handle(IpcChannels.attachmentsPick, async (): Promise<PickedAttachment[]> => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        { name: 'Attachments', extensions: ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'pdf', 'txt', 'md', 'tex', 'bib', 'csv', 'json'] },
+        { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    })
+    if (result.canceled) return []
+    return result.filePaths.map((p) => {
+      const name = basename(p)
+      const kind = attachmentKind(name)
+      let thumbDataUrl: string | undefined
+      if (kind === 'image') {
+        try {
+          const img = nativeImage.createFromPath(p)
+          if (!img.isEmpty()) thumbDataUrl = img.resize({ height: 48 }).toDataURL()
+        } catch {
+          // No preview is fine — the chip falls back to a document glyph.
+        }
+      }
+      return { path: p, name, kind, thumbDataUrl }
+    })
+  })
+
   // ---- Settings (Lane S) ----
   ipcMain.handle(IpcChannels.settingsGetGlobal, (): GlobalSettings => globalSettings.get())
 
@@ -738,7 +769,12 @@ async function runClaudeTurn(
   wc: WebContents,
   req: ClaudeTurnRequest,
 ): Promise<ClaudeTurnResult> {
-  const claudeReq: ClaudeRequest = { instruction: req.instruction, spans: req.spans, imageDataUrl: req.imageDataUrl }
+  const claudeReq: ClaudeRequest = {
+    instruction: req.instruction,
+    spans: req.spans,
+    attachments: req.attachments,
+    imageDataUrl: req.imageDataUrl,
+  }
   doc.review.assertSpansFree(req.spans)
   // A PERSISTENT fork keyed by the thread id: its worktree + session live across
   // turns (a live chat), and survive a relaunch (the path is stable per thread).

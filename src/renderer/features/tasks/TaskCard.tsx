@@ -1,12 +1,17 @@
 import { useEffect, useRef } from 'react'
 import type { CSSProperties, JSX } from 'react'
-import { AlertTriangle, ArrowUp, Camera, Check, CircleSlash, FileText, Maximize2, Pin, Plus, Sparkles, X } from 'lucide-react'
+import { AlertTriangle, ArrowUp, Check, CircleSlash, FileText, Maximize2, Pin, Plus, Sparkles, X } from 'lucide-react'
 import { BlockTag, Button, DiffHunk, IconButton, Kbd, Tooltip } from '@renderer/components'
 import type { BlockTagKind } from '@renderer/components'
+import type { Attachment } from '@shared/ipc'
 import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
+import { useAttachmentIntake } from '@renderer/hooks/useComposerAttachments'
+import { AttachMenu } from '../chat/AttachMenu'
 import { combinedSpanLabel, spanLabel } from '../paper/paperModel'
 import type { PageBlock } from '../paper/paperModel'
 import type { EditTask } from './taskStore'
+import { taskSnapshot } from './taskStore'
+import { AttachmentChips } from '../chat/AttachmentChips'
 import { summarizeBlocks } from '@shared/blocks/changes'
 import { AiDisabledNotice } from '@renderer/features/assistant/AiDisabledNotice'
 
@@ -77,6 +82,10 @@ interface Props {
   /** Capture the block as a PNG and attach it to this task's next Run. Absent for
    *  whole-document cards (no block to snapshot). */
   onSnapshot?: () => void
+  /** Remove one staged attachment (chip ×) by id. */
+  onRemoveAttachment?: (id: string) => void
+  /** Stage user-picked / pasted / dropped files on this task. */
+  onAddAttachments?: (items: Attachment[]) => void
   refCb: (el: HTMLDivElement | null) => void
 }
 
@@ -190,9 +199,13 @@ export function TaskCard({
   onResolve,
   onOpenReview,
   onSnapshot,
+  onRemoveAttachment,
+  onAddAttachments,
   refCb
 }: Props): JSX.Element {
   const taRef = useRef<HTMLTextAreaElement | null>(null)
+  const snapshot = taskSnapshot(task)
+  const intake = useAttachmentIntake((items) => onAddAttachments?.(items))
   useEffect(() => {
     // preventScroll: the card paints at top:0 before PaperPane's layout effect
     // sets its rail offset; a plain focus() would scroll the PDF pane to the
@@ -406,36 +419,36 @@ export function TaskCard({
                 {task.error}
               </div>
             )}
+            <AttachmentChips
+              attachments={task.attachments ?? []}
+              onRemove={(id) => onRemoveAttachment?.(id)}
+            />
             <div
               className="stz-field"
+              onDragOver={aiEnabled ? intake.onDragOver : undefined}
+              onDragLeave={aiEnabled ? intake.onDragLeave : undefined}
+              onDrop={aiEnabled ? intake.onDrop : undefined}
               style={{
                 display: 'flex',
                 alignItems: 'flex-start',
                 gap: 6,
-                background: 'var(--surface-card)',
-                border: '1px solid var(--border-strong)',
+                background: intake.dragging ? 'var(--clay-50)' : 'var(--surface-card)',
+                border: `1px solid ${intake.dragging ? 'var(--clay-400)' : 'var(--border-strong)'}`,
                 borderRadius: 'var(--radius-md)',
                 padding: '5px 6px'
               }}
             >
-              {onSnapshot && blocks.length > 0 && (
-                <Tooltip label={task.image ? 'Remove snapshot' : 'Attach snapshot'} side="top">
-                  <IconButton
-                    size="sm"
-                    variant="ghost"
-                    active={!!task.image}
-                    disabled={!aiEnabled}
-                    label={task.image ? 'Remove snapshot' : 'Attach snapshot'}
-                    onClick={onSnapshot}
-                  >
-                    {task.image ? <Check size={14} /> : <Camera size={14} />}
-                  </IconButton>
-                </Tooltip>
-              )}
+              <AttachMenu
+                onSnapshot={onSnapshot && blocks.length > 0 ? onSnapshot : undefined}
+                hasSnapshot={!!snapshot}
+                onPickFiles={onAddAttachments ? intake.pick : undefined}
+                disabled={!aiEnabled}
+              />
               <textarea
                 ref={taRef}
                 value={task.instruction}
                 onChange={(e) => onUpdate(e.target.value)}
+                onPaste={intake.onPaste}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()

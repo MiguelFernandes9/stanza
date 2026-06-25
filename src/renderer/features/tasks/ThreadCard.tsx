@@ -1,12 +1,17 @@
 import { useRef, useState } from 'react'
 import type { JSX } from 'react'
-import { ArrowUp, Camera, Check, MessagesSquare, Trash2, X } from 'lucide-react'
+import { ArrowUp, MessagesSquare, Trash2, X } from 'lucide-react'
 import { BlockTag, Button, IconButton, Tooltip } from '@renderer/components'
+import type { Attachment } from '@shared/ipc'
 import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
+import { useAttachmentIntake } from '@renderer/hooks/useComposerAttachments'
+import { AttachMenu } from '../chat/AttachMenu'
 import { combinedSpanLabel, spanLabel } from '../paper/paperModel'
 import type { PageBlock } from '../paper/paperModel'
 import type { EditTask } from './taskStore'
+import { taskSnapshot } from './taskStore'
 import { blockLabel, tagKind } from './TaskCard'
+import { AttachmentChips } from '../chat/AttachmentChips'
 import { ThreadTranscript } from './ThreadTranscript'
 import { AiDisabledNotice } from '@renderer/features/assistant/AiDisabledNotice'
 
@@ -24,6 +29,10 @@ interface Props {
   onResolve: (accept: boolean) => void
   /** Stage a PNG snapshot of the anchor block to send with the next turn. */
   onSnapshot?: () => void
+  /** Remove one staged attachment (chip ×) by id. */
+  onRemoveAttachment?: (id: string) => void
+  /** Stage user-picked / pasted / dropped files on this turn. */
+  onAddAttachments?: (items: Attachment[]) => void
   /** Fold the bubble back to its badge (the thread stays alive + persisted). */
   onCollapse: () => void
   /** Remove the thread entirely (deletes the persisted record). */
@@ -45,12 +54,16 @@ export function ThreadCard({
   onSubmitTurn,
   onResolve,
   onSnapshot,
+  onRemoveAttachment,
+  onAddAttachments,
   onCollapse,
   onDelete,
   onOpenReview,
   refCb
 }: Props): JSX.Element {
   const [draft, setDraft] = useState('')
+  const snapshot = taskSnapshot(task)
+  const intake = useAttachmentIntake((items) => onAddAttachments?.(items))
   const taRef = useRef<HTMLTextAreaElement | null>(null)
   useAutoGrowTextarea(taRef, draft, 140)
   const busy = task.phase === 'busy'
@@ -130,39 +143,40 @@ export function ThreadCard({
           onOpenReview={onOpenReview}
         />
 
+        <div style={{ marginTop: 9 }}>
+          <AttachmentChips
+            attachments={task.attachments ?? []}
+            onRemove={(id) => onRemoveAttachment?.(id)}
+          />
+        </div>
         <div
           className="stz-field"
+          onDragOver={composerLocked ? undefined : intake.onDragOver}
+          onDragLeave={composerLocked ? undefined : intake.onDragLeave}
+          onDrop={composerLocked ? undefined : intake.onDrop}
           style={{
             display: 'flex',
             alignItems: 'flex-start',
             gap: 6,
-            marginTop: 9,
-            background: 'var(--surface-card)',
-            border: '1px solid var(--border-strong)',
+            background: intake.dragging ? 'var(--clay-50)' : 'var(--surface-card)',
+            border: `1px solid ${intake.dragging ? 'var(--clay-400)' : 'var(--border-strong)'}`,
             borderRadius: 'var(--radius-md)',
             padding: '5px 6px',
             opacity: composerLocked ? 0.55 : 1
           }}
         >
-          {onSnapshot && (
-            <Tooltip label={task.image ? 'Remove snapshot' : 'Attach snapshot'} side="top">
-              <IconButton
-                size="sm"
-                variant="ghost"
-                active={!!task.image}
-                disabled={composerLocked}
-                label={task.image ? 'Remove snapshot' : 'Attach snapshot'}
-                onClick={onSnapshot}
-              >
-                {task.image ? <Check size={14} /> : <Camera size={14} />}
-              </IconButton>
-            </Tooltip>
-          )}
+          <AttachMenu
+            onSnapshot={onSnapshot}
+            hasSnapshot={!!snapshot}
+            onPickFiles={onAddAttachments ? intake.pick : undefined}
+            disabled={composerLocked}
+          />
           <textarea
             ref={taRef}
             value={draft}
             disabled={composerLocked}
             onChange={(e) => setDraft(e.target.value)}
+            onPaste={intake.onPaste}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
