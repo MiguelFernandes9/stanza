@@ -540,6 +540,19 @@ export function PaperPane(props: Props): JSX.Element {
     }
   }, [geo, twoCol, pageWidth, zoom, centerW, originX])
 
+  // When the LAST bubble closes (Esc, or re-clicking the block to deselect it), undo the F5
+  // reveal pan: glide the page back to centre — the rail no longer needs to be on-screen. Same
+  // target as the seed-centre above; clamps to 0 so a single-column page returns to its
+  // flex-centred rest. Fires only on the open→closed edge, so manual h-scroll is left alone.
+  const hadOpenRef = useRef(false)
+  useEffect(() => {
+    const el = scrollRef.current
+    const open = openIds.length > 0
+    if (el && geo && hadOpenRef.current && !open)
+      el.scrollTo({ left: Math.max(0, originX + pageWidth / 2 - el.clientWidth / 2), behavior: 'smooth' })
+    hadOpenRef.current = open
+  }, [openIds, geo, originX, pageWidth])
+
   const toggleOpen = (taskId: number): void => {
     setOpenIds((s) => (s.includes(taskId) ? s.filter((x) => x !== taskId) : [...s, taskId]))
     if (!openIds.includes(taskId)) props.onActivateTask(taskId)
@@ -556,11 +569,15 @@ export function PaperPane(props: Props): JSX.Element {
       if (!boxes) continue
       // A straddling block gets an overlay (hit-area + pill) on every page it
       // touches; the wash and the rail badge anchor from geometry, no DOM ref.
-      for (const rect of boxes) {
+      for (const [ri, rect] of boxes.entries()) {
         if (rect.page !== pageNo) continue
         out.push(
+          // A block can have MORE than one box per (page, column) — a column-spanning
+          // continuation and #142/#144's displaced-content split both do. Key by the box
+          // INDEX too, else two collide on `id@page@col` and React duplicates/omits them
+          // (the footnote massive-box / box-per-line render artifact).
           <BlockOverlay
-            key={`${b.id}@${rect.page}@${rect.col ?? 'full'}`}
+            key={`${b.id}@${rect.page}@${rect.col ?? 'full'}@${ri}`}
             block={b}
             rect={{ page: rect.page, x: rect.x * zoom, y: rect.y * zoom, width: rect.width * zoom, height: rect.height * zoom }}
             mark={marks[b.id] ?? null}

@@ -646,14 +646,137 @@ export function binBlocks(
     boxesById.set(id, boxes)
   }
 
+  // Env single-object dominance. A figure / listing / table is ONE rendered object — it
+  // does not scatter across non-adjacent pages. lstlisting/verbatim synctex is unreliable
+  // and can plant a phantom forward rect on a neighbouring page that catches a stray row,
+  // giving the env a real box plus a spurious one-line box on the wrong page ("two blocks").
+  // Keep the env's DOMINANT page (most box ink); drop a page whose ink is a small fraction
+  // of it. A genuine multi-page env — a longtable split ~evenly — keeps both pages, since
+  // neither is a small fraction. (Env-ness from the id's `envN` segment.)
+  const ENV_RE = /(^|\/)env\d+(#|$)/
+  const allB: { id: string; b: PdfRect }[] = []
+  for (const [id, bs] of boxesById) for (const b of bs) allB.push({ id, b })
+  const overlapsOther = (id: string, b: PdfRect): boolean =>
+    allB.some(({ id: oid, b: o }) => oid !== id && o.page === b.page &&
+      Math.min(b.x + b.width, o.x + o.width) - Math.max(b.x, o.x) > 8 &&
+      Math.min(b.y + b.height, o.y + o.height) - Math.max(b.y, o.y) > 8)
+  for (const [id, bs] of boxesById) {
+    // A bibliography reference list legitimately spans adjacent pages/columns — it is not
+    // a single rendered object, so the single-object dominance filter must not prune it.
+    if (!ENV_RE.test(id) || bs.length < 2 || bibliographyIds.has(id)) continue
+    const inkByPage = new Map<number, number>()
+    for (const b of bs) inkByPage.set(b.page, (inkByPage.get(b.page) ?? 0) + b.height)
+    if (inkByPage.size < 2) continue
+    const domPage = [...inkByPage.entries()].sort((a, b) => b[1] - a[1])[0]![0]
+    const domInk = inkByPage.get(domPage)!
+    // Always keep the dominant page. Keep another page only if it is a SUBSTANTIAL part
+    // (>= 25 % ink, so a longtable split keeps both) AND it does not overlap another block's
+    // box — a phantom env box landing on a neighbour's content (a tikz rect mis-mapped onto
+    // the listing) is dropped even when its ink is substantial.
+    const kept = bs.filter((b) => b.page === domPage || ((inkByPage.get(b.page) ?? 0) >= 0.25 * domInk && !overlapsOther(id, b)))
+    if (kept.length && kept.length !== bs.length) boxesById.set(id, kept)
+  }
+
+  // Displaced-content split. A block whose rendered units map to ONE source line can render
+  // in two far-apart regions of a column — a \maketitle front-matter block's title sits at the
+  // column top, its \thanks footnote at the bottom, and BOTH backward-map to \maketitle. The
+  // per-(page,col) union would then box the whole column, swallowing the body between them.
+  // Where another block's box sits strictly inside a box (same page+column), re-box this
+  // block's units in the gaps around it — one box per cluster. The intervening body IS the
+  // separator, so there is no gap constant; an ordinary block (nothing inside it) is untouched.
+  const allBoxes: { id: string; b: PdfRect }[] = []
+  for (const [id, bs] of boxesById) for (const b of bs) allBoxes.push({ id, b })
+  // Self-overlap count of one block's boxes — a re-box is only kept if it does not INCREASE
+  // this (a gutter-crossing unit can leave a thin right-column sliver overlapping the left box).
+  const selfOverlaps = (arr: PdfRect[]): number => {
+    let n = 0
+    for (let i = 0; i < arr.length; i++) for (let j = i + 1; j < arr.length; j++) {
+      const a = arr[i]!, c = arr[j]!
+      if (a.page === c.page && a.x < c.x + c.width && c.x < a.x + a.width && a.y < c.y + c.height && c.y < a.y + a.height) n++
+    }
+    return n
+  }
+  for (const [id, bs] of boxesById) {
+    const us = byBlock.get(id)
+    if (!us || !bs.length) continue
+    const fwd = lineRects(id)
+    // Box the block's units ONCE per (page, column) — each unit lands in exactly one cell, so
+    // a 2-column continuation (body l→r) or a paragraph with a page-bottom footnote can't be
+    // re-boxed under two overlapping boxes (the duplicate/gap class the per-box pass hit). For
+    // each cell, if another block's box sits strictly INSIDE it, the block renders in two
+    // far-apart regions of that column (a \maketitle title at the top, its \thanks footnote at
+    // the bottom, the body between) — split it by the intervening boxes, one box per cluster.
+    // Clip per column; a genuinely full-width 'full' run (a centred title) stays unclipped, so
+    // main_v2's front-matter title/footnote is untouched.
+    const byCell = new Map<string, AttributedUnit[]>()
+    for (const u of us) {
+      const key = `${u.page}|${colOfUnit(u)}`
+      const a = byCell.get(key); if (a) a.push(u); else byCell.set(key, [u])
+    }
+    let changed = false
+    const rebuilt: PdfRect[] = []
+    for (const [key, cu] of byCell) {
+      const bar = key.indexOf('|')
+      const page = Number(key.slice(0, bar))
+      const col = key.slice(bar + 1) as PdfCol
+      const cellBox = buildBox(fwd, page, col, cu, col !== 'full')
+      const bands = allBoxes
+        .filter(({ id: oid, b: o }) => oid !== id && o.page === page &&
+          o.x < cellBox.x + cellBox.width && cellBox.x < o.x + o.width &&
+          o.y > cellBox.y + 2 && o.y + o.height < cellBox.y + cellBox.height - 2)
+        .map(({ b: o }) => ({ top: o.y, bottom: o.y + o.height }))
+        .sort((p, q) => p.top - q.top)
+      if (!bands.length) { rebuilt.push(cellBox); continue }
+      const clusters = new Map<number, AttributedUnit[]>()
+      for (const u of cu) {
+        const k = bands.filter((band) => band.bottom <= u.yTop).length
+        const a = clusters.get(k); if (a) a.push(u); else clusters.set(k, [u])
+      }
+      if (clusters.size < 2) { rebuilt.push(cellBox); continue }
+      // Build each cluster's box, then merge vertically-CONTIGUOUS ones. The intervening bands
+      // separate FAR-APART regions (a body and its page-bottom footnote), but a band whose box
+      // straddles the first line of such a region — a footnote whose top a neighbour's box
+      // overlaps by a point — splits that one region across two adjacent k-clusters whose boxes
+      // then overlap, tripping the self-overlap guard and losing the whole split (the massive
+      // single-column box). Re-merge boxes within MAX_LINE_GAP so a contiguous run is one box;
+      // only the real gap (the intervening body) keeps body and footnote apart.
+      const cellBoxes = [...clusters.values()].map((ccu) => buildBox(fwd, page, col, ccu, col !== 'full')).sort((a, b) => a.y - b.y)
+      const mergedCell: PdfRect[] = []
+      for (const bx of cellBoxes) {
+        const prev = mergedCell[mergedCell.length - 1]
+        if (prev && bx.y - (prev.y + prev.height) <= MAX_LINE_GAP) {
+          prev.width = Math.max(prev.x + prev.width, bx.x + bx.width) - Math.min(prev.x, bx.x)
+          prev.x = Math.min(prev.x, bx.x)
+          prev.height = Math.max(prev.y + prev.height, bx.y + bx.height) - prev.y
+        } else mergedCell.push({ ...bx })
+      }
+      for (const m of mergedCell) rebuilt.push(m)
+      changed = true
+    }
+    // The main build's l/r fold merges vertically-overlapping left+right boxes — right for a
+    // mis-split single line, WRONG for a genuine 2-column paragraph whose body fills the
+    // left-column bottom AND the right-column top (those overlap in y, so the fold fuses them
+    // into one mis-placed box and drops a column). A mis-split line is already split+re-homed
+    // upstream (the gutter-split + forward-containment override), so if this block still has
+    // units in a column the main build produced NO box for, the fold over-merged — prefer the
+    // per-cell boxes, one per column.
+    const boxCols = new Set(bs.map((b) => b.col ?? 'full'))
+    const foldDroppedCol = [...byCell.keys()].some((k) => { const c = k.slice(k.indexOf('|') + 1); return c !== 'full' && !boxCols.has(c as PdfCol) })
+    if ((changed || foldDroppedCol) && selfOverlaps(rebuilt) <= selfOverlaps(bs)) {
+      rebuilt.sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x); boxesById.set(id, rebuilt)
+    }
+  }
+
   // Spatial orphan pass. A rendered text row that synctex maps NOWHERE — null inverse AND no
-  // forward rect (a math-heavy tail like "...the temporal sinusoid.") — is left unattributed
-  // and unboxed. Its only signal is position: it is the dropped tail of the block whose box
-  // sits directly above it in the same column. Attach each such row to that box (extend it
-  // down) when contiguous (within MAX_LINE_GAP). But cluster the orphans into same-column
-  // runs first and attach only SMALL runs: a LONG run is the BibTeX references (every line
-  // synctex-null) — attaching it would chain the whole bibliography into the conclusion box
-  // above it. References have no source block, so a long null run is left unboxed.
+  // forward rect (a paragraph's dropped last wrapped line like "...high-value sectors.", or a
+  // math-heavy tail) — is left unattributed and unboxed. Its only signal is position: it is the
+  // dropped tail of the block whose box sits directly above it in the same column. Attach each
+  // such row to that box (extend it down) when contiguous (within MAX_LINE_GAP). But cluster the
+  // orphans into same-column runs first and attach only SMALL runs: a LONG run is the BibTeX
+  // references (every line synctex-null) — attaching it would chain the whole bibliography into
+  // the conclusion box above it. References have no source block, so a long null run is unboxed.
+  // RUNS LAST, after the displaced-split rebuilds boxes from units — the split's per-unit rebuild
+  // can't see a null row, so this extension must be the final word on box extent or it is lost.
   const placed: PdfRect[] = []
   for (const bs of boxesById.values()) for (const b of bs) placed.push(b)
   const covered = (u: AttributedUnit): boolean =>
@@ -708,79 +831,6 @@ export function binBlocks(
       }
       if (best) best.height = Math.max(best.height, u.yBottom - best.y)
     }
-  }
-
-  // Env single-object dominance. A figure / listing / table is ONE rendered object — it
-  // does not scatter across non-adjacent pages. lstlisting/verbatim synctex is unreliable
-  // and can plant a phantom forward rect on a neighbouring page that catches a stray row,
-  // giving the env a real box plus a spurious one-line box on the wrong page ("two blocks").
-  // Keep the env's DOMINANT page (most box ink); drop a page whose ink is a small fraction
-  // of it. A genuine multi-page env — a longtable split ~evenly — keeps both pages, since
-  // neither is a small fraction. (Env-ness from the id's `envN` segment.)
-  const ENV_RE = /(^|\/)env\d+(#|$)/
-  const allB: { id: string; b: PdfRect }[] = []
-  for (const [id, bs] of boxesById) for (const b of bs) allB.push({ id, b })
-  const overlapsOther = (id: string, b: PdfRect): boolean =>
-    allB.some(({ id: oid, b: o }) => oid !== id && o.page === b.page &&
-      Math.min(b.x + b.width, o.x + o.width) - Math.max(b.x, o.x) > 8 &&
-      Math.min(b.y + b.height, o.y + o.height) - Math.max(b.y, o.y) > 8)
-  for (const [id, bs] of boxesById) {
-    // A bibliography reference list legitimately spans adjacent pages/columns — it is not
-    // a single rendered object, so the single-object dominance filter must not prune it.
-    if (!ENV_RE.test(id) || bs.length < 2 || bibliographyIds.has(id)) continue
-    const inkByPage = new Map<number, number>()
-    for (const b of bs) inkByPage.set(b.page, (inkByPage.get(b.page) ?? 0) + b.height)
-    if (inkByPage.size < 2) continue
-    const domPage = [...inkByPage.entries()].sort((a, b) => b[1] - a[1])[0]![0]
-    const domInk = inkByPage.get(domPage)!
-    // Always keep the dominant page. Keep another page only if it is a SUBSTANTIAL part
-    // (>= 25 % ink, so a longtable split keeps both) AND it does not overlap another block's
-    // box — a phantom env box landing on a neighbour's content (a tikz rect mis-mapped onto
-    // the listing) is dropped even when its ink is substantial.
-    const kept = bs.filter((b) => b.page === domPage || ((inkByPage.get(b.page) ?? 0) >= 0.25 * domInk && !overlapsOther(id, b)))
-    if (kept.length && kept.length !== bs.length) boxesById.set(id, kept)
-  }
-
-  // Displaced-content split. A block whose rendered units map to ONE source line can render
-  // in two far-apart regions of a column — a \maketitle front-matter block's title sits at the
-  // column top, its \thanks footnote at the bottom, and BOTH backward-map to \maketitle. The
-  // per-(page,col) union would then box the whole column, swallowing the body between them.
-  // Where another block's box sits strictly inside a box (same page+column), re-box this
-  // block's units in the gaps around it — one box per cluster. The intervening body IS the
-  // separator, so there is no gap constant; an ordinary block (nothing inside it) is untouched.
-  const allBoxes: { id: string; b: PdfRect }[] = []
-  for (const [id, bs] of boxesById) for (const b of bs) allBoxes.push({ id, b })
-  for (const [id, bs] of boxesById) {
-    const us = byBlock.get(id)
-    if (!us) continue
-    let split = false
-    const rebuilt: PdfRect[] = []
-    for (const b of bs) {
-      const bands = allBoxes
-        .filter(({ id: oid, b: o }) => oid !== id && o.page === b.page &&
-          o.x < b.x + b.width && b.x < o.x + o.width &&
-          o.y > b.y + 2 && o.y + o.height < b.y + b.height - 2)
-        .map(({ b: o }) => ({ top: o.y, bottom: o.y + o.height }))
-        .sort((p, q) => p.top - q.top)
-      // Gather b's units by VERTICAL overlap with the box, not x/column — the box x was
-      // clipped to its column (a full-width title in an 'l' box is cut at the gutter) and the
-      // l/r fold can have re-homed a gutter-crossing row, so neither x nor colOfUnit is a
-      // faithful membership test. The box y-extent is untouched by the clip, so it is.
-      const cellUnits = bands.length ? us.filter((u) => u.page === b.page && u.yTop < b.y + b.height && b.y < u.yBottom) : []
-      const clusters = new Map<number, AttributedUnit[]>()
-      for (const u of cellUnits) {
-        const k = bands.filter((band) => band.bottom <= u.yTop).length // intervening boxes fully above this unit
-        const a = clusters.get(k); if (a) a.push(u); else clusters.set(k, [u])
-      }
-      if (clusters.size < 2) { rebuilt.push(b); continue }
-      // Build each cluster's box with the same extent-fill as the main loop (a dropped
-      // footnote/title row is covered), but clip=false: clusters were gathered column-
-      // agnostically, so the gutter clip would cut a full-width title or an edge footnote.
-      const fwd = lineRects(id)
-      for (const cu of clusters.values()) rebuilt.push(buildBox(fwd, b.page, b.col ?? 'full', cu, false))
-      split = true
-    }
-    if (split) { rebuilt.sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x); boxesById.set(id, rebuilt) }
   }
 
   const contentTopByPage = new Map<number, number>()
