@@ -19,7 +19,7 @@ import { WholeDocRail } from './WholeDocRail'
 import { FillerPage } from './FillerPage'
 import { PaperToolbar } from './PaperToolbar'
 import { useMarqueeSelect } from './useMarqueeSelect'
-import { binBlocks, blockForSourceLine, blockGeometryRects, combinedSpanLabel, expandIds, isMathEnvName, isTightAbove, spanLabel, viewportAnchorTops, washBoxes } from './paperModel'
+import { binBlocks, blockForSourceLine, blockGeometryRects, combinedSpanLabel, expandIds, isMathEnvName, isTightAbove, mapsToLeadingDelimiter, spanLabel, viewportAnchorTops, washBoxes } from './paperModel'
 import type { AttributedUnit } from './paperModel'
 import { resolveToKnownFile } from '@renderer/lib/paths'
 import type { BlockMark, PageBlock } from './paperModel'
@@ -345,9 +345,20 @@ export function PaperPane(props: Props): JSX.Element {
       // \bibliography blocks: their .bbl rows are synctex-null, so the binner claims the
       // long null run for them instead of leaving the reference list unboxed.
       const bibliographyIds = new Set(pageBlocks.filter((b) => b.envName === 'bibliography').map((b) => b.id))
+      const blockById = new Map(pageBlocks.map((b) => [b.id, b]))
       const attributed = units.map((u, i): AttributedUnit => {
         const loc = locs[i]
-        return { page: u.page, xLeft: u.xLeft, yTop: u.yTop, xRight: u.xRight, yBottom: u.yBottom, blockId: loc ? blockForSourceLine(pageBlocks, resolveToKnownFile(loc.file, knownFiles), loc.line) : null }
+        const file = loc ? resolveToKnownFile(loc.file, knownFiles) : ''
+        let blockId = loc ? blockForSourceLine(pageBlocks, file, loc.line) : null
+        // A hit on an environment's leading \begin/delimiter region is a galley collision —
+        // the equation's opening strut lands on the paragraph's dropped last wrapped line, so
+        // that line maps INTO the equation. Detach it; the binner's spatial-orphan pass re-homes
+        // it to the paragraph above. (The equation's own rows map past the interior, so they stay.)
+        if (blockId && loc) {
+          const b = blockById.get(blockId)
+          if (b && mapsToLeadingDelimiter(b, file, loc.line)) blockId = null
+        }
+        return { page: u.page, xLeft: u.xLeft, yTop: u.yTop, xRight: u.xRight, yBottom: u.yBottom, blockId }
       })
       const result = binBlocks(attributed, rowsByPage, fullWidthIds, regionsById, bibliographyIds)
       // One box per block from its rendered ink; a section's box is its heading
