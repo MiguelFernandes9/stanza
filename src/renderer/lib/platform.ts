@@ -1,4 +1,4 @@
-import { isMac as isMacFor, modKey as modKeyFor } from '@shared/platform'
+import { isMac as isMacFor, isWindows as isWindowsFor, modKey as modKeyFor } from '@shared/platform'
 
 // The renderer's isolated world has no `process`; the preload bridges the host OS
 // as window.stanza.platform. Read it lazily (at call time, not module init) and
@@ -8,4 +8,5 @@ import { isMac as isMacFor, modKey as modKeyFor } from '@shared/platform'
 const platform = (): string => window.stanza?.platform ?? 'darwin'
 
 export const isMac = (): boolean => isMacFor(platform())
+export const isWindows = (): boolean => isWindowsFor(platform())
 export const modKey = (): string => modKeyFor(platform())
