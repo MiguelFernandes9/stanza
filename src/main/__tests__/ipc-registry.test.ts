@@ -245,6 +245,48 @@ esac`)
     expect(readFileSync(join(root, 'main.tex'), 'utf8')).toBe(ARTICLE)
   }, 30_000)
 
+  // A slow op B holds an overlapping span in flight; op A, started while B runs,
+  // must carry the deterministic `conflict` tag (span overlap). Match B by its OWN
+  // "Instruction:" line — A's digest now quotes B's instruction, so a bare *SLOWMARK*
+  // would mis-route A onto the slow branch.
+  const overlapStub = () =>
+    makeClaudeStub(`case "$*" in
+  *Instruction:*SLOWMARK*) sleep 1.2; printf 's\\n' >> main.tex; echo '{"result":"slow"}' ;;
+  *--resume*) printf 'f\\n' >> main.tex; echo '{"result":"fast"}' ;;
+  *) echo '{"result":"primed"}' ;;
+esac`)
+
+  test('an op started while an overlapping op is in flight is tagged with a live conflict', async () => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', overlapStub())
+    const root = makeProject()
+    await invoke('document:open', root)
+
+    // B: slow op holding lines 2-3, registered in activeOps the moment it's invoked.
+    const bRunning = Promise.resolve(
+      invoke('claude:run', { instruction: 'SLOWMARK rewrite the body', spans: [{ file: 'main.tex', startLine: 2, endLine: 3 }] }),
+    )
+    await new Promise((r) => setTimeout(r, 200)) // let B register + reach its sleep
+
+    // A: overlaps B's span → its result carries the deterministic conflict tag.
+    const a = (await invoke('claude:run', {
+      instruction: 'A tweak',
+      spans: [{ file: 'main.tex', startLine: 3, endLine: 3 }],
+    })) as ClaudeResult
+    expect(a.conflict).toBeDefined()
+    expect(a.conflict!.instruction).toContain('SLOWMARK rewrite the body') // names the clashing edit
+    expect(typeof a.conflict!.location).toBe('string')
+    expect(a.proposal).not.toBeNull() // it still made its edit (warn, not block)
+
+    await bRunning.catch(() => {})
+
+    // A disjoint op, started after B finished, gets no conflict.
+    const c = (await invoke('claude:run', {
+      instruction: 'C tweak',
+      spans: [{ file: 'main.tex', startLine: 1, endLine: 1 }],
+    })) as ClaudeResult
+    expect(c.conflict).toBeUndefined()
+  }, 30_000)
+
   test('a pending whole-doc proposal blocks a later scoped op (SPANS_LOCKED)', async () => {
     vi.stubEnv('STANZA_CLAUDE_BIN', wholeDocStub())
     const root = makeProject()
