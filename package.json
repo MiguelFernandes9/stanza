@@ -1,7 +1,7 @@
 {
   "name": "stanza",
   "version": "0.1.0",
-  "description": "Local macOS LaTeX editor with live PDF and diff-gated Claude block editing",
+  "description": "Local LaTeX editor with live PDF and diff-gated Claude block editing",
   "productName": "Stanza",
   "private": true,
   "type": "module",
@@ -20,11 +20,25 @@
   "build": {
     "appId": "com.miguelfernandes.stanza",
     "productName": "Stanza",
-    "directories": { "buildResources": "build" },
-    "files": ["out/**"],
-    "mac": { "icon": "build/icon.icns", "category": "public.app-category.productivity" },
-    "win": { "icon": "build/icon.ico" },
-    "linux": { "icon": "build/icon.png" }
+    "directories": {
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**"
+    ],
+    "mac": {
+      "icon": "build/icon.icns",
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": ["nsis"]
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "target": ["AppImage", "deb"],
+      "category": "Office"
+    }
   },
   "dependencies": {
     "@codemirror/lint": "^6.9.7",
@@ -45,7 +59,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.2.0",
-    "electron": "^42.4.0",
+    "electron": "^42.4.1",
     "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "jsdom": "^26.1.0",
