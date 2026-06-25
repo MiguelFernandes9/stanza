@@ -2,7 +2,7 @@ import { autocompletion, completionKeymap } from '@codemirror/autocomplete'
 import { defaultKeymap, history, historyKeymap, indentWithTab, insertNewline } from '@codemirror/commands'
 import { bracketMatching, defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { lintGutter } from '@codemirror/lint'
-import { EditorView, drawSelection, highlightActiveLine, keymap, lineNumbers } from '@codemirror/view'
+import { EditorView, drawSelection, keymap, lineNumbers } from '@codemirror/view'
 import { latex, latexCompletionSource } from 'codemirror-lang-latex'
 import type { Extension } from '@codemirror/state'
 import { citeSource } from './completion/citeSource'
@@ -35,7 +35,6 @@ const stanzaTheme = EditorView.theme({
     fontSize: 'var(--text-xs)'
   },
   '.cm-lineNumbers .cm-gutterElement': { paddingRight: '10px' },
-  '.cm-activeLine': { background: 'var(--hover-fill)' },
   '&.cm-focused': { outline: 'none' },
   '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': {
     background: 'var(--select-fill) !important'
@@ -53,7 +52,6 @@ export function baseExtensions(): Extension[] {
     lineNumbers(),
     history(),
     drawSelection(),
-    highlightActiveLine(),
     bracketMatching(),
     syntaxHighlighting(defaultHighlightStyle),
     latex(latexConfig()),
