@@ -1,7 +1,8 @@
 import { tmpdir } from 'node:os'
 import type { ProcessRunner } from '../infra/ProcessRunner'
 import type { Store } from '../infra/Store'
-import { claudeEnv, extractNote } from './ClaudeService'
+import { extractNote } from './ClaudeService'
+import { claudeBin, claudeEnv } from './claudeCli'
 import { buildOutline, type OutlineSection } from './paperOutline'
 
 type Read = (relPath: string) => string | null
@@ -131,7 +132,7 @@ async function summarize(
   sections: OutlineSection[],
 ): Promise<Record<string, string>> {
   const proc = await runner.run({
-    cmd: process.env.STANZA_CLAUDE_BIN ?? 'claude',
+    cmd: claudeBin(),
     // Force the cheap model regardless of the user's op model; no --add-dir — the
     // text is in the prompt, the summarizer edits nothing.
     args: ['-p', '--model', 'haiku', '--output-format', 'json', summarizePrompt(sections)],

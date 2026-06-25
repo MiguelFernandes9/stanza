@@ -50,7 +50,7 @@ const handlers = () => ({
   refCb: vi.fn()
 })
 
-function renderPhase(phase: TaskPhase, h: ReturnType<typeof handlers>): void {
+function renderPhase(phase: TaskPhase, h: ReturnType<typeof handlers>, aiEnabled = true): void {
   const task: EditTask = {
     id: 1,
     blockIds: [], // whole-doc tag, no PageBlock fixture needed
@@ -59,7 +59,7 @@ function renderPhase(phase: TaskPhase, h: ReturnType<typeof handlers>): void {
     proposal: phase === 'review' ? proposal : null,
     note: phase === 'noop' ? 'no change' : undefined
   }
-  render(<TaskCard task={task} blocks={[]} expanded adding={false} {...h} />)
+  render(<TaskCard task={task} blocks={[]} expanded adding={false} aiEnabled={aiEnabled} {...h} />)
 }
 
 const headerX = (): HTMLElement | null =>
@@ -107,5 +107,26 @@ describe('TaskCard header X — collapse vs close', () => {
     expect(h.onDismiss).not.toHaveBeenCalled()
     click(byText('Dismiss')!)
     expect(h.onDismiss).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('TaskCard — Claude unavailable', () => {
+  it('compose: Run disabled, Enter does not submit, the sign-in notice shows', () => {
+    const h = handlers()
+    renderPhase('compose', h, false)
+    expect(byText('Run')!.hasAttribute('disabled')).toBe(true)
+    expect(container.querySelector('[data-testid="ai-disabled-notice"]')).not.toBeNull()
+    const textarea = container.querySelector('textarea')!
+    act(() => textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+    expect(h.onSubmit).not.toHaveBeenCalled()
+  })
+
+  it('review: Accept/Reject stay enabled (no new op — just finalizing the proposal)', () => {
+    const h = handlers()
+    renderPhase('review', h, false)
+    expect(byText('Accept')!.hasAttribute('disabled')).toBe(false)
+    click(byText('Accept')!)
+    expect(h.onResolve).toHaveBeenCalledWith(true)
+    expect(container.querySelector('[data-testid="ai-disabled-notice"]')).toBeNull()
   })
 })

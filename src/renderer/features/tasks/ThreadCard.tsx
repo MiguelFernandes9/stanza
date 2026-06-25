@@ -13,6 +13,7 @@ import { taskSnapshot } from './taskStore'
 import { blockLabel, tagKind } from './TaskCard'
 import { AttachmentChips } from '../chat/AttachmentChips'
 import { ThreadTranscript } from './ThreadTranscript'
+import { AiDisabledNotice } from '@renderer/features/assistant/AiDisabledNotice'
 
 const VIOLET = '#6d5bd0'
 const RAIL_GAP = 22
@@ -21,6 +22,9 @@ interface Props {
   task: EditTask
   blocks: PageBlock[]
   side?: 'left' | 'right'
+  /** False when Claude is unavailable — the follow-up composer is disabled and a
+   *  notice shows. Accept/Reject on a pending proposal stay enabled. */
+  aiEnabled?: boolean
   onSubmitTurn: (text: string) => void
   onResolve: (accept: boolean) => void
   /** Stage a PNG snapshot of the anchor block to send with the next turn. */
@@ -46,6 +50,7 @@ export function ThreadCard({
   task,
   blocks,
   side,
+  aiEnabled = true,
   onSubmitTurn,
   onResolve,
   onSnapshot,
@@ -63,7 +68,9 @@ export function ThreadCard({
   useAutoGrowTextarea(taRef, draft, 140)
   const busy = task.phase === 'busy'
   const pending = task.phase === 'review'
-  const locked = busy || pending
+  // The composer locks while a turn runs / a proposal is pending (the existing
+  // span-lock guard) AND whenever Claude is unavailable. Resolve stays separate.
+  const composerLocked = busy || pending || !aiEnabled
   const isSection = blocks.length > 1 && blocks[0]?.kind === 'heading'
   const spanRef = blocks.length
     ? blocks.length > 1
@@ -73,7 +80,7 @@ export function ThreadCard({
 
   const send = (): void => {
     const text = draft.trim()
-    if (!text || locked) return
+    if (!text || composerLocked) return
     onSubmitTurn(text)
     setDraft('')
   }
@@ -144,9 +151,9 @@ export function ThreadCard({
         </div>
         <div
           className="stz-field"
-          onDragOver={locked ? undefined : intake.onDragOver}
-          onDragLeave={locked ? undefined : intake.onDragLeave}
-          onDrop={locked ? undefined : intake.onDrop}
+          onDragOver={composerLocked ? undefined : intake.onDragOver}
+          onDragLeave={composerLocked ? undefined : intake.onDragLeave}
+          onDrop={composerLocked ? undefined : intake.onDrop}
           style={{
             display: 'flex',
             alignItems: 'flex-start',
@@ -155,19 +162,19 @@ export function ThreadCard({
             border: `1px solid ${intake.dragging ? 'var(--clay-400)' : 'var(--border-strong)'}`,
             borderRadius: 'var(--radius-md)',
             padding: '5px 6px',
-            opacity: locked ? 0.55 : 1
+            opacity: composerLocked ? 0.55 : 1
           }}
         >
           <AttachMenu
             onSnapshot={onSnapshot}
             hasSnapshot={!!snapshot}
             onPickFiles={onAddAttachments ? intake.pick : undefined}
-            disabled={locked}
+            disabled={composerLocked}
           />
           <textarea
             ref={taRef}
             value={draft}
-            disabled={locked}
+            disabled={composerLocked}
             onChange={(e) => setDraft(e.target.value)}
             onPaste={intake.onPaste}
             onKeyDown={(e) => {
@@ -189,10 +196,15 @@ export function ThreadCard({
               padding: '4px 0'
             }}
           />
-          <Button size="sm" variant="primary" disabled={locked || !draft.trim()} onClick={send} iconLeft={<ArrowUp size={13} />}>
+          <Button size="sm" variant="primary" disabled={composerLocked || !draft.trim()} onClick={send} iconLeft={<ArrowUp size={13} />}>
             Send
           </Button>
         </div>
+        {!aiEnabled && (
+          <div style={{ marginTop: 8 }}>
+            <AiDisabledNotice />
+          </div>
+        )}
       </div>
     </div>
   )

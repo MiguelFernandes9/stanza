@@ -7,6 +7,7 @@ import { summarizeBlocks } from '@shared/blocks/changes'
 import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
 import { useComposerAttachments } from '@renderer/hooks/useComposerAttachments'
 import { AttachmentChips } from './AttachmentChips'
+import { AiDisabledNotice } from '@renderer/features/assistant/AiDisabledNotice'
 
 export interface ChatMessage {
   role: 'user' | 'claude'
@@ -19,6 +20,9 @@ export interface ChatMessage {
 interface Props {
   messages: ChatMessage[]
   busy: boolean
+  /** False when Claude is unavailable — the composer is disabled and a notice shows.
+   *  The panel still opens so the user can read prior messages + the fix. */
+  aiEnabled?: boolean
   onSubmit: (instruction: string, attachments?: Attachment[]) => void
   onResolveOp: (opId: string, accept: boolean) => void
 }
@@ -84,7 +88,7 @@ function ProposalBlock({ proposal, resolved, onResolve }: { proposal?: ReviewPro
  *  questions, template changes, and whole-file edits. It is independent of
  *  block selection (⌘B) — selecting blocks never scopes or disables this chat;
  *  block-scoped editing lives in the rail bubbles. */
-export function ChatPane({ messages, busy, onSubmit, onResolveOp }: Props): JSX.Element {
+export function ChatPane({ messages, busy, aiEnabled = true, onSubmit, onResolveOp }: Props): JSX.Element {
   const [instruction, setInstruction] = useState('')
   const streamRef = useRef<HTMLDivElement | null>(null)
   const taRef = useRef<HTMLTextAreaElement | null>(null)
@@ -97,7 +101,7 @@ export function ChatPane({ messages, busy, onSubmit, onResolveOp }: Props): JSX.
   useAutoGrowTextarea(taRef, instruction, 120)
 
   const submit = (): void => {
-    if (!instruction.trim() || busy) return
+    if (!instruction.trim() || busy || !aiEnabled) return
     onSubmit(instruction.trim(), att.attachments.length ? att.attachments : undefined)
     setInstruction('')
     att.clear()
@@ -130,7 +134,11 @@ export function ChatPane({ messages, busy, onSubmit, onResolveOp }: Props): JSX.
           Assistant
         </span>
         <div style={{ flex: 1 }} />
-        <StatusDot tone={busy ? 'busy' : 'ok'} pulse={busy} label={busy ? 'Editing…' : 'Session ready'} />
+        {aiEnabled ? (
+          <StatusDot tone={busy ? 'busy' : 'ok'} pulse={busy} label={busy ? 'Editing…' : 'Session ready'} />
+        ) : (
+          <StatusDot tone="error" label="Signed out" />
+        )}
       </div>
 
       <div
@@ -250,10 +258,15 @@ export function ChatPane({ messages, busy, onSubmit, onResolveOp }: Props): JSX.
               padding: '5px 0'
             }}
           />
-          <Button size="sm" variant="primary" disabled={!instruction.trim() || busy} onClick={submit} style={{ padding: '0 10px' }} iconLeft={<ArrowUp size={15} />}>
+          <Button size="sm" variant="primary" disabled={!instruction.trim() || busy || !aiEnabled} onClick={submit} style={{ padding: '0 10px' }} iconLeft={<ArrowUp size={15} />}>
             Run
           </Button>
         </div>
+        {!aiEnabled && (
+          <div style={{ marginTop: 9 }}>
+            <AiDisabledNotice />
+          </div>
+        )}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 7, paddingLeft: 2 }}>
           <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>
             Claude Code edits the <span style={{ fontFamily: 'var(--font-mono)' }}>.tex</span> source directly ·{' '}

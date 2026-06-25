@@ -1,6 +1,7 @@
 import { IpcChannels } from '@shared/ipc'
 import type {
   BlockSpan,
+  ClaudeAvailability,
   ClaudeRequest,
   ClaudeResult,
   ClaudeStatus,
@@ -108,6 +109,10 @@ export const api = {
   /** OS file picker for chat-prompt attachments (no repo copy). */
   attachmentsPick: () => invoke<PickedAttachment[]>(IpcChannels.attachmentsPick),
   claudeHistory: () => invoke<OpRecord[]>(IpcChannels.claudeHistory),
+  /** Whether Claude is usable (CLI installed + logged in) — gates all AI features.
+   *  force=true bypasses the ~45s main-side cache and re-probes (Settings Recheck). */
+  claudeAvailability: (force = false) =>
+    invoke<ClaudeAvailability>(IpcChannels.claudeAvailability, { force }),
   /** Persistent bubbles for the open project, restored on workspace open. */
   threadsList: () => invoke<ThreadRecord[]>(IpcChannels.threadsList),
   /** Drop a persistent bubble's record (deleted, or its anchor block vanished). */
@@ -136,6 +141,8 @@ export const api = {
   /** External fs change under the doc root — the renderer re-fetches document:files. */
   onDocumentFilesChanged: on<void>(IpcChannels.documentFilesChanged),
   onClaudeStatus: on<ClaudeStatus>(IpcChannels.claudeStatus),
+  /** Claude availability flipped at runtime (login/logout, or a forced Recheck). */
+  onClaudeAvailabilityChanged: on<ClaudeAvailability>(IpcChannels.claudeAvailabilityChanged),
   onReviewProposal: on<ReviewProposal>(IpcChannels.reviewProposal),
   onPrimeStatus: on<PrimeStep>(IpcChannels.primeStatus),
   /** ⌘W fired from the app menu — the renderer closes the active tab (or

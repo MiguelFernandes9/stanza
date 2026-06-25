@@ -13,6 +13,7 @@ import type { EditTask } from './taskStore'
 import { taskSnapshot } from './taskStore'
 import { AttachmentChips } from '../chat/AttachmentChips'
 import { summarizeBlocks } from '@shared/blocks/changes'
+import { AiDisabledNotice } from '@renderer/features/assistant/AiDisabledNotice'
 
 export const RAIL = 316
 export const RAIL_GAP = 22
@@ -59,6 +60,9 @@ interface Props {
    *  pulsing "Updating context…" hint so the user knows a Run now would carry
    *  provisional summaries (Part A). */
   contextBuilding?: boolean
+  /** False when Claude is unavailable — the composer Run + snapshot are disabled
+   *  and a notice shows. Accept/Reject on a pending proposal stay enabled. */
+  aiEnabled?: boolean
   onToggleAdding: () => void
   onRemoveBlock: (blockId: string) => void
   onActivate: () => void
@@ -183,6 +187,7 @@ export function TaskCard({
   side,
   adding,
   contextBuilding,
+  aiEnabled = true,
   onToggleAdding,
   onRemoveBlock,
   onActivate,
@@ -420,9 +425,9 @@ export function TaskCard({
             />
             <div
               className="stz-field"
-              onDragOver={intake.onDragOver}
-              onDragLeave={intake.onDragLeave}
-              onDrop={intake.onDrop}
+              onDragOver={aiEnabled ? intake.onDragOver : undefined}
+              onDragLeave={aiEnabled ? intake.onDragLeave : undefined}
+              onDrop={aiEnabled ? intake.onDrop : undefined}
               style={{
                 display: 'flex',
                 alignItems: 'flex-start',
@@ -437,6 +442,7 @@ export function TaskCard({
                 onSnapshot={onSnapshot && blocks.length > 0 ? onSnapshot : undefined}
                 hasSnapshot={!!snapshot}
                 onPickFiles={onAddAttachments ? intake.pick : undefined}
+                disabled={!aiEnabled}
               />
               <textarea
                 ref={taRef}
@@ -446,7 +452,7 @@ export function TaskCard({
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()
-                    onSubmit()
+                    if (aiEnabled) onSubmit()
                   }
                   if (e.key === 'Escape') onDismiss()
                 }}
@@ -463,10 +469,15 @@ export function TaskCard({
                   padding: '4px 0'
                 }}
               />
-              <Button size="sm" variant="primary" disabled={!task.instruction.trim()} onClick={onSubmit} iconLeft={<ArrowUp size={13} />}>
+              <Button size="sm" variant="primary" disabled={!task.instruction.trim() || !aiEnabled} onClick={onSubmit} iconLeft={<ArrowUp size={13} />}>
                 Run
               </Button>
             </div>
+            {!aiEnabled && (
+              <div style={{ marginTop: 8 }}>
+                <AiDisabledNotice />
+              </div>
+            )}
             <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 6, paddingLeft: 1, flexWrap: 'wrap' }}>
               {adding ? (
                 <span style={{ font: 'var(--weight-medium) var(--text-2xs)/1.4 var(--font-sans)', color: 'var(--clay-600)' }}>
