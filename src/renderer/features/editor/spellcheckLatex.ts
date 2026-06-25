@@ -28,10 +28,10 @@ export interface SpellMiss {
 const WORD_RE = /[\p{L}][\p{L}'’]*/gu
 
 // The grammar tags some NON-prose as `Normal` too: a \documentclass/\usepackage
-// name, a \label/\ref/\cite key, a file path, a url, verbatim/listing/literal
-// bodies. These are identifiers and code, never natural language, so a `Normal`
-// inside one is skipped. Mapped to the grammar's own argument node names (a
-// bounded category), not a per-command list — new prose constructs stay checked.
+// name, a \label/\ref/\cite key, a file path, a url, \texttt inline code, and
+// verbatim/listing/literal bodies. These are identifiers and code, never natural
+// language, so a `Normal` inside one is skipped. Mapped to the grammar's own node
+// names (a bounded category), not a per-command list — new prose stays checked.
 const NON_PROSE = new Set([
   'DocumentClassArgument', 'PackageArgument',
   'LabelArgument', 'RefArgument', 'BibKeyArgument',
@@ -40,6 +40,7 @@ const NON_PROSE = new Set([
   'InputArgument', 'IncludeArgument', 'SubfileArgument',
   'BibliographyArgument', 'BibliographyStyleArgument',
   'DefinitionArgument', 'ColumnArgument', 'SpanArgument',
+  'TextTeletypeCommand', // \texttt{...} — inline code, not prose
   'VerbContent', 'VerbatimContent', 'LstInlineContent',
   'LiteralArgContent', 'SpaceDelimitedLiteralArgContent'
 ])

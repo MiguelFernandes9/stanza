@@ -1,4 +1,5 @@
 import nspell from 'nspell'
+import { LATEX_TERMS } from './latexTerms'
 
 /** Self-contained spell engine: nspell (Hunspell in JS) + the bundled en_US
  *  dictionary. We run our own checker instead of the OS spellchecker because
@@ -17,7 +18,9 @@ export function ensureSpeller(): Promise<void> {
   if (speller) return Promise.resolve()
   loading ??= (async () => {
     const [aff, dic] = await Promise.all([import('./en.aff?raw'), import('./en.dic?raw')])
-    speller = nspell(aff.default, dic.default)
+    const s = nspell(aff.default, dic.default)
+    for (const term of LATEX_TERMS) s.add(term) // teach LaTeX/technical vocabulary up front
+    speller = s
   })()
   return loading
 }

@@ -30,6 +30,11 @@ describe('findMisspelledRanges — LaTeX-aware prose extraction', () => {
     // 'eqn' (math) and 'textbf' (control sequence) are never offered to the checker.
   })
 
+  it('skips \\texttt inline code (package names written as code)', () => {
+    // \texttt content is code, not prose — booktabs must not be checked.
+    expect(words('We load \\texttt{booktabs} for woxd tables', () => true)).toEqual(['We', 'load', 'for', 'woxd', 'tables'])
+  })
+
   it('never checks class names, package names, or label/cite/file keys', () => {
     const doc = '\\documentclass{ieeetran}\\usepackage{amsmath}\n\\label{fig:zzz}\\cite{Knuth1984} Body texx.'
     // Only the body word 'texx' is prose; ieeetran/amsmath/fig/zzz/Knuth1984 are skipped.
