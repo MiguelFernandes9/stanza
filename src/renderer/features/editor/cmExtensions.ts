@@ -2,7 +2,7 @@ import { autocompletion, completionKeymap } from '@codemirror/autocomplete'
 import { defaultKeymap, history, historyKeymap, indentWithTab, insertNewline } from '@codemirror/commands'
 import { bracketMatching, defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language'
 import { lintGutter } from '@codemirror/lint'
-import { EditorView, drawSelection, highlightActiveLine, keymap, lineNumbers } from '@codemirror/view'
+import { EditorView, drawSelection, keymap, lineNumbers } from '@codemirror/view'
 import { latex, latexCompletionSource } from 'codemirror-lang-latex'
 import type { Extension } from '@codemirror/state'
 import { citeSource } from './completion/citeSource'
@@ -10,6 +10,8 @@ import { projectContextField } from './completion/contextFacet'
 import { filePathSource } from './completion/filePathSource'
 import { AUTO_CLOSE_TAGS, latexConfig } from './completion/latexConfig'
 import { refSource } from './completion/refSource'
+import { inlineCodeHighlight } from './inlineCode'
+import { autoCloseEnv, envKeymap } from './autoCloseEnv'
 
 /** Editor chrome per design §2 SourceEditor: JetBrains Mono 13px/1.75,
  *  46px right-aligned gutter in ink-300, paper surfaces. */
@@ -34,7 +36,6 @@ const stanzaTheme = EditorView.theme({
     fontSize: 'var(--text-xs)'
   },
   '.cm-lineNumbers .cm-gutterElement': { paddingRight: '10px' },
-  '.cm-activeLine': { background: 'var(--hover-fill)' },
   '&.cm-focused': { outline: 'none' },
   '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': {
     background: 'var(--select-fill) !important'
@@ -52,10 +53,11 @@ export function baseExtensions(): Extension[] {
     lineNumbers(),
     history(),
     drawSelection(),
-    highlightActiveLine(),
     bracketMatching(),
     syntaxHighlighting(defaultHighlightStyle),
     latex(latexConfig()),
+    // Tint \texttt{…} inline code (the grammar leaves it flat — see inlineCode).
+    inlineCodeHighlight,
     projectContextField,
     autocompletion({
       override: [filePathSource, refSource, citeSource, latexCompletionSource(AUTO_CLOSE_TAGS)],
@@ -64,12 +66,17 @@ export function baseExtensions(): Extension[] {
       icons: true
     }),
     lintGutter(),
+    // Auto-close \begin{env} with a matching \end{env} (no body indent) — see
+    // autoCloseEnv. The completion filter is here; the Enter/} bindings are
+    // spliced into the keymap below so they take the right precedence.
+    autoCloseEnv,
     // Enter inserts a PLAIN newline (no copied indent) — LaTeX shouldn't auto-
-    // indent. Sits below completionKeymap (so the popup's Enter still accepts)
-    // but above defaultKeymap (whose insertNewlineAndIndent copies indentation).
-    // indentWithTab stays — Tab still indents; only Enter changes.
+    // indent. envKeymap runs first (Enter right after \begin{env} opens the
+    // body + \end); completionKeymap is above both so the popup's Enter still
+    // accepts. indentWithTab stays — Tab still indents; only Enter changes.
     keymap.of([
       ...completionKeymap,
+      ...envKeymap,
       { key: 'Enter', run: insertNewline },
       ...defaultKeymap,
       ...historyKeymap,
