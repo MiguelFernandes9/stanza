@@ -50,4 +50,12 @@ describe('Select', () => {
     render(<Select value="a" options={OPTS} disabled />)
     expect(select().disabled).toBe(true)
   })
+
+  // The wrapper owns the focus ring; the inner control must suppress the global
+  // :focus-visible box-shadow, else a hard-cornered square ring paints inside the
+  // rounded field (the "stray rectangle" regression).
+  it('suppresses the global square focus ring on the inner control', () => {
+    render(<Select value="a" options={OPTS} />)
+    expect(select().style.boxShadow).toBe('none')
+  })
 })
