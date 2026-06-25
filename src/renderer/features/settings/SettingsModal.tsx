@@ -1,13 +1,12 @@
 import { useEffect, useState } from 'react'
 import type { JSX } from 'react'
-import { X } from 'lucide-react'
-import { IconButton } from '@renderer/components'
+import { Button, Input, Modal, SegmentedControl, Select, Toggle } from '@renderer/components'
 import { client } from '@renderer/lib/client'
 import type { CompileOptions, DocumentInfo, DocumentSettings, GlobalSettings } from '@shared/ipc'
 
 interface Props {
   open: boolean
-  /** The open document, or null on the home screen (sections 2+3 disabled). */
+  /** The open document, or null on the home screen (per-doc sections disabled). */
   doc: DocumentInfo | null
   onClose: () => void
   /** A main-file change rebuilds the session → lift the fresh DocumentInfo. */
@@ -27,7 +26,6 @@ const PAPER_SIZES = ['a4', 'letter', 'a5', 'b5', 'legal']
 // omit the flag → the account's default (Opus 4.8 on Max/API tiers), so name it
 // rather than show a bare "Default". Fable is NOT offered — region-restricted (no
 // Europe); a live per-region list isn't reachable from the CLI/OAuth (see plan).
-// Version numbers below are current-latest annotations on the alias, not pins.
 const CLAUDE_MODELS: { label: string; value: NonNullable<GlobalSettings['claudeModel']> | '' }[] = [
   { label: 'Opus 4.8 (default)', value: '' },
   { label: 'Sonnet 4.6', value: 'sonnet' },
@@ -43,11 +41,10 @@ const CLAUDE_EFFORTS: { label: string; value: NonNullable<GlobalSettings['claude
   { label: 'Max', value: 'max' }
 ]
 
-/** Settings panel (Lane S) — a fixed-overlay sibling (mirrors HistoryDiffOverlay).
- *  Four areas: editor font [global], main file [per-doc], compiler [per-doc],
- *  theme [global]. On the home screen (no doc) the per-doc sections are disabled.
- *  Global changes persist + broadcast settings:changed (App applies live); a
- *  main-file change returns a fresh DocumentInfo (session rebuilt). */
+/** Settings panel (Lane S): editor font [global], main file + compiler [per-doc],
+ *  theme / assistant / general [global]. Per-doc sections disable on the home
+ *  screen. Global changes persist + broadcast settings:changed (App applies live);
+ *  a main-file change returns a fresh DocumentInfo (session rebuilt). */
 export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.Element | null {
   const [global, setGlobal] = useState<GlobalSettings>({})
   const [docSettings, setDocSettings] = useState<DocumentSettings>({})
@@ -58,12 +55,7 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
     if (!open) return
     void client.settingsGetGlobal().then(setGlobal, () => undefined)
     if (doc) void client.settingsGetDocument().then(setDocSettings, () => undefined)
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [open, doc, onClose])
+  }, [open, doc])
 
   if (!open) return null
 
@@ -71,7 +63,6 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
     setGlobal((g) => ({ ...g, ...patch })) // optimistic; settings:changed re-applies
     void client.settingsSetGlobal(patch).then(setGlobal, () => undefined)
   }
-
   const patchDoc = (patch: DocumentSettings): void => {
     setDocSettings((d) => ({ ...d, ...patch, compile: { ...d.compile, ...patch.compile } }))
     void client.settingsSetDocument(patch).then((res) => {
@@ -86,244 +77,176 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
   const command = `tectonic ${effectiveFlags(mainFile || '<main>.tex', compile)}`
 
   return (
-    <div
-      data-testid="settings-modal"
-      onClick={onClose}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 100,
-        background: 'rgba(33, 30, 25, 0.42)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center'
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 'min(560px, 92vw)',
-          maxHeight: '86vh',
-          overflowY: 'auto',
-          background: 'var(--surface-overlay)',
-          color: 'var(--text-body)',
-          borderRadius: 'var(--radius-lg, 12px)',
-          boxShadow: 'var(--shadow-lg, 0 12px 40px rgba(0,0,0,0.25))',
-          border: '1px solid var(--border-default)'
-        }}
-      >
-        <header
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '14px 18px',
-            borderBottom: '1px solid var(--border-faint)'
-          }}
-        >
-          <h2 style={{ margin: 0, font: 'var(--weight-semibold) var(--text-md)/1 var(--font-sans)' }}>
-            Settings
-          </h2>
-          <IconButton label="Close settings" onClick={onClose}>
-            <X size={17} />
-          </IconButton>
-        </header>
+    <Modal title="Settings" onClose={onClose} testid="settings-modal" width="min(960px, 94vw)">
+      <div style={{ padding: '10px 28px 24px' }}>
+        <Section title="Editor" testid="section-editor-font">
+          <Field label="Font family">
+            <Select
+              aria-label="Editor font family"
+              size="md"
+              value={global.editorFontFamily ?? ''}
+              options={FONT_FAMILIES}
+              onChange={(v) => patchGlobal({ editorFontFamily: v || undefined })}
+              wrapStyle={{ width: '100%' }}
+            />
+          </Field>
+          <Field label="Size">
+            <Input
+              aria-label="Editor font size"
+              size="md"
+              type="number"
+              min={10}
+              max={24}
+              value={global.editorFontSize ?? 13}
+              onChange={(e) => patchGlobal({ editorFontSize: Number(e.target.value) || undefined })}
+              trailing={<span style={{ font: 'var(--text-xs) var(--font-sans)' }}>px</span>}
+              wrapStyle={{ width: 112 }}
+            />
+          </Field>
+        </Section>
 
-        <div style={{ padding: '8px 18px 20px' }}>
-          {/* 1 — editor font [global] */}
-          <Section title="Editor font" testid="section-editor-font">
-            <Row label="Family">
-              <select
-                aria-label="Editor font family"
-                value={global.editorFontFamily ?? ''}
-                onChange={(e) => patchGlobal({ editorFontFamily: e.target.value || undefined })}
-              >
-                {FONT_FAMILIES.map((f) => (
-                  <option key={f.label} value={f.value}>
-                    {f.label}
-                  </option>
-                ))}
-              </select>
-            </Row>
-            <Row label="Size">
-              <input
-                aria-label="Editor font size"
-                type="number"
-                min={10}
-                max={24}
-                value={global.editorFontSize ?? 13}
-                onChange={(e) => patchGlobal({ editorFontSize: Number(e.target.value) || undefined })}
-                style={{ width: 64 }}
-              />
-              <span style={{ color: 'var(--text-faint)' }}>px</span>
-            </Row>
-          </Section>
+        <Section title="Main file" testid="section-main-file" disabled={!doc} note="·per doc·">
+          <Field label="Compile from">
+            <Select
+              aria-label="Main file"
+              data-testid="main-file-select"
+              size="md"
+              disabled={!doc}
+              value={mainFile}
+              options={(doc?.texFiles ?? []).map((f) => ({ label: f, value: f }))}
+              onChange={(v) => patchDoc({ mainFile: v })}
+              wrapStyle={{ width: '100%' }}
+            />
+          </Field>
+        </Section>
 
-          {/* 2 — main file [per-doc] */}
-          <Section title="Main file" testid="section-main-file" disabled={!doc}>
-            <Row label="Compile from">
-              <select
-                aria-label="Main file"
-                data-testid="main-file-select"
-                disabled={!doc}
-                value={mainFile}
-                onChange={(e) => patchDoc({ mainFile: e.target.value })}
-              >
-                {(doc?.texFiles ?? []).map((f) => (
-                  <option key={f} value={f}>
-                    {f}
-                  </option>
-                ))}
-              </select>
-            </Row>
-          </Section>
+        <Section title="Compiler" testid="section-compiler" disabled={!doc} note="·per doc·">
+          <Field label="Paper size">
+            <Select
+              aria-label="Paper size"
+              data-testid="paper-size-select"
+              size="md"
+              disabled={!doc}
+              value={compile.paperSize ?? ''}
+              options={[{ label: 'Default', value: '' }, ...PAPER_SIZES.map((p) => ({ label: p, value: p }))]}
+              onChange={(v) => patchCompile({ paperSize: v || undefined })}
+              wrapStyle={{ width: '100%' }}
+            />
+          </Field>
+          <Field label="Shell escape" hint="Allow packages to run external commands (e.g. minted).">
+            <Toggle
+              aria-label="Shell escape"
+              disabled={!doc}
+              checked={compile.shellEscape ?? false}
+              onChange={(c) => patchCompile({ shellEscape: c || undefined })}
+            />
+          </Field>
+          <Field label="Continue on errors">
+            <Toggle
+              aria-label="Continue on errors"
+              disabled={!doc}
+              checked={compile.continueOnErrors ?? false}
+              onChange={(c) => patchCompile({ continueOnErrors: c || undefined })}
+            />
+          </Field>
+          <pre
+            style={{
+              margin: '8px 0 0',
+              padding: '8px 10px',
+              background: 'var(--surface-well)',
+              border: '1px solid var(--border-faint)',
+              borderRadius: 'var(--radius-sm)',
+              font: 'var(--text-xs)/1.55 var(--font-mono)',
+              color: 'var(--text-muted)',
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all'
+            }}
+          >
+            {command}
+          </pre>
+        </Section>
 
-          {/* 3 — compiler options [per-doc] */}
-          <Section title="Compiler" testid="section-compiler" disabled={!doc}>
-            <Row label="Paper size">
-              <select
-                aria-label="Paper size"
-                data-testid="paper-size-select"
-                disabled={!doc}
-                value={compile.paperSize ?? ''}
-                onChange={(e) => patchCompile({ paperSize: e.target.value || undefined })}
-              >
-                <option value="">Default</option>
-                {PAPER_SIZES.map((p) => (
-                  <option key={p} value={p}>
-                    {p}
-                  </option>
-                ))}
-              </select>
-            </Row>
-            <Row label="Shell escape">
-              <input
-                aria-label="Shell escape"
-                type="checkbox"
-                disabled={!doc}
-                checked={compile.shellEscape ?? false}
-                onChange={(e) => patchCompile({ shellEscape: e.target.checked || undefined })}
-              />
-            </Row>
-            <Row label="Continue on errors">
-              <input
-                aria-label="Continue on errors"
-                type="checkbox"
-                disabled={!doc}
-                checked={compile.continueOnErrors ?? false}
-                onChange={(e) => patchCompile({ continueOnErrors: e.target.checked || undefined })}
-              />
-            </Row>
-            <p
-              style={{
-                margin: '10px 0 0',
-                padding: '8px 10px',
-                background: 'var(--surface-well)',
-                borderRadius: 'var(--radius-sm, 6px)',
-                font: 'var(--text-2xs)/1.5 var(--font-mono)',
-                color: 'var(--text-muted)',
-                wordBreak: 'break-all'
+        <Section title="Appearance" testid="section-theme">
+          <Field label="Theme">
+            <SegmentedControl
+              size="md"
+              value={global.theme ?? 'system'}
+              options={[
+                { value: 'light', label: 'Light' },
+                { value: 'dark', label: 'Dark' },
+                { value: 'system', label: 'System' }
+              ]}
+              onChange={(v) => patchGlobal({ theme: v as GlobalSettings['theme'] })}
+            />
+          </Field>
+        </Section>
+
+        <Section title="Assistant" testid="section-assistant">
+          <Field label="Model">
+            <Select
+              aria-label="Assistant model"
+              size="md"
+              value={global.claudeModel ?? ''}
+              options={CLAUDE_MODELS}
+              onChange={(v) => patchGlobal({ claudeModel: (v || undefined) as GlobalSettings['claudeModel'] })}
+              wrapStyle={{ width: '100%' }}
+            />
+          </Field>
+          <Field label="Effort">
+            <Select
+              aria-label="Assistant effort"
+              size="md"
+              value={global.claudeEffort ?? ''}
+              options={CLAUDE_EFFORTS}
+              onChange={(v) => patchGlobal({ claudeEffort: (v || undefined) as GlobalSettings['claudeEffort'] })}
+              wrapStyle={{ width: '100%' }}
+            />
+          </Field>
+          <Field label="Project history" hint="Commits of project history shown to the model.">
+            <Input
+              aria-label="Bus commit limit"
+              size="md"
+              type="number"
+              min={0}
+              max={100}
+              value={global.busCommitLimit ?? 20}
+              onChange={(e) => patchGlobal({ busCommitLimit: Number(e.target.value) || undefined })}
+              trailing={<span style={{ font: 'var(--text-xs) var(--font-sans)' }}>commits</span>}
+              wrapStyle={{ width: 152 }}
+            />
+          </Field>
+          <Field
+            label="Session"
+            hint={resetAck ? 'Reset — next edit starts fresh.' : !doc ? 'Open a document to reset.' : 'Clears context if the model degrades.'}
+          >
+            <Button
+              aria-label="Reset assistant session"
+              variant="secondary"
+              size="md"
+              disabled={!doc}
+              onClick={() => {
+                void client.assistantReset().then(() => {
+                  setResetAck(true)
+                  setTimeout(() => setResetAck(false), 3000)
+                }, () => undefined)
               }}
             >
-              {command}
-            </p>
-          </Section>
+              Reset session
+            </Button>
+          </Field>
+        </Section>
 
-          {/* 4 — UI theme [global] */}
-          <Section title="Theme" testid="section-theme">
-            <Row label="Appearance">
-              <select
-                aria-label="Theme"
-                value={global.theme ?? 'system'}
-                onChange={(e) => patchGlobal({ theme: e.target.value as GlobalSettings['theme'] })}
-              >
-                <option value="light">Light</option>
-                <option value="dark">Dark</option>
-                <option value="system">System</option>
-              </select>
-            </Row>
-          </Section>
-
-          {/* 5 — assistant [global]: which model + reasoning effort ops run with */}
-          <Section title="Assistant" testid="section-assistant">
-            <Row label="Model">
-              <select
-                aria-label="Assistant model"
-                value={global.claudeModel ?? ''}
-                onChange={(e) =>
-                  patchGlobal({ claudeModel: (e.target.value || undefined) as GlobalSettings['claudeModel'] })
-                }
-              >
-                {CLAUDE_MODELS.map((m) => (
-                  <option key={m.value} value={m.value}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-            </Row>
-            <Row label="Effort">
-              <select
-                aria-label="Assistant effort"
-                value={global.claudeEffort ?? ''}
-                onChange={(e) =>
-                  patchGlobal({ claudeEffort: (e.target.value || undefined) as GlobalSettings['claudeEffort'] })
-                }
-              >
-                {CLAUDE_EFFORTS.map((ef) => (
-                  <option key={ef.value} value={ef.value}>
-                    {ef.label}
-                  </option>
-                ))}
-              </select>
-            </Row>
-            <Row label="Bus history">
-              <input
-                aria-label="Bus commit limit"
-                type="number"
-                min={0}
-                max={100}
-                value={global.busCommitLimit ?? 20}
-                onChange={(e) => patchGlobal({ busCommitLimit: Number(e.target.value) || undefined })}
-                style={{ width: 64 }}
-              />
-              <span style={{ color: 'var(--text-faint)' }}>commits of project history shown to the model</span>
-            </Row>
-            <Row label="Session">
-              <button
-                aria-label="Reset assistant session"
-                disabled={!doc}
-                onClick={() => {
-                  void client.assistantReset().then(
-                    () => {
-                      setResetAck(true)
-                      setTimeout(() => setResetAck(false), 3000)
-                    },
-                    () => undefined
-                  )
-                }}
-              >
-                Reset session
-              </button>
-              <span style={{ color: 'var(--text-faint)' }}>
-                {resetAck ? 'Reset — next edit starts fresh' : !doc ? 'Open a document to reset' : 'Clears context if the model degrades'}
-              </span>
-            </Row>
-          </Section>
-
-          {/* 6 — general [global] */}
-          <Section title="General" testid="section-general">
-            <Row label="Warn before quitting">
-              <input
-                aria-label="Warn before quitting"
-                type="checkbox"
-                checked={global.confirmBeforeQuit ?? true}
-                onChange={(e) => patchGlobal({ confirmBeforeQuit: e.target.checked })}
-              />
-            </Row>
-          </Section>
-        </div>
+        <Section title="General" testid="section-general" last>
+          <Field label="Warn before quitting">
+            <Toggle
+              aria-label="Warn before quitting"
+              checked={global.confirmBeforeQuit ?? true}
+              onChange={(c) => patchGlobal({ confirmBeforeQuit: c })}
+            />
+          </Field>
+        </Section>
       </div>
-    </div>
+    </Modal>
   )
 }
 
@@ -343,25 +266,46 @@ function Section({
   title,
   testid,
   disabled,
+  note,
+  last,
   children
 }: {
   title: string
   testid: string
   disabled?: boolean
+  /** Small tag beside the title (e.g. "·per doc·"). */
+  note?: string
+  /** Drop the bottom rule on the final section. */
+  last?: boolean
   children: JSX.Element | JSX.Element[]
 }): JSX.Element {
   return (
     <section
       data-testid={testid}
       data-disabled={disabled ? 'true' : undefined}
-      style={{ padding: '14px 0', borderBottom: '1px solid var(--border-faint)', opacity: disabled ? 0.5 : 1 }}
+      style={{
+        padding: '20px 0',
+        borderBottom: last ? 'none' : '1px solid var(--border-faint)',
+        opacity: disabled ? 0.55 : 1
+      }}
     >
-      <h3 style={{ margin: '0 0 8px', font: 'var(--weight-semibold) var(--text-sm)/1 var(--font-sans)' }}>
-        {title}
-      </h3>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, margin: '0 0 12px' }}>
+        <h3
+          style={{
+            margin: 0,
+            font: 'var(--weight-semibold) var(--text-xs)/1 var(--font-sans)',
+            letterSpacing: '0.07em',
+            textTransform: 'uppercase',
+            color: 'var(--text-muted)'
+          }}
+        >
+          {title}
+        </h3>
+        {note && <span style={{ font: 'var(--text-xs) var(--font-sans)', color: 'var(--text-faint)' }}>{note}</span>}
+      </div>
       {children}
       {disabled && (
-        <p style={{ margin: '6px 0 0', font: 'var(--text-2xs)/1.4 var(--font-sans)', color: 'var(--text-faint)' }}>
+        <p style={{ margin: '8px 0 0', font: 'var(--text-xs)/1.4 var(--font-sans)', color: 'var(--text-faint)' }}>
           Open a document to change this.
         </p>
       )}
@@ -369,13 +313,18 @@ function Section({
   )
 }
 
-function Row({ label, children }: { label: string; children: JSX.Element | JSX.Element[] }): JSX.Element {
+function Field({ label, hint, children }: { label: string; hint?: string; children: JSX.Element }): JSX.Element {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 0' }}>
-      <span style={{ width: 150, font: 'var(--text-sm)/1.4 var(--font-sans)', color: 'var(--text-muted)' }}>
-        {label}
-      </span>
-      {children}
+    <div style={{ padding: '9px 0' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 24, minHeight: 34 }}>
+        <span style={{ width: 210, flex: '0 0 auto', font: 'var(--text-base)/1.3 var(--font-sans)', color: 'var(--text-body)' }}>{label}</span>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8, flex: '1 1 auto', minWidth: 0 }}>{children}</div>
+      </div>
+      {hint && (
+        <p style={{ margin: '4px 0 0', font: 'var(--text-xs)/1.45 var(--font-sans)', color: 'var(--text-faint)' }}>
+          {hint}
+        </p>
+      )}
     </div>
   )
 }
