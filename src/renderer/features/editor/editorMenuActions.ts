@@ -1,8 +1,10 @@
 import { createElement } from 'react'
-import { ClipboardPaste, Copy, Redo2, Scissors, TextSelect, Undo2 } from 'lucide-react'
+import { BookPlus, Check, ClipboardPaste, Copy, Redo2, Scissors, SpellCheck, TextSelect, Undo2 } from 'lucide-react'
 import { redo, selectAll, undo } from '@codemirror/commands'
 import type { EditorView } from '@codemirror/view'
 import type { ContextMenuEntry } from '../workspace/FileContextMenu'
+import { learnWord, suggest } from './spell/engine'
+import { refreshSpellErrors, spellMissAt } from './spellcheckLatex'
 
 /** ⌘-keyed labels for the menu's right-hand hint column (mac glyphs; the app
  *  targets Electron-on-mac). */
@@ -24,9 +26,9 @@ async function copySelection(view: EditorView): Promise<boolean> {
  *  cut/copy/paste command — only DOM clipboard events); Select All / Undo /
  *  Redo dispatch CodeMirror commands directly. Kept out of EditorPane so the
  *  pane stays under the LOC cap and the mapping is unit-testable. */
-export function buildEditorMenu(view: EditorView): ContextMenuEntry[] {
+export function buildEditorMenu(view: EditorView, pos: number | null = null): ContextMenuEntry[] {
   const hasSelection = !view.state.selection.main.empty
-  return [
+  const base: ContextMenuEntry[] = [
     {
       label: 'Cut',
       icon: createElement(Scissors, { size: ICON }),
@@ -91,4 +93,37 @@ export function buildEditorMenu(view: EditorView): ContextMenuEntry[] {
       }
     }
   ]
+  // Right-click on a misspelled word → corrections at the top of the menu.
+  const spelling = pos == null ? [] : spellingEntries(view, pos)
+  return spelling.length ? [...spelling, ...base] : base
+}
+
+/** Correction rows when the right-click landed on a spell-underlined word:
+ *  up to six suggestions (each replaces the word), then Add to Dictionary. */
+function spellingEntries(view: EditorView, pos: number): ContextMenuEntry[] {
+  const miss = spellMissAt(view.state, pos)
+  if (!miss) return []
+  const suggestions = suggest(miss.word)
+  const rows: ContextMenuEntry[] = suggestions.slice(0, 6).map((s) => ({
+    label: s,
+    icon: createElement(Check, { size: ICON }),
+    onSelect: () => {
+      view.dispatch({ changes: { from: miss.from, to: miss.to, insert: s } })
+      view.focus()
+    }
+  }))
+  if (rows.length === 0) {
+    rows.push({ label: 'No suggestions', icon: createElement(SpellCheck, { size: ICON }), disabled: true, onSelect: () => {} })
+  }
+  rows.push({
+    label: 'Add to Dictionary',
+    icon: createElement(BookPlus, { size: ICON }),
+    onSelect: () => {
+      learnWord(miss.word)
+      refreshSpellErrors(view)
+      view.focus()
+    }
+  })
+  rows.push({ sep: true })
+  return rows
 }

@@ -25,6 +25,16 @@ export interface GlobalSettings {
   /** Show a confirm dialog on ⌘Q before quitting. Default-on: `undefined`/`true`
    *  prompts, `false` quits straight away ("Don't ask again"). */
   confirmBeforeQuit?: boolean
+  /** Native spellcheck (squiggles + right-click correction) on the prose inputs —
+   *  composers and chat, not the LaTeX editor. Default-on: `undefined`/`true` =
+   *  on, `false` = off. Master-switched via session.setSpellCheckerEnabled. */
+  spellcheckEnabled?: boolean
+  /** Personal spell-check dictionary: words learned via the editor's
+   *  "Add to Dictionary". Persisted so they stay accepted across restarts. */
+  customDictionary?: string[]
+  /** Active editor spellcheck language code (see shared/spell/languages). Default
+   *  'en' (American). The dictionary is downloaded on demand, never bundled. */
+  spellLanguage?: string
   /** Model the Claude bridge runs ops with (`claude --model`). A region-safe CLI
    *  alias — each resolves to the latest model available to the account/region, so
    *  it auto-tracks versions and never pins an unavailable id (e.g. fable, which is

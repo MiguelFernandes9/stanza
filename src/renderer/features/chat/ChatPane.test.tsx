@@ -75,6 +75,11 @@ describe('ChatPane — the one whole-document assistant (⌘J)', () => {
     expect(onSubmit).not.toHaveBeenCalled()
   })
 
+  it('opts the composer into native spellcheck', () => {
+    render(<ChatPane {...props()} />)
+    expect(container.querySelector('textarea')!.getAttribute('spellcheck')).toBe('true')
+  })
+
   it('when Claude is unavailable: disables Run, shows the sign-in notice, refuses ⌘↵', () => {
     const onSubmit = vi.fn()
     render(<ChatPane {...props({ aiEnabled: false, onSubmit })} />)

@@ -173,6 +173,7 @@ export function ThreadCard({
           />
           <textarea
             ref={taRef}
+            spellCheck
             value={draft}
             disabled={composerLocked}
             onChange={(e) => setDraft(e.target.value)}

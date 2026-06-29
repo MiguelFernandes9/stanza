@@ -236,6 +236,7 @@ export function ChatPane({ messages, busy, aiEnabled = true, onSubmit, onResolve
           </Tooltip>
           <textarea
             ref={taRef}
+            spellCheck
             value={instruction}
             onChange={(e) => setInstruction(e.target.value)}
             onPaste={att.onPaste}

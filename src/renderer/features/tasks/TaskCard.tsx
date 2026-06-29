@@ -446,6 +446,7 @@ export function TaskCard({
               />
               <textarea
                 ref={taRef}
+                spellCheck
                 value={task.instruction}
                 onChange={(e) => onUpdate(e.target.value)}
                 onPaste={intake.onPaste}

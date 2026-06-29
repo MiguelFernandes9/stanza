@@ -110,6 +110,13 @@ describe('TaskCard header X — collapse vs close', () => {
   })
 })
 
+describe('TaskCard spellcheck', () => {
+  it('the compose textarea opts into native spellcheck', () => {
+    renderPhase('compose', handlers())
+    expect(container.querySelector('textarea')!.getAttribute('spellcheck')).toBe('true')
+  })
+})
+
 describe('TaskCard — Claude unavailable', () => {
   it('compose: Run disabled, Enter does not submit, the sign-in notice shows', () => {
     const h = handlers()

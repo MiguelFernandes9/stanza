@@ -20,11 +20,22 @@
   "build": {
     "appId": "com.miguelfernandes.stanza",
     "productName": "Stanza",
-    "directories": { "buildResources": "build" },
-    "files": ["out/**"],
-    "mac": { "icon": "build/icon.icns", "category": "public.app-category.productivity" },
-    "win": { "icon": "build/icon.ico" },
-    "linux": { "icon": "build/icon.png" }
+    "directories": {
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**"
+    ],
+    "mac": {
+      "icon": "build/icon.icns",
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "icon": "build/icon.ico"
+    },
+    "linux": {
+      "icon": "build/icon.png"
+    }
   },
   "dependencies": {
     "@codemirror/lint": "^6.9.7",
@@ -35,6 +46,7 @@
     "codemirror-lang-latex": "^0.4.1",
     "diff": "^9.0.0",
     "lucide-react": "^1.18.0",
+    "nspell": "^2.1.5",
     "pdfjs-dist": "^6.0.227",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"

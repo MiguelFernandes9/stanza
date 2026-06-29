@@ -50,6 +50,10 @@ export const IpcChannels = {
   settingsGetDocument: 'settings:getDocument',   // invoke → DocumentSettings (open session's record)
   settingsSetDocument: 'settings:setDocument',   // invoke DocumentSettings → DocumentSettingsResult (fresh DocumentInfo when mainFile changed)
   settingsChanged: 'settings:changed',           // main→renderer event: SettingsChanged (live global apply)
+  spellGetWords: 'spell:getWords',               // invoke → string[] (persisted personal dictionary)
+  spellAddWord: 'spell:addWord',                 // invoke string → void (append a learned word, deduped)
+  spellDictionary: 'spell:dictionary',           // invoke code → { aff, dic } (download+cache the language if needed)
+  spellInstalledLanguages: 'spell:installedLanguages', // invoke → string[] (language codes cached on disk)
   documentFilesChanged: 'document:files-changed' // main→renderer event: void — external fs change; renderer re-fetches document:files
 } as const
 export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels]

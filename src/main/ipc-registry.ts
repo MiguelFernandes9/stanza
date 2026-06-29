@@ -42,16 +42,19 @@ import { appendTurns, patchTurnByOpId, removeThread, upsertThread } from './thre
 import { AvailabilityMonitor } from './services/AvailabilityMonitor'
 import { changedFilesInDiff } from './services/diffSpans'
 import { DocumentService } from './services/DocumentService'
+import { DictionaryService } from './services/DictionaryService'
 import { buildOutline } from './services/paperOutline'
 import { ActiveOps, describeScope } from './services/sessionBus'
 import type { LiveConflict } from '@shared/ipc'
 import type { Fork, ForkScope } from './fork/Fork'
 import { DocumentSession } from './session'
 import { mapRecents } from './recents'
+import { setSpellcheckEnabled } from './spellcheck'
 
 const runner = new DefaultProcessRunner()
 let store: Store
 let globalSettings: GlobalSettingsStore
+let dictionaries: DictionaryService
 /** App-global Claude availability (CLI installed + logged in). One probe, cached,
  *  shared by every window — the renderer gates all AI features on it. */
 let availability: AvailabilityMonitor
@@ -136,6 +139,7 @@ export function getRecentProjects(): RecentProject[] {
 export function registerIpcHandlers(): void {
   store = new Store(join(app.getPath('userData'), 'projects.json'))
   globalSettings = new GlobalSettingsStore(join(app.getPath('userData'), 'settings.json'))
+  dictionaries = new DictionaryService(join(app.getPath('userData'), 'dictionaries'))
   availability = new AvailabilityMonitor(runner, (value) =>
     broadcast(IpcChannels.claudeAvailabilityChanged, value),
   )
@@ -441,10 +445,23 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IpcChannels.settingsSetGlobal, (_e, patch: Partial<GlobalSettings>): GlobalSettings => {
     const next = globalSettings.set(patch)
+    // Spellcheck is a session-level master switch → flip it live, no restart.
+    if (patch.spellcheckEnabled !== undefined) setSpellcheckEnabled(patch.spellcheckEnabled)
     // Global font/theme is app-wide → broadcast so EVERY window applies it live.
     broadcast(IpcChannels.settingsChanged, { global: next } satisfies SettingsChanged)
     return next
   })
+
+  // Personal spell dictionary (editor "Add to Dictionary"). Append is atomic in
+  // main (read-merge-write), so concurrent windows can't clobber each other.
+  ipcMain.handle(IpcChannels.spellGetWords, (): string[] => globalSettings.get().customDictionary ?? [])
+  ipcMain.handle(IpcChannels.spellAddWord, (_e, word: string): void => {
+    const words = globalSettings.get().customDictionary ?? []
+    if (!words.includes(word)) globalSettings.set({ customDictionary: [...words, word] })
+  })
+  // Editor dictionaries: download on demand from the CDN, cache in userData.
+  ipcMain.handle(IpcChannels.spellDictionary, (_e, code: string) => dictionaries.ensure(code))
+  ipcMain.handle(IpcChannels.spellInstalledLanguages, () => dictionaries.installed())
 
   ipcMain.handle(IpcChannels.settingsGetDocument, (event): DocumentSettings => {
     const rec = store.getProject(sessionFor(event).info.root)
