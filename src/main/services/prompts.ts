@@ -28,6 +28,7 @@ export const opPrompt = (
   req: ClaudeRequest,
   attachments: StagedAttachment[] = [],
   injectedContext?: string,
+  webEnabled = false,
 ) => {
   const wholeDoc = req.spans.length === 0
   const scope = wholeDoc
@@ -46,7 +47,12 @@ export const opPrompt = (
   const closing = wholeDoc
     ? 'If the instruction calls for changes, apply them directly to the files; if it is a question, make no edits. Reply with a one-paragraph summary — your answer when it was a question.'
     : 'Apply the edits directly to the files. Reply with a one-paragraph summary.'
+  // Only when web access is enabled (the CLI is spawned with the web tools allowed);
+  // otherwise don't invite a tool the session can't use.
+  const web = webEnabled
+    ? '\nYou may use WebFetch to read a URL the instruction references and WebSearch to look up external facts (e.g. a citation); cite anything you used in your summary.'
+    : ''
   return `${injectedContext ? `${injectedContext}\n\n` : ''}Instruction: ${req.instruction}
-${scope}${files}
+${scope}${files}${web}
 ${closing}`
 }

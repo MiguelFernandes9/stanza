@@ -113,10 +113,11 @@ export class ClaudeService {
       // stream-json (needs --verbose) lets us surface the model's live reasoning +
       // tool activity per line; --include-partial-messages adds token-level deltas
       // where the CLI supports them. The final note is read back from the result line.
+      const webEnabled = this.globalSettings.get().allowWebAccess !== false
       args.push(
         '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
         '--permission-mode', 'acceptEdits',
-        opPrompt(req, staged?.files ?? [], digest ?? undefined),
+        opPrompt(req, staged?.files ?? [], digest ?? undefined, webEnabled),
       )
       const proc = await this.claudeIn(workDir, args, undefined, (line) => stream.onLine(line))
       assertCompleted(proc, this.timeoutMs)
@@ -161,7 +162,7 @@ export class ClaudeService {
   ): Promise<ProcResult> {
     return this.runner.run({
       cmd: claudeBin(),
-      args: [...this.modelFlags(), ...args],
+      args: [...this.modelFlags(), ...this.webFlags(), ...args],
       cwd: workDir,
       timeoutMs: this.timeoutMs,
       env: claudeEnv(),
@@ -181,6 +182,15 @@ export class ClaudeService {
     if (g.claudeModel) flags.push('--model', g.claudeModel)
     if (g.claudeEffort) flags.push('--effort', g.claudeEffort)
     return flags
+  }
+
+  /** Pre-approve the web tools when web access is on (default). `acceptEdits`
+   *  auto-approves edits but DENIES network tools headlessly, so WebFetch/WebSearch
+   *  must be listed in `--allowedTools` to run without an (unanswerable) prompt;
+   *  the flag ADDS them — editing is unaffected. Read fresh per call (like the
+   *  model flags) so the Settings toggle takes effect on the next op. */
+  private webFlags(): string[] {
+    return this.globalSettings.get().allowWebAccess !== false ? ['--allowedTools', 'WebFetch,WebSearch'] : []
   }
 }
 

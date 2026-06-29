@@ -55,6 +55,11 @@ afterEach(() => {
   vi.unstubAllEnvs()
 })
 
+/** The op's own argv, after the injected `--model`/`--effort`/`--allowedTools`
+ *  prefix that claudeIn prepends — lets position asserts ignore which flags the
+ *  current settings inject (web access is on by default). */
+const coreArgs = (args: string[]): string[] => args.slice(args.indexOf('-p'))
+
 describe('ClaudeService.runForkTurn', () => {
   test('primes a fresh session in the given workDir, resumes there, returns its id', async () => {
     const runner = new MockRunner(() => claudeJson('done'))
@@ -68,14 +73,14 @@ describe('ClaudeService.runForkTurn', () => {
     expect(runner.calls).toHaveLength(2) // prime + resume
     const prime = runner.calls[0]!
     expect(prime.cwd).toBe(WD)
-    expect(prime.args.slice(0, 2)).toEqual(['-p', '--session-id'])
-    expect(prime.args.slice(3, 5)).toEqual(['--add-dir', WD])
+    expect(coreArgs(prime.args).slice(0, 2)).toEqual(['-p', '--session-id'])
+    expect(coreArgs(prime.args).slice(3, 5)).toEqual(['--add-dir', WD])
     // The prime prompt roots Claude at the fork worktree (the only granted dir).
     expect(prime.args.at(-1)).toContain('Project root: /proj')
     const resume = runner.calls[1]!
     expect(resume.cwd).toBe(WD)
-    expect(resume.args.slice(0, 3)).toEqual(['-p', '--resume', sessionId])
-    expect(sessionId).toBe(prime.args[2]) // returns the id it primed
+    expect(coreArgs(resume.args).slice(0, 3)).toEqual(['-p', '--resume', sessionId])
+    expect(sessionId).toBe(coreArgs(prime.args)[2]) // returns the id it primed
     expect(note).toBe('done')
   })
 
@@ -89,7 +94,7 @@ describe('ClaudeService.runForkTurn', () => {
     )
 
     expect(runner.calls).toHaveLength(1) // no prime
-    expect(runner.calls[0]!.args.slice(0, 3)).toEqual(['-p', '--resume', 'sess-123'])
+    expect(coreArgs(runner.calls[0]!.args).slice(0, 3)).toEqual(['-p', '--resume', 'sess-123'])
     expect(sessionId).toBe('sess-123')
   })
 
@@ -183,7 +188,7 @@ describe('ClaudeService.runForkTurn', () => {
     expect(runner.calls).toHaveLength(2) // prime + resume
     for (const call of runner.calls) {
       expect(call.args.slice(0, 4)).toEqual(['--model', 'sonnet', '--effort', 'low'])
-      expect(call.args[4]).toBe('-p') // the original argv follows the injected flags
+      expect(coreArgs(call.args)[0]).toBe('-p') // the original argv follows the injected flags
     }
   })
 
@@ -203,9 +208,39 @@ describe('ClaudeService.runForkTurn', () => {
 
     await service.runForkTurn(WD, 'fork-1', null, { instruction: 'x', spans: [] }, () => {})
 
-    expect(runner.calls[0]!.args[0]).toBe('-p')
+    expect(coreArgs(runner.calls[0]!.args)[0]).toBe('-p')
     expect(runner.calls[0]!.args).not.toContain('--model')
     expect(runner.calls[0]!.args).not.toContain('--effort')
+  })
+
+  test('allows the web tools by default (WebFetch + WebSearch) on every call', async () => {
+    const runner = new MockRunner(() => claudeJson('done'))
+    const service = new ClaudeService(runner, globalSettings, doc)
+
+    await service.runForkTurn(WD, 'fork-1', null, { instruction: 'x', spans: [] }, () => {})
+
+    expect(runner.calls).toHaveLength(2) // prime + resume — both pre-approve the web tools
+    for (const call of runner.calls) {
+      const i = call.args.indexOf('--allowedTools')
+      expect(i).toBeGreaterThanOrEqual(0)
+      expect(call.args[i + 1]).toBe('WebFetch,WebSearch')
+    }
+    // The op prompt invites web use only when it's enabled.
+    expect(runner.calls[1]!.args.at(-1)).toContain('WebFetch')
+  })
+
+  test('omits the web tools (and the prompt hint) when allowWebAccess is off', async () => {
+    globalSettings.set({ allowWebAccess: false })
+    const runner = new MockRunner(() => claudeJson('done'))
+    const service = new ClaudeService(runner, globalSettings, doc)
+
+    await service.runForkTurn(WD, 'fork-1', 'sess', { instruction: 'x', spans: [] }, () => {})
+
+    const args = runner.calls[0]!.args
+    expect(args).not.toContain('--allowedTools')
+    expect(args).not.toContain('WebFetch,WebSearch')
+    expect(args.at(-1)).not.toContain('WebFetch') // no prompt hint either
+    expect(coreArgs(args).slice(0, 3)).toEqual(['-p', '--resume', 'sess'])
   })
 
   test("injects the document's recent commits into the prompt (bus)", async () => {
@@ -424,8 +459,8 @@ describe('ClaudeService.primeSession', () => {
 
     expect(id).toMatch(UUID_RE)
     expect(runner.calls[0]!.cwd).toBe('/tmp/stanza-wt/doc/fork-c')
-    expect(runner.calls[0]!.args.slice(0, 2)).toEqual(['-p', '--session-id'])
-    expect(runner.calls[0]!.args[2]).toBe(id)
+    expect(coreArgs(runner.calls[0]!.args).slice(0, 2)).toEqual(['-p', '--session-id'])
+    expect(coreArgs(runner.calls[0]!.args)[2]).toBe(id)
   })
 
   test('forwards the abort signal to the runner', async () => {
