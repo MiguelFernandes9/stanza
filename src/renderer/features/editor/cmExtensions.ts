@@ -14,7 +14,8 @@ import { inlineCodeHighlight } from './inlineCode'
 import { autoCloseEnv, envKeymap } from './autoCloseEnv'
 
 /** Editor chrome per design §2 SourceEditor: JetBrains Mono 13px/1.75,
- *  46px right-aligned gutter in ink-300, paper surfaces. */
+ *  a right-aligned gutter in ink-300 (≥46px, grown to fit the line numbers),
+ *  paper surfaces. */
 const stanzaTheme = EditorView.theme({
   '&': {
     height: '100%',
@@ -27,7 +28,10 @@ const stanzaTheme = EditorView.theme({
   '.cm-scroller': { fontFamily: 'var(--font-mono)', lineHeight: '1.75' },
   '.cm-content': { padding: '10px 0', caretColor: 'var(--clay-600)' },
   '.cm-gutters': {
-    width: '46px',
+    // Floor, not a fixed width — CodeMirror grows the gutter to fit the widest
+    // line number (3-/4-digit on long docs), so a hard 46px no longer clips the
+    // numbers or lets the content overlap them.
+    minWidth: '46px',
     justifyContent: 'flex-end',
     background: 'var(--surface-card)',
     color: 'var(--ink-300)',
