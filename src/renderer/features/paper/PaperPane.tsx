@@ -508,14 +508,16 @@ export function PaperPane(props: Props): JSX.Element {
     setTops((prev) => (JSON.stringify(prev) === JSON.stringify(stacked) ? prev : stacked))
   })
 
-  // F5: when a bubble opens, scroll it fully into horizontal view. The rail hangs
-  // off the page's edge and is otherwise reachable only by manual scroll (BUG-46)
-  // — a RIGHT-rail bubble overflows the pane's right, a LEFT-rail one (two-column
-  // left column) the pane's left, so scroll toward whichever side it spills.
-  // Horizontal ONLY — the flash/outline effects own scrollTop; nudging it here
-  // reintroduced the slide jitter (M3-2). Each id is revealed once per open
-  // session (pruned on close, so reopening re-reveals); wait for tops[id] so the
-  // bubble is positioned before we measure it.
+  // F5: when a bubble opens, scroll it into horizontal view WITH a RAIL_GUTTER
+  // margin so it never sits flush against the pane edge. The rail hangs off the
+  // page's edge (BUG-46) — a RIGHT-rail bubble toward the pane's right, a LEFT-rail
+  // one (two-column left column) toward the left. Nudge whenever the bubble is
+  // within a gutter of that edge (overflowing OR just close), not only when it
+  // overflows, so a bubble that technically fits still gets breathing room; the
+  // scroll-extent keeper above guarantees the room to slide it in. Horizontal ONLY
+  // — the flash/outline effects own scrollTop (M3-2). Each id is revealed once per
+  // open session (pruned on close, so reopening re-reveals); wait for tops[id] so
+  // the bubble is positioned before we measure it.
   const revealedRef = useRef<Set<number>>(new Set())
   useEffect(() => {
     for (const id of [...revealedRef.current]) if (!openIds.includes(id)) revealedRef.current.delete(id)
@@ -528,10 +530,11 @@ export function PaperPane(props: Props): JSX.Element {
       revealedRef.current.add(id)
       const br = bubble.getBoundingClientRect()
       const er = el.getBoundingClientRect()
-      const rightOver = br.right - er.right
-      const leftOver = er.left - br.left
-      if (rightOver > 0) el.scrollBy({ left: rightOver + RAIL_GUTTER, behavior: 'smooth' })
-      else if (leftOver > 0) el.scrollBy({ left: -(leftOver + RAIL_GUTTER), behavior: 'smooth' })
+      // Gap from the bubble edge to the pane edge; negative = already past it.
+      const rightGap = er.right - br.right
+      const leftGap = br.left - er.left
+      if (rightGap < RAIL_GUTTER) el.scrollBy({ left: RAIL_GUTTER - rightGap, behavior: 'smooth' })
+      else if (leftGap < RAIL_GUTTER) el.scrollBy({ left: -(RAIL_GUTTER - leftGap), behavior: 'smooth' })
     }
   }, [openIds, tops])
 
@@ -767,20 +770,38 @@ export function PaperPane(props: Props): JSX.Element {
               style={{
                 position: 'absolute',
                 inset: 0,
-                // Clip the rail to the pane while no bubble is open, so the
+                // Clip the rail to the pane while NOTHING is selected, so the
                 // always-cW-wide connector svg can't spawn a spurious h-scrollbar
-                // (#70). When a bubble IS open, switch to visible so the rail
-                // extends the scroll container's scrollWidth and the bubble — which
-                // hangs off the page's right edge — becomes reachable by scrolling
-                // (BUG-46). The page is a separate flow child, so its centring is
-                // unaffected either way.
-                overflow: openTasks.length > 0 ? 'visible' : 'clip',
+                // (#70). While a block is selected (a bubble is open OR about to be),
+                // switch to visible so the rail extends the scroll container's
+                // scrollWidth and the bubble — which hangs off the page's right edge —
+                // becomes reachable (BUG-46). Gating on `activeTask`, not the live
+                // bubble count, keeps scrollWidth STABLE across a block→block switch:
+                // openTasks briefly empties between the old bubble closing and the new
+                // opening, and clipping on that transient collapsed scrollWidth → the
+                // browser clamped scrollLeft, snapping the page to centre before the
+                // new bubble's reveal panned it back (the "centre, then scroll" jank).
+                // The page is a separate flow child, so its centring is unaffected.
+                overflow: openTasks.length > 0 || state.activeTask != null ? 'visible' : 'clip',
                 display: 'flex',
                 justifyContent: 'safe center',
                 pointerEvents: 'none'
               }}
             >
               <div style={{ position: 'relative', width: centerW, height: contentH, flex: '0 0 auto' }}>
+                {/* Scroll-extent keeper: while a block is selected, pin the
+                    scrollable width out to the rail's far edge (+ gutter) — the same
+                    extent an open bubble reaches — so it never collapses in the
+                    no-bubble frame of a block→block switch and clamps the page to
+                    centre. Absolute + zero-size, so it touches neither layout nor the
+                    page's flex centring; gated with the overflow above on `activeTask`. */}
+                {state.activeTask != null && (
+                  <div
+                    aria-hidden
+                    data-testid="rail-scroll-extent"
+                    style={{ position: 'absolute', top: 0, left: cW + RAIL_GUTTER - 1, width: 1, height: 1, pointerEvents: 'none' }}
+                  />
+                )}
                 {/* connector lines: one bezier per open bubble */}
                 <svg
                   width={centerW}
