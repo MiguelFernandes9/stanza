@@ -210,6 +210,16 @@ export function SettingsModal({ open, doc, onClose, onDocChanged, aiStatus, onRe
               wrapStyle={{ width: '100%' }}
             />
           </Field>
+          <Field
+            label="Web access"
+            hint="Let the assistant read URLs and search the web (WebFetch / WebSearch) while editing."
+          >
+            <Toggle
+              aria-label="Allow web access"
+              checked={global.allowWebAccess ?? true}
+              onChange={(c) => patchGlobal({ allowWebAccess: c })}
+            />
+          </Field>
           <Field label="Project history" hint="Commits of project history shown to the model.">
             <Input
               aria-label="Bus commit limit"
