@@ -16,7 +16,7 @@ import { IpcChannels } from '../../shared/ipc'
 import type { ClaudeResult } from '../../shared/ipc/claude'
 import type { ClaudeTurnResult, ThreadRecord } from '../../shared/ipc/conversation'
 import type { ReviewProposal, ReviewResolution } from '../../shared/ipc/review'
-import type { CommitInfo, FileEntry, FileMutationResult, HistoryDiff, PrimeStep } from '../../shared/ipc/document'
+import type { CommitInfo, FileEntry, FileMutationResult, HistoryDiff, PrimeStep, RecentProject } from '../../shared/ipc/document'
 import { DefaultProcessRunner } from '../infra/ProcessRunner'
 import { GitClient } from '../infra/GitClient'
 
@@ -830,5 +830,33 @@ describe('personal spell dictionary (spell:addWord / spell:getWords)', () => {
     h.handlers.clear()
     registerIpcHandlers()
     expect(await invoke(IpcChannels.spellGetWords)).toEqual(['toolchain', 'pseudocode'])
+  })
+})
+
+describe('document:removeRecent (hide from recents, keep data)', () => {
+  const roots = (list: RecentProject[]): string[] => list.map((r) => r.root)
+
+  test('hides the project from recents but keeps its record (threads, summaries)', async () => {
+    const root = '/p/keep-my-chats'
+    writeFileSync(
+      join(h.userData, 'projects.json'),
+      JSON.stringify({ [root]: { primed: true, lastOpened: '2026-02-01T00:00:00Z', threads: [{ id: 't1' }] } }),
+    )
+    h.handlers.clear()
+    registerIpcHandlers()
+
+    expect(roots((await invoke(IpcChannels.documentRecents)) as RecentProject[])).toContain(root)
+
+    await invoke(IpcChannels.documentRemoveRecent, root)
+
+    // Gone from the list…
+    expect(roots((await invoke(IpcChannels.documentRecents)) as RecentProject[])).not.toContain(root)
+    // …but the record (and its conversation threads) survives on disk, flagged hidden.
+    const saved = JSON.parse(readFileSync(join(h.userData, 'projects.json'), 'utf8')) as Record<
+      string,
+      { hidden?: boolean; threads?: unknown[] }
+    >
+    expect(saved[root]!.hidden).toBe(true)
+    expect(saved[root]!.threads).toHaveLength(1)
   })
 })
