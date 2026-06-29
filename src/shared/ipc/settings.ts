@@ -29,6 +29,9 @@ export interface GlobalSettings {
    *  composers and chat, not the LaTeX editor. Default-on: `undefined`/`true` =
    *  on, `false` = off. Master-switched via session.setSpellCheckerEnabled. */
   spellcheckEnabled?: boolean
+  /** Personal spell-check dictionary: words learned via the editor's
+   *  "Add to Dictionary". Persisted so they stay accepted across restarts. */
+  customDictionary?: string[]
   /** Model the Claude bridge runs ops with (`claude --model`). A region-safe CLI
    *  alias — each resolves to the latest model available to the account/region, so
    *  it auto-tracks versions and never pins an unavailable id (e.g. fable, which is

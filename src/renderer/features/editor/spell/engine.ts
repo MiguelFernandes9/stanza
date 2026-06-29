@@ -1,4 +1,5 @@
 import nspell from 'nspell'
+import { client } from '@renderer/lib/client'
 import { LATEX_TERMS } from './latexTerms'
 
 /** Self-contained spell engine: nspell (Hunspell in JS) + the bundled
@@ -22,6 +23,7 @@ export function ensureSpeller(): Promise<void> {
     const [aff, dic] = await Promise.all([import('./en.aff?raw'), import('./en.dic?raw')])
     const s = nspell(aff.default, dic.default)
     for (const term of LATEX_TERMS) s.add(term) // teach LaTeX/technical vocabulary up front
+    for (const w of await loadLearnedWords()) s.add(w) // persisted personal words
     speller = s
   })()
   return loading
@@ -38,7 +40,28 @@ export function suggest(word: string): string[] {
   return speller ? speller.suggest(word).slice(0, 8) : []
 }
 
-/** Teach the in-memory dictionary a word (Add to Dictionary). Session-scoped. */
+/** Teach the dictionary a word (Add to Dictionary): apply now for this window,
+ *  and persist it so it survives restarts (re-applied by ensureSpeller). */
 export function learnWord(word: string): void {
   speller?.add(word)
+  void persistWord(word)
+}
+
+/** Persisted personal words, or [] when the IPC bridge is unavailable — a partial
+ *  client (e.g. a test mock) or offline state must never crash the editor. Guards
+ *  the call itself, not just the promise, since a missing method throws on call. */
+async function loadLearnedWords(): Promise<string[]> {
+  try {
+    return (await client.spellGetWords()) ?? []
+  } catch {
+    return []
+  }
+}
+
+async function persistWord(word: string): Promise<void> {
+  try {
+    await client.spellAddWord(word)
+  } catch {
+    /* persistence unavailable — the word still applies for this session */
+  }
 }

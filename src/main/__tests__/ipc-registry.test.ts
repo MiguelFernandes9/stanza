@@ -816,3 +816,19 @@ esac`)
     await expect(invoke('document:revertTo', target)).rejects.toThrow('SPANS_LOCKED')
   }, 20_000)
 })
+
+describe('personal spell dictionary (spell:addWord / spell:getWords)', () => {
+  test('appends learned words, dedups, and survives a store reload', async () => {
+    expect(await invoke(IpcChannels.spellGetWords)).toEqual([])
+
+    await invoke(IpcChannels.spellAddWord, 'toolchain')
+    await invoke(IpcChannels.spellAddWord, 'pseudocode')
+    await invoke(IpcChannels.spellAddWord, 'toolchain') // duplicate — ignored
+    expect(await invoke(IpcChannels.spellGetWords)).toEqual(['toolchain', 'pseudocode'])
+
+    // A fresh GlobalSettingsStore (app relaunch) reads the same settings.json.
+    h.handlers.clear()
+    registerIpcHandlers()
+    expect(await invoke(IpcChannels.spellGetWords)).toEqual(['toolchain', 'pseudocode'])
+  })
+})

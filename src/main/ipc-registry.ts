@@ -399,6 +399,14 @@ export function registerIpcHandlers(): void {
     return next
   })
 
+  // Personal spell dictionary (editor "Add to Dictionary"). Append is atomic in
+  // main (read-merge-write), so concurrent windows can't clobber each other.
+  ipcMain.handle(IpcChannels.spellGetWords, (): string[] => globalSettings.get().customDictionary ?? [])
+  ipcMain.handle(IpcChannels.spellAddWord, (_e, word: string): void => {
+    const words = globalSettings.get().customDictionary ?? []
+    if (!words.includes(word)) globalSettings.set({ customDictionary: [...words, word] })
+  })
+
   ipcMain.handle(IpcChannels.settingsGetDocument, (event): DocumentSettings => {
     const rec = store.getProject(sessionFor(event).info.root)
     return { mainFile: rec.mainFile, compile: rec.compile }
