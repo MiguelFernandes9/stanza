@@ -1,6 +1,6 @@
 {
   "name": "stanza",
-  "version": "0.1.0",
+  "version": "0.1.0-alpha.1",
   "description": "Local macOS LaTeX editor with live PDF and diff-gated Claude block editing",
   "productName": "Stanza",
   "private": true,

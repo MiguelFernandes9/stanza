@@ -9,10 +9,17 @@ import {
   setRecentsListener,
   setWindowSpawner,
 } from './ipc-registry'
+import { applyUserPath } from './infra/resolveUserPath'
 import { buildAppMenu } from './menu'
 import { handleDocProtocol, registerDocScheme } from './protocol'
 import { quitDialogOptions, shouldPromptQuit } from './quitGuard'
 import { installSpellcheckMenu, setSpellcheckEnabled } from './spellcheck'
+
+// Reconstruct the user's real PATH before ANYTHING spawns a child. A packaged,
+// Finder-launched .app inherits only launchd's bare PATH, so bare-name spawns
+// (claude, tectonic, synctex, latexdiff, git) would ENOENT; this restores the
+// interactive-shell PATH the app gets under `npm run dev`. Must stay first.
+applyUserPath()
 
 registerDocScheme() // must precede app ready
 
