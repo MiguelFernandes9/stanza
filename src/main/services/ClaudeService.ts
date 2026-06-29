@@ -104,7 +104,8 @@ export class ClaudeService {
       // every project file, needless work when no sibling is in flight.
       const outline = others.length > 0 ? this.sections() : []
       const digest = formatSessionDigest(commits, others, limit, outline)
-      args.push('--output-format', 'json', '--permission-mode', 'acceptEdits', opPrompt(req, staged?.files ?? [], digest ?? undefined))
+      const webEnabled = this.globalSettings.get().allowWebAccess !== false
+      args.push('--output-format', 'json', '--permission-mode', 'acceptEdits', opPrompt(req, staged?.files ?? [], digest ?? undefined, webEnabled))
       const proc = await this.claudeIn(workDir, args)
       assertCompleted(proc, this.timeoutMs)
       const note = extractNote(proc.stdout)
@@ -141,7 +142,7 @@ export class ClaudeService {
   private claudeIn(workDir: string, args: string[], signal?: AbortSignal): Promise<ProcResult> {
     return this.runner.run({
       cmd: claudeBin(),
-      args: [...this.modelFlags(), ...args],
+      args: [...this.modelFlags(), ...this.webFlags(), ...args],
       cwd: workDir,
       timeoutMs: this.timeoutMs,
       env: claudeEnv(),
@@ -160,6 +161,15 @@ export class ClaudeService {
     if (g.claudeModel) flags.push('--model', g.claudeModel)
     if (g.claudeEffort) flags.push('--effort', g.claudeEffort)
     return flags
+  }
+
+  /** Pre-approve the web tools when web access is on (default). `acceptEdits`
+   *  auto-approves edits but DENIES network tools headlessly, so WebFetch/WebSearch
+   *  must be listed in `--allowedTools` to run without an (unanswerable) prompt;
+   *  the flag ADDS them — editing is unaffected. Read fresh per call (like the
+   *  model flags) so the Settings toggle takes effect on the next op. */
+  private webFlags(): string[] {
+    return this.globalSettings.get().allowWebAccess !== false ? ['--allowedTools', 'WebFetch,WebSearch'] : []
   }
 }
 
