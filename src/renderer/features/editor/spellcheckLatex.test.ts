@@ -41,6 +41,13 @@ describe('findMisspelledRanges — LaTeX-aware prose extraction', () => {
     expect(words(doc, () => true)).toEqual(['Body', 'texx'])
   })
 
+  it('skips \\usepackage names AND their [..] options (utf8, colorlinks=…)', () => {
+    const doc =
+      '\\usepackage[utf8]{inputenc}\n\\usepackage{subcaption}\n\\usepackage[colorlinks=true,linkcolor=blue]{hyperref} real woxd'
+    // Nothing in the preamble is prose — names AND options skipped; only the body checks.
+    expect(words(doc, () => true)).toEqual(['real', 'woxd'])
+  })
+
   it('skips single letters and all-caps acronyms', () => {
     expect(words('A HTTP I O thing', () => true)).toEqual(['thing'])
   })
