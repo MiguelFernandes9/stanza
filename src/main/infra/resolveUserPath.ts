@@ -27,6 +27,7 @@ function fallbackDirs(home: string): string[] {
     join(home, '.cargo', 'bin'), // tectonic via cargo
     join(home, '.npm-global', 'bin'), // common npm prefix override
     join(home, 'bin'),
+    '/Library/TeX/texbin', // MacTeX / TeX Live — synctex, latexdiff
     '/usr/bin',
     '/bin',
     '/usr/sbin',

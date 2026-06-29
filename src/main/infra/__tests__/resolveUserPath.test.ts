@@ -30,6 +30,7 @@ describe('resolveUserPath', () => {
     expect(dirs).toContain('/opt/homebrew/bin')
     expect(dirs).toContain('/usr/local/bin')
     expect(dirs).toContain('/usr/bin')
+    expect(dirs).toContain('/Library/TeX/texbin') // MacTeX/TeX Live — where synctex lives
   })
 
   test('dedups repeated entries and drops empties, keeping first occurrence', () => {
