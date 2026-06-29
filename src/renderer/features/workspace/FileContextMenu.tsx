@@ -74,8 +74,10 @@ export function FileContextMenu({ x, y, items, onClose }: Props): JSX.Element {
         background: 'var(--surface-card)',
         border: '1px solid var(--border-strong)',
         borderRadius: 'var(--radius-lg)',
-        boxShadow: 'var(--shadow-xl)',
-        animation: 'stz-fade-up 110ms var(--ease-out)'
+        boxShadow: 'var(--shadow-xl)'
+        // No entrance animation: a context menu must appear instantly on
+        // right-click (a fade/slide-in reads as lag). The viewport clamp runs
+        // in useLayoutEffect, so the menu paints once, already positioned.
       }}
     >
       {items.map((it, i) =>
