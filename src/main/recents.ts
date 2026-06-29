@@ -7,12 +7,14 @@ import type { ProjectRecord } from './infra/Store'
  *  Open Recent menu so both stay in sync. */
 export function mapRecents(entries: [string, ProjectRecord][]): RecentProject[] {
   return entries
-    .slice()
+    .filter(([, record]) => !record.hidden) // user-removed rows stay out of the list
     .sort(([, a], [, b]) => (b.lastOpened ?? '').localeCompare(a.lastOpened ?? ''))
     .map(([root, record]) => ({
       root,
       name: basename(root),
-      hasSession: Boolean(record.sessionId),
+      // "Set up" = opened + primed. The per-fork model writes `primed`; the
+      // legacy `sessionId` is kept as a fallback for pre-fork records.
+      setUp: Boolean(record.primed || record.sessionId),
       ...(record.lastOpened !== undefined ? { lastOpened: record.lastOpened } : {})
     }))
 }

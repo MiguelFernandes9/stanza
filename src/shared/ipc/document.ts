@@ -23,7 +23,10 @@ export interface FileEntry {
 export interface RecentProject {
   root: string
   name: string
-  hasSession: boolean
+  /** Whether the project has been opened + primed (blocks parsed, repo + session
+   *  ready) — drives the "set up" vs "not set up" recents row. Derived from the
+   *  record's `primed` flag (or a legacy pre-fork `sessionId`). */
+  setUp: boolean
   /** ISO timestamp of the last open — drives the recents "opened … ago" line. */
   lastOpened?: string
 }

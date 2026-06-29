@@ -105,7 +105,15 @@ export function OpenScreen({ onNewDocument, onOpenFolder, onOpenRecent, error }:
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {recents.map((r) => (
-              <RecentRow key={r.root} recent={r} onOpen={(recent) => onOpenRecent(recent.root)} />
+              <RecentRow
+                key={r.root}
+                recent={r}
+                onOpen={(recent) => onOpenRecent(recent.root)}
+                onRemove={(recent) => {
+                  setRecents((rs) => rs.filter((x) => x.root !== recent.root)) // optimistic
+                  void client.documentRemoveRecent(recent.root)
+                }}
+              />
             ))}
           </div>
 
