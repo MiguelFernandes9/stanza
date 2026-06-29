@@ -20,9 +20,12 @@ export const IpcChannels = {
   synctexForward: 'synctex:forward',  // invoke BlockSpan → PdfRect[]
   claudeRun: 'claude:run',            // invoke ClaudeRequest → ClaudeResult
   claudeRunTurn: 'claude:runTurn',    // invoke ClaudeTurnRequest → ClaudeTurnResult (persistent thread bubble)
+  attachmentsPick: 'attachments:pick', // invoke → PickedAttachment[] (OS file picker; no repo copy)
   claudeStatus: 'claude:status',      // main→renderer event: ClaudeStatus
   summaryStatus: 'summary:status',    // main→renderer event: SummaryStatus — paper-context refresh in flight
   claudeHistory: 'claude:history',    // invoke → OpRecord[] (chat pane, F9)
+  claudeAvailability: 'claude:availability', // invoke {force?: boolean} → ClaudeAvailability (gates all AI features)
+  claudeAvailabilityChanged: 'claude:availabilityChanged', // main→renderer event: ClaudeAvailability (auth flipped)
   assistantReset: 'assistant:reset',  // invoke → void — clear the doc's Claude session so the next op primes fresh
   threadsList: 'threads:list',        // invoke → ThreadRecord[] (persistent bubbles, restored on open)
   threadsDelete: 'threads:delete',    // invoke threadId → void (drop a persistent bubble's record)

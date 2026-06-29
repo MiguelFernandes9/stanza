@@ -3,7 +3,7 @@ import type { JSX } from 'react'
 import { Check, CircleSlash, MessagesSquare, PenLine, Sparkles } from 'lucide-react'
 import { client } from '@renderer/lib/client'
 import type { CompileState } from '@renderer/components'
-import type { PdfRect, InversePoint, SourceLocation, BlockSpan } from '@shared/ipc'
+import type { Attachment, PdfRect, InversePoint, SourceLocation, BlockSpan } from '@shared/ipc'
 import type { BlockNode } from '@shared/blocks/types'
 import { usePdfDocument } from '../pdf/usePdfDocument'
 import { PdfPageStack } from '../pdf/PdfPageStack'
@@ -12,7 +12,7 @@ import type { PDFDocumentProxy } from '../pdf/pdfjsSetup'
 import { ReviewOverlay } from '../review/ReviewOverlay'
 import { blockLabel, TaskCard, tagKind } from '../tasks/TaskCard'
 import { ThreadCard } from '../tasks/ThreadCard'
-import { isWholeDocTask } from '../tasks/taskStore'
+import { isWholeDocTask, taskSnapshot } from '../tasks/taskStore'
 import type { PaneView, TaskPhase, TaskState } from '../tasks/taskStore'
 import { BlockOverlay } from './BlockOverlay'
 import { WholeDocRail } from './WholeDocRail'
@@ -52,6 +52,8 @@ interface Props {
   /** True while the paper-context summarizer is refreshing — the composer shows a
    *  "context updating" hint (provisional summaries, Part A). */
   contextBuilding?: boolean
+  /** False when Claude is unavailable — composers in the rail cards are disabled. */
+  aiEnabled?: boolean
   /** stanza-doc:// url with compile nonce; null before the first ok compile. */
   pdfUrl: string | null
   /** Read-mode click on the page → synctex inverse (F7). PDF pt. */
@@ -78,8 +80,13 @@ interface Props {
   onTogglePersistent: (taskId: number) => void
   onSubmitThreadTurn: (taskId: number, text: string) => void
   onDeleteThread: (taskId: number) => void
-  /** Snapshot the task's first block from the rendered canvas → attach the PNG. */
+  /** Snapshot the task's first block from the rendered canvas → attach the PNG
+   *  (empty string toggles the existing snapshot off). */
   onAttachImage: (taskId: number, image: string) => void
+  /** Remove one staged attachment (a chip ×) by its id. */
+  onRemoveAttachment: (taskId: number, id: string) => void
+  /** Stage user-picked / pasted / dropped files on a task. */
+  onAddAttachments: (taskId: number, items: Attachment[]) => void
   /** Snapshot couldn't be captured (block off-screen / canvas error) — surface it. */
   onSnapshotError?: () => void
   onView: (view: PaneView) => void
@@ -209,7 +216,8 @@ export function PaperPane(props: Props): JSX.Element {
   const captureBlock = (taskId: number): void => {
     // The snapshot button toggles: a second press on an attached shot removes it
     // (empty string clears in the reducer) rather than re-capturing.
-    if (state.tasks.find((t) => t.id === taskId)?.image) {
+    const t = state.tasks.find((x) => x.id === taskId)
+    if (t && taskSnapshot(t)) {
       props.onAttachImage(taskId, '')
       return
     }
@@ -500,14 +508,16 @@ export function PaperPane(props: Props): JSX.Element {
     setTops((prev) => (JSON.stringify(prev) === JSON.stringify(stacked) ? prev : stacked))
   })
 
-  // F5: when a bubble opens, scroll it fully into horizontal view. The rail hangs
-  // off the page's edge and is otherwise reachable only by manual scroll (BUG-46)
-  // — a RIGHT-rail bubble overflows the pane's right, a LEFT-rail one (two-column
-  // left column) the pane's left, so scroll toward whichever side it spills.
-  // Horizontal ONLY — the flash/outline effects own scrollTop; nudging it here
-  // reintroduced the slide jitter (M3-2). Each id is revealed once per open
-  // session (pruned on close, so reopening re-reveals); wait for tops[id] so the
-  // bubble is positioned before we measure it.
+  // F5: when a bubble opens, scroll it into horizontal view WITH a RAIL_GUTTER
+  // margin so it never sits flush against the pane edge. The rail hangs off the
+  // page's edge (BUG-46) — a RIGHT-rail bubble toward the pane's right, a LEFT-rail
+  // one (two-column left column) toward the left. Nudge whenever the bubble is
+  // within a gutter of that edge (overflowing OR just close), not only when it
+  // overflows, so a bubble that technically fits still gets breathing room; the
+  // scroll-extent keeper above guarantees the room to slide it in. Horizontal ONLY
+  // — the flash/outline effects own scrollTop (M3-2). Each id is revealed once per
+  // open session (pruned on close, so reopening re-reveals); wait for tops[id] so
+  // the bubble is positioned before we measure it.
   const revealedRef = useRef<Set<number>>(new Set())
   useEffect(() => {
     for (const id of [...revealedRef.current]) if (!openIds.includes(id)) revealedRef.current.delete(id)
@@ -520,10 +530,11 @@ export function PaperPane(props: Props): JSX.Element {
       revealedRef.current.add(id)
       const br = bubble.getBoundingClientRect()
       const er = el.getBoundingClientRect()
-      const rightOver = br.right - er.right
-      const leftOver = er.left - br.left
-      if (rightOver > 0) el.scrollBy({ left: rightOver + RAIL_GUTTER, behavior: 'smooth' })
-      else if (leftOver > 0) el.scrollBy({ left: -(leftOver + RAIL_GUTTER), behavior: 'smooth' })
+      // Gap from the bubble edge to the pane edge; negative = already past it.
+      const rightGap = er.right - br.right
+      const leftGap = br.left - er.left
+      if (rightGap < RAIL_GUTTER) el.scrollBy({ left: RAIL_GUTTER - rightGap, behavior: 'smooth' })
+      else if (leftGap < RAIL_GUTTER) el.scrollBy({ left: -(RAIL_GUTTER - leftGap), behavior: 'smooth' })
     }
   }, [openIds, tops])
 
@@ -759,20 +770,38 @@ export function PaperPane(props: Props): JSX.Element {
               style={{
                 position: 'absolute',
                 inset: 0,
-                // Clip the rail to the pane while no bubble is open, so the
+                // Clip the rail to the pane while NOTHING is selected, so the
                 // always-cW-wide connector svg can't spawn a spurious h-scrollbar
-                // (#70). When a bubble IS open, switch to visible so the rail
-                // extends the scroll container's scrollWidth and the bubble — which
-                // hangs off the page's right edge — becomes reachable by scrolling
-                // (BUG-46). The page is a separate flow child, so its centring is
-                // unaffected either way.
-                overflow: openTasks.length > 0 ? 'visible' : 'clip',
+                // (#70). While a block is selected (a bubble is open OR about to be),
+                // switch to visible so the rail extends the scroll container's
+                // scrollWidth and the bubble — which hangs off the page's right edge —
+                // becomes reachable (BUG-46). Gating on `activeTask`, not the live
+                // bubble count, keeps scrollWidth STABLE across a block→block switch:
+                // openTasks briefly empties between the old bubble closing and the new
+                // opening, and clipping on that transient collapsed scrollWidth → the
+                // browser clamped scrollLeft, snapping the page to centre before the
+                // new bubble's reveal panned it back (the "centre, then scroll" jank).
+                // The page is a separate flow child, so its centring is unaffected.
+                overflow: openTasks.length > 0 || state.activeTask != null ? 'visible' : 'clip',
                 display: 'flex',
                 justifyContent: 'safe center',
                 pointerEvents: 'none'
               }}
             >
               <div style={{ position: 'relative', width: centerW, height: contentH, flex: '0 0 auto' }}>
+                {/* Scroll-extent keeper: while a block is selected, pin the
+                    scrollable width out to the rail's far edge (+ gutter) — the same
+                    extent an open bubble reaches — so it never collapses in the
+                    no-bubble frame of a block→block switch and clamps the page to
+                    centre. Absolute + zero-size, so it touches neither layout nor the
+                    page's flex centring; gated with the overflow above on `activeTask`. */}
+                {state.activeTask != null && (
+                  <div
+                    aria-hidden
+                    data-testid="rail-scroll-extent"
+                    style={{ position: 'absolute', top: 0, left: cW + RAIL_GUTTER - 1, width: 1, height: 1, pointerEvents: 'none' }}
+                  />
+                )}
                 {/* connector lines: one bezier per open bubble */}
                 <svg
                   width={centerW}
@@ -890,6 +919,7 @@ export function PaperPane(props: Props): JSX.Element {
                           task={t}
                           blocks={blocksOf(t.blockIds)}
                           side={side}
+                          aiEnabled={props.aiEnabled}
                           refCb={(el) => {
                             cardEls.current[t.id] = el
                           }}
@@ -902,6 +932,8 @@ export function PaperPane(props: Props): JSX.Element {
                           }}
                           onOpenReview={() => setReviewId(t.id)}
                           onSnapshot={() => captureBlock(t.id)}
+                          onRemoveAttachment={(id) => props.onRemoveAttachment(t.id, id)}
+                          onAddAttachments={(items) => props.onAddAttachments(t.id, items)}
                         />
                       ) : (
                         <TaskCard
@@ -911,6 +943,7 @@ export function PaperPane(props: Props): JSX.Element {
                           side={side}
                           adding={state.adding}
                           contextBuilding={props.contextBuilding}
+                          aiEnabled={props.aiEnabled}
                           onToggleAdding={props.onToggleAdding}
                           onRemoveBlock={(bid) => props.onRemoveBlock(t.id, bid)}
                           onActivate={() => props.onActivateTask(t.id)}
@@ -928,6 +961,8 @@ export function PaperPane(props: Props): JSX.Element {
                           onResolve={(accept) => props.onResolveTask(t.id, accept)}
                           onOpenReview={() => setReviewId(t.id)}
                           onSnapshot={() => captureBlock(t.id)}
+                          onRemoveAttachment={(id) => props.onRemoveAttachment(t.id, id)}
+                          onAddAttachments={(items) => props.onAddAttachments(t.id, items)}
                         />
                       )}
                     </div>

@@ -6,7 +6,11 @@
  *    whose override runs `latexCompletionSource` + ours together.
  *  - `enableLinting: false` — the compile-error gutter owns diagnostics; the lib
  *    linter would double-report missing `\ref`/`\cite` against tectonic's log. */
-export const AUTO_CLOSE_TAGS = true
+// Off: the lib's auto-close inserts an indented body + matching `\end{}` when you
+// finish a `\begin{env}`. That 2-space body indent is a code-editor reflex — LaTeX
+// has no indentation-significant syntax, so it just litters the source. We keep the
+// useful half (auto-`\end`, no indent) in our own `autoCloseEnv` instead.
+export const AUTO_CLOSE_TAGS = false
 
 export interface LatexConfig {
   enableAutocomplete: boolean

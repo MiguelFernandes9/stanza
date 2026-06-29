@@ -1,11 +1,12 @@
-import { app, BrowserWindow, dialog, ipcMain, webContents } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, webContents } from 'electron'
 import type { IpcMainInvokeEvent, WebContents } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { IpcChannels } from '@shared/ipc'
+import { basename, dirname, join } from 'node:path'
+import { attachmentKind, IpcChannels } from '@shared/ipc'
 import type {
   BlockSpan,
+  ClaudeAvailability,
   ClaudeRequest,
   ClaudeResult,
   ClaudeTurnRequest,
@@ -18,6 +19,7 @@ import type {
   InversePoint,
   IpcChannel,
   OpRecord,
+  PickedAttachment,
   PreviewRequest,
   RecentProject,
   ReviewDecision,
@@ -37,6 +39,7 @@ import { DefaultProcessRunner } from './infra/ProcessRunner'
 import { GitClient } from './infra/GitClient'
 import { Store, GlobalSettingsStore } from './infra/Store'
 import { appendTurns, patchTurnByOpId, removeThread, upsertThread } from './threadStore'
+import { AvailabilityMonitor } from './services/AvailabilityMonitor'
 import { changedFilesInDiff } from './services/diffSpans'
 import { DocumentService } from './services/DocumentService'
 import { DictionaryService } from './services/DictionaryService'
@@ -52,6 +55,9 @@ const runner = new DefaultProcessRunner()
 let store: Store
 let globalSettings: GlobalSettingsStore
 let dictionaries: DictionaryService
+/** App-global Claude availability (CLI installed + logged in). One probe, cached,
+ *  shared by every window — the renderer gates all AI features on it. */
+let availability: AvailabilityMonitor
 /** In-flight ops across all windows (shared by every DocumentSession) — the session
  *  bus reads it so one window's op sees what its siblings are editing right now. */
 const activeOps = new ActiveOps()
@@ -134,6 +140,12 @@ export function registerIpcHandlers(): void {
   store = new Store(join(app.getPath('userData'), 'projects.json'))
   globalSettings = new GlobalSettingsStore(join(app.getPath('userData'), 'settings.json'))
   dictionaries = new DictionaryService(join(app.getPath('userData'), 'dictionaries'))
+  availability = new AvailabilityMonitor(runner, (value) =>
+    broadcast(IpcChannels.claudeAvailabilityChanged, value),
+  )
+  // Warm the probe at startup so the first window has the answer; a flip
+  // broadcasts to every open window.
+  void availability.get()
   documents = new DocumentService({
     store,
     makeGit: (root) => new GitClient(runner, root),
@@ -282,6 +294,14 @@ export function registerIpcHandlers(): void {
     (event): OpRecord[] => store.getProject(sessionFor(event).info.root).ops ?? [],
   )
 
+  // App-global, not per-window: availability must be known on the launcher screen
+  // before any document is open. force=true (Settings "Recheck") re-probes.
+  ipcMain.handle(
+    IpcChannels.claudeAvailability,
+    (_e, opts?: { force?: boolean }): Promise<ClaudeAvailability> =>
+      availability.get(opts?.force ?? false),
+  )
+
   ipcMain.handle(
     IpcChannels.threadsList,
     (event): ThreadRecord[] => store.getProject(sessionFor(event).info.root).threads ?? [],
@@ -388,6 +408,36 @@ export function registerIpcHandlers(): void {
     }
     const rels = await doc.files.importFiles(a.dir, result.filePaths)
     return fileMutationResult(doc, rels[0])
+  })
+
+  // Attachment picker: the OS dialog for files to send WITH a chat prompt. Unlike
+  // documentUpload, this copies nothing into the repo — the bytes stay on disk and
+  // are staged to a temp dir at send time (ClaudeService.writeAttachments). Only a
+  // small image preview crosses IPC so a large PDF never round-trips as base64.
+  ipcMain.handle(IpcChannels.attachmentsPick, async (): Promise<PickedAttachment[]> => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        { name: 'Attachments', extensions: ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'pdf', 'txt', 'md', 'tex', 'bib', 'csv', 'json'] },
+        { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    })
+    if (result.canceled) return []
+    return result.filePaths.map((p) => {
+      const name = basename(p)
+      const kind = attachmentKind(name)
+      let thumbDataUrl: string | undefined
+      if (kind === 'image') {
+        try {
+          const img = nativeImage.createFromPath(p)
+          if (!img.isEmpty()) thumbDataUrl = img.resize({ height: 48 }).toDataURL()
+        } catch {
+          // No preview is fine — the chip falls back to a document glyph.
+        }
+      }
+      return { path: p, name, kind, thumbDataUrl }
+    })
   })
 
   // ---- Settings (Lane S) ----
@@ -736,7 +786,12 @@ async function runClaudeTurn(
   wc: WebContents,
   req: ClaudeTurnRequest,
 ): Promise<ClaudeTurnResult> {
-  const claudeReq: ClaudeRequest = { instruction: req.instruction, spans: req.spans, imageDataUrl: req.imageDataUrl }
+  const claudeReq: ClaudeRequest = {
+    instruction: req.instruction,
+    spans: req.spans,
+    attachments: req.attachments,
+    imageDataUrl: req.imageDataUrl,
+  }
   doc.review.assertSpansFree(req.spans)
   // A PERSISTENT fork keyed by the thread id: its worktree + session live across
   // turns (a live chat), and survive a relaunch (the path is stable per thread).

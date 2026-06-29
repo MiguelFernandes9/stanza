@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import type { JSX } from 'react'
-import { Button, Input, Modal, SegmentedControl, Select, Toggle } from '@renderer/components'
+import { Badge, Button, Input, Modal, SegmentedControl, Select, StatusDot, Toggle } from '@renderer/components'
 import { client } from '@renderer/lib/client'
 import { DEFAULT_SPELL_LANGUAGE, SPELL_LANGUAGES } from '@shared/spell/languages'
+import { reasonLabel, type AiStatus } from '@renderer/features/assistant/availability'
 import type { CompileOptions, DocumentInfo, DocumentSettings, GlobalSettings } from '@shared/ipc'
 
 interface Props {
@@ -12,6 +13,9 @@ interface Props {
   onClose: () => void
   /** A main-file change rebuilds the session → lift the fresh DocumentInfo. */
   onDocChanged: (doc: DocumentInfo) => void
+  /** Claude availability + a force re-probe (Assistant ▸ Status). App owns both. */
+  aiStatus?: AiStatus
+  onRecheckAi?: () => void
 }
 
 const FONT_FAMILIES = [
@@ -46,7 +50,7 @@ const CLAUDE_EFFORTS: { label: string; value: NonNullable<GlobalSettings['claude
  *  theme / assistant / general [global]. Per-doc sections disable on the home
  *  screen. Global changes persist + broadcast settings:changed (App applies live);
  *  a main-file change returns a fresh DocumentInfo (session rebuilt). */
-export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.Element | null {
+export function SettingsModal({ open, doc, onClose, onDocChanged, aiStatus, onRecheckAi }: Props): JSX.Element | null {
   const [global, setGlobal] = useState<GlobalSettings>({})
   const [docSettings, setDocSettings] = useState<DocumentSettings>({})
   // Transient "Reset — next edit starts fresh" ack after the reset button.
@@ -183,6 +187,9 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
         </Section>
 
         <Section title="Assistant" testid="section-assistant">
+          <Field label="Status">
+            <AiStatusControl status={aiStatus ?? { status: 'checking' }} onRecheck={onRecheckAi} />
+          </Field>
           <Field label="Model">
             <Select
               aria-label="Assistant model"
@@ -334,6 +341,61 @@ function Section({
         </p>
       )}
     </section>
+  )
+}
+
+/** Assistant ▸ Status: the live Claude availability (signed-in account, or the
+ *  reason it's unavailable + the `claude auth login` fix) plus a force-Recheck. */
+function AiStatusControl({ status, onRecheck }: { status: AiStatus; onRecheck?: () => void }): JSX.Element {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <span data-testid="ai-status-detail" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+          {status.status === 'checking' && <StatusDot tone="busy" pulse label="Checking…" />}
+          {status.status === 'available' && (
+            <>
+              <StatusDot tone="ok" label={status.email ?? 'Signed in'} />
+              {status.subscriptionType && (
+                <Badge tone="info" size="sm">
+                  {status.subscriptionType}
+                </Badge>
+              )}
+            </>
+          )}
+          {status.status === 'unavailable' && <StatusDot tone="error" label={reasonLabel(status.reason)} />}
+        </span>
+        <div style={{ flex: 1 }} />
+        <Button
+          aria-label="Recheck Claude availability"
+          data-testid="ai-recheck"
+          variant="secondary"
+          size="md"
+          loading={status.status === 'checking'}
+          disabled={!onRecheck}
+          onClick={onRecheck}
+        >
+          Recheck
+        </Button>
+      </div>
+      {status.status === 'unavailable' && (
+        <pre
+          data-testid="ai-auth-hint"
+          style={{
+            margin: 0,
+            padding: '8px 10px',
+            background: 'var(--surface-well)',
+            border: '1px solid var(--border-faint)',
+            borderRadius: 'var(--radius-sm)',
+            font: 'var(--text-xs)/1.55 var(--font-mono)',
+            color: 'var(--text-muted)',
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-all'
+          }}
+        >
+          claude auth login
+        </pre>
+      )}
+    </div>
   )
 }
 

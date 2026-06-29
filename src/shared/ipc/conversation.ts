@@ -1,4 +1,5 @@
 import type { BlockSpan, LiveConflict } from './claude'
+import type { Attachment } from './attachments'
 import type { ReviewProposal } from './review'
 
 /** Persistent conversation bubbles ("Keep chat"). A thread is a multi-turn
@@ -47,8 +48,11 @@ export interface ClaudeTurnRequest {
   instruction: string
   spans: BlockSpan[]
   blockIds: string[]
-  /** Optional PNG snapshot (data URL) of the anchor block, staged by the thread
-   *  composer's snapshot button so Claude sees the rendered output this turn. */
+  /** Files attached to this turn (images, PDFs, text, or the anchor-block
+   *  snapshot). Staged to a temp dir Claude can Read. */
+  attachments?: Attachment[]
+  /** @deprecated Single block snapshot (data URL) — folded into `attachments`.
+   *  Kept transiently during the renderer migration; the bridge normalizes it. */
   imageDataUrl?: string
 }
 

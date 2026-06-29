@@ -9,6 +9,7 @@ import { Workspace } from '@renderer/features/workspace/Workspace'
 import { SettingsModal } from '@renderer/features/settings/SettingsModal'
 import { applyGlobalSettings } from '@renderer/features/settings/applyGlobalSettings'
 import { setActiveLanguage, setEnabled } from '@renderer/features/editor/spell/engine'
+import { useAiAvailability } from '@renderer/features/assistant/availability'
 import { client } from '@renderer/lib/client'
 import { DEFAULT_SPELL_LANGUAGE } from '@shared/spell/languages'
 import type { DocumentInfo, GlobalSettings, PrimeStep } from '@shared/ipc'
@@ -29,6 +30,8 @@ export default function App(): JSX.Element {
   const [priming, setPriming] = useState<Priming | null>(null)
   const [events, setEvents] = useState<PrimeStep[]>([])
   const [error, setError] = useState<string | null>(null)
+  // One signal for the whole renderer: is Claude usable? Gates every AI feature.
+  const { ai, enabled: aiEnabled, recheck: recheckAi } = useAiAvailability()
 
   // After a renderer crash the main process auto-reloads this window; if a
   // document is still open there, restore straight into the workspace (L6)
@@ -134,7 +137,13 @@ export default function App(): JSX.Element {
   return (
     <>
       {doc ? (
-        <Workspace doc={doc} onDocChanged={setDoc} onOpenSettings={openSettings} />
+        <Workspace
+          doc={doc}
+          onDocChanged={setDoc}
+          onOpenSettings={openSettings}
+          aiEnabled={aiEnabled}
+          aiStatus={ai}
+        />
       ) : (
         <OpenScreen
           onNewDocument={() => setNewDocOpen(true)}
@@ -169,6 +178,8 @@ export default function App(): JSX.Element {
         doc={doc}
         onClose={() => setSettingsOpen(false)}
         onDocChanged={setDoc}
+        aiStatus={ai}
+        onRecheckAi={recheckAi}
       />
     </>
   )

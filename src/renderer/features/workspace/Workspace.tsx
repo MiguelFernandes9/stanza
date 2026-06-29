@@ -4,6 +4,7 @@ import { ConfirmDialog, Toast } from '@renderer/components'
 import { client } from '@renderer/lib/client'
 import type { BlockNode } from '@shared/blocks/types'
 import type {
+  Attachment,
   BlockSpan,
   CommitInfo,
   CompileError,
@@ -15,6 +16,7 @@ import type {
 } from '@shared/ipc'
 import { ChatPane } from '../chat/ChatPane'
 import { chatMessages } from '../chat/chatModel'
+import type { AiStatus } from '../assistant/availability'
 import { saveActiveAndCompile, saveAllAndCompile } from './compileTriggers'
 import { filesToReloadAfterResolve } from './reviewReload'
 import { EditorPane } from '../editor/EditorPane'
@@ -37,7 +39,7 @@ import { HistoryDiffOverlay } from '../review/HistoryDiffOverlay'
 import type { PdfFlash } from '../paper/PaperPane'
 import { expandIds, flattenBlocks, parentOf, taskSpans } from '../paper/paperModel'
 import { resolveToKnownFile } from '@renderer/lib/paths'
-import { dismissRoute, initialTaskState, isWholeDocTask, taskReducer } from '../tasks/taskStore'
+import { dismissRoute, initialTaskState, isWholeDocTask, SNAPSHOT_ID, taskReducer } from '../tasks/taskStore'
 import { pendingRemap, restoreAnchors, vanishedThreads } from '../tasks/reanchor'
 import { planMove } from './fileDrag'
 import { revealBlock } from './revealBlock'
@@ -57,12 +59,16 @@ interface Props {
   onDocChanged?: (doc: DocumentInfo) => void
   /** Open the Settings panel (TitleBar's gear); App owns the state. */
   onOpenSettings: () => void
+  /** Whether Claude is usable (CLI installed + logged in). Gates every AI entry
+   *  point; `aiStatus` carries the reason for the toolbar indicator. App owns it. */
+  aiEnabled?: boolean
+  aiStatus?: AiStatus
 }
 
 /** Workspace — design §2: TitleBar, sidebar, paper pane with the margin-rail
  *  edit loop (FD4). Source editor (F4) and chat pane (FD6) still plug into
  *  placeholders. ⌘R compile · ⌘E source · ⌘J assistant. */
-export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Element {
+export function Workspace({ doc, onDocChanged, onOpenSettings, aiEnabled = true, aiStatus }: Props): JSX.Element {
   const [files, setFiles] = useState<FileEntry[]>([])
   const [blocks, setBlocks] = useState<BlockNode[]>([])
   const [history, setHistory] = useState<CommitInfo[]>([])
@@ -566,6 +572,15 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
       tone: 'danger'
     })
 
+  /** Block selection opens a composer, so when Claude is signed out there's
+   *  nothing to open — explain it instead of silently doing nothing. */
+  const showSignedOutToast = (): void =>
+    setToast({
+      title: 'Claude is signed out',
+      message: 'Run claude auth login in a terminal, then click Recheck in Settings.',
+      tone: 'neutral'
+    })
+
   const applyMutation = (res: FileMutationResult): void => {
     setFiles(res.files)
     loadBlocks() // spans/overlays follow renames & deletes
@@ -661,8 +676,8 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
 
   /** Fire claude:run for a task already in busy phase and wire its result
    *  back by taskId (op-started → proposal/noop, or op-failed). */
-  const runOp = (taskId: number, instruction: string, spans: BlockSpan[], image?: string): void => {
-    void client.claudeRun({ instruction, spans, imageDataUrl: image }).then(
+  const runOp = (taskId: number, instruction: string, spans: BlockSpan[], attachments?: Attachment[]): void => {
+    void client.claudeRun({ instruction, spans, attachments }).then(
       (res) => {
         dispatch({ type: 'op-started', taskId, opId: res.opId })
         if (res.proposal) dispatch({ type: 'proposal', taskId, proposal: res.proposal, note: res.note, conflict: res.conflict })
@@ -706,18 +721,18 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
     }
     if (instructionOverride) dispatch({ type: 'update-instruction', taskId, instruction })
     dispatch({ type: 'submit', taskId })
-    runOp(taskId, instruction, taskSpans(task.blockIds, blocks), task.image)
+    runOp(taskId, instruction, taskSpans(task.blockIds, blocks), task.attachments)
   }
 
   /** No blocks selected → edit the whole project (unscoped op, spans: []).
    *  The reducer assigns the new task state.nextId, so the async op result
    *  can target that id — mirrors submitTask's flow. */
-  const submitWholeDoc = (instruction: string): void => {
+  const submitWholeDoc = (instruction: string, attachments?: Attachment[]): void => {
     const text = instruction.trim()
-    if (!text) return
+    if (!text || !aiEnabled) return
     const taskId = state.nextId
     dispatch({ type: 'start-whole-doc', instruction: text })
-    runOp(taskId, text, [])
+    runOp(taskId, text, [], attachments)
   }
 
   /** Console "Fix with Claude": bundle every current compile error + the raw
@@ -818,8 +833,8 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
         instruction,
         spans: taskSpans(task.blockIds, blocks),
         blockIds: task.blockIds,
-        // A staged snapshot rides with this turn (add-user-turn clears it after).
-        imageDataUrl: task.image
+        // Staged attachments ride with this turn (add-user-turn clears them after).
+        attachments: task.attachments
       })
       .then(
         (res) => {
@@ -867,7 +882,8 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
   // The main chat (⌘J) is one whole-document session — independent of block
   // selection. It never narrows to selected blocks; block-scoped editing lives
   // in the rail bubbles (TaskCard / ThreadCard).
-  const chatSubmit = (instruction: string): void => submitWholeDoc(instruction)
+  const chatSubmit = (instruction: string, attachments?: Attachment[]): void =>
+    submitWholeDoc(instruction, attachments)
 
   const resolveByOp = (opId: string, accept: boolean): void => {
     const owner = state.tasks.find((t) => t.opId === opId || t.proposal?.opId === opId)
@@ -893,6 +909,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
         chatUnread={unreadNotes > 0}
         onToggleChat={() => setChatOpen((v) => !v)}
         onOpenSettings={onOpenSettings}
+        aiStatus={aiStatus}
       />
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         <Sidebar
@@ -973,6 +990,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           state={state}
           compile={compile}
           contextBuilding={contextBuilding}
+          aiEnabled={aiEnabled}
           blocksReloading={blocksReloading}
           onRenderingChange={setBlocksRendering}
           pdfUrl={pdfUrl}
@@ -981,6 +999,11 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           revealBlock={revealSignal}
           onForwardSearch={forwardSearch}
           onToggleBlock={(id, additive) => {
+            // Selecting a block opens a Claude composer — pointless when signed out.
+            if (!aiEnabled) {
+              showSignedOutToast()
+              return
+            }
             const subtree = expandIds(blocks, id)
             // Repeat-click escalation: a plain click on the block that is ALREADY
             // the sole compose selection re-selects its parent (then grandparent),
@@ -1005,7 +1028,13 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           }}
           // Marquee covers exactly what the user dragged over — select those
           // ids directly, no subtree expansion.
-          onSelectBlocks={(ids, additive) => dispatch({ type: 'toggle-block', ids, additive })}
+          onSelectBlocks={(ids, additive) => {
+            if (!aiEnabled) {
+              showSignedOutToast()
+              return
+            }
+            dispatch({ type: 'toggle-block', ids, additive })
+          }}
           onActivateTask={(taskId) => dispatch({ type: 'activate', taskId })}
           onToggleAdding={() => dispatch({ type: 'set-adding', adding: !state.adding })}
           onRemoveBlock={(taskId, blockId) => dispatch({ type: 'remove-block', taskId, blockId })}
@@ -1016,7 +1045,17 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           onTogglePersistent={toggleTaskPersistent}
           onSubmitThreadTurn={submitThreadTurn}
           onDeleteThread={deleteThread}
-          onAttachImage={(taskId, image) => dispatch({ type: 'attach-image', taskId, image })}
+          onAttachImage={(taskId, image) =>
+            image
+              ? dispatch({
+                  type: 'add-attachments',
+                  taskId,
+                  items: [{ id: SNAPSHOT_ID, name: 'block.png', kind: 'snapshot', dataUrl: image, thumbDataUrl: image }]
+                })
+              : dispatch({ type: 'remove-attachment', taskId, id: SNAPSHOT_ID })
+          }
+          onRemoveAttachment={(taskId, id) => dispatch({ type: 'remove-attachment', taskId, id })}
+          onAddAttachments={(taskId, items) => dispatch({ type: 'add-attachments', taskId, items })}
           onSnapshotError={() =>
             setToast({
               title: "Couldn't snapshot the block",
@@ -1030,6 +1069,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
           <ChatPane
             messages={messages}
             busy={chatPaneBusy}
+            aiEnabled={aiEnabled}
             onSubmit={chatSubmit}
             onResolveOp={resolveByOp}
           />
@@ -1050,6 +1090,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings }: Props): JSX.Ele
             onFix={fixWithClaude}
             onClose={() => setConsoleOpen(false)}
             busy={chatBusy}
+            aiEnabled={aiEnabled}
           />
         </>
       )}

@@ -74,6 +74,14 @@ describe('ConsolePanel', () => {
     expect(onFix).toHaveBeenCalledOnce()
   })
 
+  it('disables Fix with Claude when Claude is unavailable, even with errors', () => {
+    const onFix = vi.fn()
+    render(<ConsolePanel {...base} aiEnabled={false} onFix={onFix} errors={[err('main.tex', 1, 'x')]} />)
+    expect(fixBtn().disabled).toBe(true)
+    click(fixBtn())
+    expect(onFix).not.toHaveBeenCalled()
+  })
+
   it('toggles to the raw-log view', () => {
     render(<ConsolePanel {...base} log="! Undefined control sequence.\nl.12 \\foo" errors={[err('main.tex', 12, 'x')]} />)
     expect(testid('console-log')).toBeNull() // problems view by default

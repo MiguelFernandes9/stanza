@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -241,7 +241,7 @@ describe('ClaudeService.runForkTurn', () => {
     expect(prompt).toContain('- chapters/ch1.tex lines 40-41')
   })
 
-  test('an attached image is written, granted via --add-dir, referenced, then cleaned up', async () => {
+  test('a legacy imageDataUrl snapshot is staged, granted via --add-dir, referenced, then cleaned up', async () => {
     let opArgs: string[] = []
     const runner = new MockRunner((spec) => {
       opArgs = spec.args
@@ -254,7 +254,7 @@ describe('ClaudeService.runForkTurn', () => {
       () => {},
     )
 
-    // The block PNG dir is granted as a SECOND --add-dir (the work dir is first).
+    // The shot dir is granted as a SECOND --add-dir (the work dir is first).
     const addDirs = opArgs.filter((_a, i) => opArgs[i - 1] === '--add-dir')
     expect(addDirs).toHaveLength(2)
     expect(addDirs[1]).toContain('stanza-shots')
@@ -262,10 +262,65 @@ describe('ClaudeService.runForkTurn', () => {
     const prompt = opArgs.at(-1)!
     const match = prompt.match(/(\S*stanza-shots\S*\.png)/)
     expect(match).not.toBeNull()
-    expect(prompt).toContain('Read it')
+    expect(prompt).toMatch(/Read each/)
+    expect(prompt).toContain('screenshot of the selected block')
 
-    // The temp PNG is removed once the turn returns (never lands in the worktree).
-    expect(existsSync(match![1]!)).toBe(false)
+    // The staged dir is removed once the turn returns (never lands in the worktree).
+    expect(existsSync(addDirs[1]!)).toBe(false)
+  })
+
+  test('multiple attachments (data-URL image + a file by path) are staged, granted, listed, cleaned', async () => {
+    let opArgs: string[] = []
+    const runner = new MockRunner((spec) => {
+      opArgs = spec.args
+      return claudeJson('ok')
+    })
+    const service = new ClaudeService(runner, globalSettings, doc)
+
+    // A real on-disk source the bridge copies in (the OS-picker path, not base64).
+    const srcPdf = join(dir, 'refs.pdf')
+    writeFileSync(srcPdf, '%PDF-1.4 stub')
+
+    await service.runForkTurn(WD, 'fork-1', 'sess-1',
+      {
+        instruction: 'mimic these',
+        spans: [],
+        attachments: [
+          { id: 'a', name: 'shot.png', kind: 'image', dataUrl: 'data:image/png;base64,iVBORw0KGgo=' },
+          { id: 'b', name: 'refs.pdf', kind: 'pdf', srcPath: srcPdf },
+        ],
+      },
+      () => {},
+    )
+
+    const addDirs = opArgs.filter((_a, i) => opArgs[i - 1] === '--add-dir')
+    expect(addDirs).toHaveLength(2)
+    const shotDir = addDirs[1]!
+    expect(shotDir).toContain('stanza-shots')
+
+    const prompt = opArgs.at(-1)!
+    // Both files listed by their staged path, with a kind hint; Read instruction present.
+    expect(prompt).toMatch(/Read each/)
+    expect(prompt).toContain('shot.png (image)')
+    expect(prompt).toContain('refs.pdf (PDF)')
+
+    // The whole per-op dir (both files) is removed after the turn.
+    expect(existsSync(shotDir)).toBe(false)
+  })
+
+  test('no attachment → a single --add-dir (the work dir), no shot dir', async () => {
+    let opArgs: string[] = []
+    const runner = new MockRunner((spec) => {
+      opArgs = spec.args
+      return claudeJson('ok')
+    })
+    const service = new ClaudeService(runner, globalSettings, doc)
+
+    await service.runForkTurn(WD, 'fork-1', 'sess-1', { instruction: 'x', spans: [] }, () => {})
+
+    const addDirs = opArgs.filter((_a, i) => opArgs[i - 1] === '--add-dir')
+    expect(addDirs).toEqual([WD])
+    expect(opArgs.at(-1)).not.toContain('stanza-shots')
   })
 
   test('strips ANTHROPIC_API_KEY / AUTH_TOKEN so claude uses the subscription (BUG-29)', async () => {

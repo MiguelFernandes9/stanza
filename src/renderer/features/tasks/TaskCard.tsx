@@ -1,12 +1,19 @@
 import { useEffect, useRef } from 'react'
 import type { CSSProperties, JSX } from 'react'
-import { AlertTriangle, ArrowUp, Camera, Check, CircleSlash, FileText, Maximize2, Pin, Plus, Sparkles, X } from 'lucide-react'
+import { AlertTriangle, ArrowUp, Check, CircleSlash, FileText, Maximize2, Pin, Plus, Sparkles, X } from 'lucide-react'
 import { BlockTag, Button, DiffHunk, IconButton, Kbd, Tooltip } from '@renderer/components'
 import type { BlockTagKind } from '@renderer/components'
+import type { Attachment } from '@shared/ipc'
+import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
+import { useAttachmentIntake } from '@renderer/hooks/useComposerAttachments'
+import { AttachMenu } from '../chat/AttachMenu'
 import { combinedSpanLabel, spanLabel } from '../paper/paperModel'
 import type { PageBlock } from '../paper/paperModel'
 import type { EditTask } from './taskStore'
+import { taskSnapshot } from './taskStore'
+import { AttachmentChips } from '../chat/AttachmentChips'
 import { summarizeBlocks } from '@shared/blocks/changes'
+import { AiDisabledNotice } from '@renderer/features/assistant/AiDisabledNotice'
 
 export const RAIL = 316
 export const RAIL_GAP = 22
@@ -53,6 +60,9 @@ interface Props {
    *  pulsing "Updating context…" hint so the user knows a Run now would carry
    *  provisional summaries (Part A). */
   contextBuilding?: boolean
+  /** False when Claude is unavailable — the composer Run + snapshot are disabled
+   *  and a notice shows. Accept/Reject on a pending proposal stay enabled. */
+  aiEnabled?: boolean
   onToggleAdding: () => void
   onRemoveBlock: (blockId: string) => void
   onActivate: () => void
@@ -72,6 +82,10 @@ interface Props {
   /** Capture the block as a PNG and attach it to this task's next Run. Absent for
    *  whole-document cards (no block to snapshot). */
   onSnapshot?: () => void
+  /** Remove one staged attachment (chip ×) by id. */
+  onRemoveAttachment?: (id: string) => void
+  /** Stage user-picked / pasted / dropped files on this task. */
+  onAddAttachments?: (items: Attachment[]) => void
   refCb: (el: HTMLDivElement | null) => void
 }
 
@@ -106,10 +120,11 @@ function ConflictBanner({ conflict }: { conflict: NonNullable<EditTask['conflict
   )
 }
 
-/** Always-on paper-context status, shown above the composer's prompt bar: a steady
- *  grey dot when the summaries are up to date, a pulsing amber dot + "Updating
- *  context…" while they refresh (a Run then carries provisional context, Part A). */
-function ContextStatus({ building }: { building?: boolean }): JSX.Element {
+/** Always-on paper-context status: a steady grey dot when the summaries are up
+ *  to date, a pulsing amber dot while they refresh (a Run then carries
+ *  provisional context, Part A). `dotOnly` drops the label to a bare dot for
+ *  the footer; the tooltip still explains the state on hover. */
+function ContextStatus({ building, dotOnly = false }: { building?: boolean; dotOnly?: boolean }): JSX.Element {
   return (
     <Tooltip
       label={
@@ -138,7 +153,7 @@ function ContextStatus({ building }: { building?: boolean }): JSX.Element {
             ...(building ? { animation: 'stz-pulse 1s var(--ease-in-out) infinite' } : {})
           }}
         />
-        {building ? 'Updating context…' : 'Context ready'}
+        {!dotOnly && (building ? 'Updating context…' : 'Context ready')}
       </span>
     </Tooltip>
   )
@@ -172,6 +187,7 @@ export function TaskCard({
   side,
   adding,
   contextBuilding,
+  aiEnabled = true,
   onToggleAdding,
   onRemoveBlock,
   onActivate,
@@ -183,15 +199,21 @@ export function TaskCard({
   onResolve,
   onOpenReview,
   onSnapshot,
+  onRemoveAttachment,
+  onAddAttachments,
   refCb
 }: Props): JSX.Element {
   const taRef = useRef<HTMLTextAreaElement | null>(null)
+  const snapshot = taskSnapshot(task)
+  const intake = useAttachmentIntake((items) => onAddAttachments?.(items))
   useEffect(() => {
     // preventScroll: the card paints at top:0 before PaperPane's layout effect
     // sets its rail offset; a plain focus() would scroll the PDF pane to the
     // top, hiding the just-selected block and making it feel unselectable (BUG-7).
     if (expanded && task.phase === 'compose') taRef.current?.focus({ preventScroll: true })
   }, [task.phase, expanded])
+  // One-line at rest, grows with the instruction up to a cap (then scrolls).
+  useAutoGrowTextarea(taRef, task.instruction, 140)
 
   const phaseColor =
     task.phase === 'review'
@@ -397,37 +419,46 @@ export function TaskCard({
                 {task.error}
               </div>
             )}
-            {/* Context status sits on top of the prompt bar so it's the first thing
-                the eye lands on before typing an instruction. */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
-              <ContextStatus building={contextBuilding} />
-            </div>
+            <AttachmentChips
+              attachments={task.attachments ?? []}
+              onRemove={(id) => onRemoveAttachment?.(id)}
+            />
             <div
               className="stz-field"
+              onDragOver={aiEnabled ? intake.onDragOver : undefined}
+              onDragLeave={aiEnabled ? intake.onDragLeave : undefined}
+              onDrop={aiEnabled ? intake.onDrop : undefined}
               style={{
                 display: 'flex',
-                alignItems: 'flex-end',
-                gap: 7,
-                background: 'var(--surface-card)',
-                border: '1px solid var(--border-strong)',
+                alignItems: 'flex-start',
+                gap: 6,
+                background: intake.dragging ? 'var(--clay-50)' : 'var(--surface-card)',
+                border: `1px solid ${intake.dragging ? 'var(--clay-400)' : 'var(--border-strong)'}`,
                 borderRadius: 'var(--radius-md)',
-                padding: '6px 6px 6px 10px'
+                padding: '5px 6px'
               }}
             >
+              <AttachMenu
+                onSnapshot={onSnapshot && blocks.length > 0 ? onSnapshot : undefined}
+                hasSnapshot={!!snapshot}
+                onPickFiles={onAddAttachments ? intake.pick : undefined}
+                disabled={!aiEnabled}
+              />
               <textarea
                 ref={taRef}
                 spellCheck
                 value={task.instruction}
                 onChange={(e) => onUpdate(e.target.value)}
+                onPaste={intake.onPaste}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()
-                    onSubmit()
+                    if (aiEnabled) onSubmit()
                   }
                   if (e.key === 'Escape') onDismiss()
                 }}
-                rows={2}
-                placeholder="What should change in this block…"
+                rows={1}
+                placeholder="Describe the change…"
                 style={{
                   flex: 1,
                   resize: 'none',
@@ -436,26 +467,18 @@ export function TaskCard({
                   background: 'transparent',
                   font: 'var(--weight-regular) var(--text-sm)/1.45 var(--font-sans)',
                   color: 'var(--ink-900)',
-                  maxHeight: 84,
-                  padding: '3px 0'
+                  padding: '4px 0'
                 }}
               />
-              {onSnapshot && blocks.length > 0 && (
-                <Tooltip label={task.image ? 'Remove snapshot' : 'Attach snapshot'} side="top">
-                  <button
-                    type="button"
-                    onClick={onSnapshot}
-                    aria-label={task.image ? 'Remove snapshot' : 'Attach snapshot'}
-                    style={{ ...pillStyle(!!task.image), height: 30 }}
-                  >
-                    {task.image ? <Check size={12} /> : <Camera size={12} />}
-                  </button>
-                </Tooltip>
-              )}
-              <Button size="sm" variant="primary" disabled={!task.instruction.trim()} onClick={onSubmit} iconLeft={<ArrowUp size={13} />}>
+              <Button size="sm" variant="primary" disabled={!task.instruction.trim() || !aiEnabled} onClick={onSubmit} iconLeft={<ArrowUp size={13} />}>
                 Run
               </Button>
             </div>
+            {!aiEnabled && (
+              <div style={{ marginTop: 8 }}>
+                <AiDisabledNotice />
+              </div>
+            )}
             <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 6, paddingLeft: 1, flexWrap: 'wrap' }}>
               {adding ? (
                 <span style={{ font: 'var(--weight-medium) var(--text-2xs)/1.4 var(--font-sans)', color: 'var(--clay-600)' }}>
@@ -470,6 +493,9 @@ export function TaskCard({
               <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>run ·</span>
               <Kbd>esc</Kbd>
               <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>dismiss</span>
+              <span style={{ marginLeft: 'auto' }}>
+                <ContextStatus building={contextBuilding} dotOnly />
+              </span>
             </div>
           </div>
         )}

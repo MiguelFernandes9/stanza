@@ -1,11 +1,15 @@
 import type { ReviewProposal } from './review'
+import type { Attachment } from './attachments'
 
 export interface BlockSpan { file: string; startLine: number; endLine: number }
 export interface ClaudeRequest {
   instruction: string
   spans: BlockSpan[]    // empty = whole document
-  /** Optional PNG snapshot of the selected block (data URL). The main process
-   *  writes it to a temp file Claude can Read, so it sees the rendered output. */
+  /** Files the user attached this turn (images, PDFs, text, or a block snapshot).
+   *  The main process stages each to a temp dir Claude can Read. */
+  attachments?: Attachment[]
+  /** @deprecated Single block snapshot (data URL) — folded into `attachments`.
+   *  Kept transiently during the renderer migration; the bridge normalizes it. */
   imageDataUrl?: string
 }
 export interface ClaudeStatus {
@@ -29,6 +33,20 @@ export interface ClaudeResult {
   proposal: ReviewProposal | null    // null when no files changed
   /** Present when another fork was editing overlapping content as this op started. */
   conflict?: LiveConflict
+}
+
+/** Whether the user has a working Claude CLI (installed AND logged in). The one
+ *  signal the renderer gates every AI feature on — disable the block button, the
+ *  assistant, and the composers when `available` is false. Probed in the main
+ *  process via `claude auth status` so detection matches what a real op would do. */
+export interface ClaudeAvailability {
+  available: boolean
+  /** Why unavailable — drives the disabled-state message. Absent when available. */
+  reason?: 'logged-out' | 'not-installed' | 'error'
+  /** Account email, shown in Settings when available. */
+  email?: string
+  /** Subscription tier (e.g. "max"), shown in Settings when available. */
+  subscriptionType?: string
 }
 
 /** One finished or pending op, as persisted per project (infra/Store).

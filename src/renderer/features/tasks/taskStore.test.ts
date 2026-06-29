@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { dismissRoute, initialTaskState, isWholeDocTask, taskReducer } from './taskStore'
+import { dismissRoute, initialTaskState, isWholeDocTask, SNAPSHOT_ID, taskReducer, taskSnapshot } from './taskStore'
 import type { EditTask, TaskAction, TaskPhase, TaskState } from './taskStore'
-import type { ReviewProposal } from '../../../shared/ipc'
+import type { Attachment, ReviewProposal } from '../../../shared/ipc'
 
 describe('isWholeDocTask', () => {
   it('is true for a task with no block ids (whole-document op)', () => {
@@ -186,31 +186,48 @@ describe('taskReducer — toggle-view flips Read ↔ Select', () => {
   })
 })
 
-describe('taskReducer — attach-image (block snapshot, F2)', () => {
-  it('stores the data URL on the task', () => {
-    let s = run(initialTaskState, { type: 'toggle-block', ids: ['p1'], additive: false })
-    s = run(s, { type: 'attach-image', taskId: s.tasks[0].id, image: 'data:image/png;base64,AAA' })
-    expect(s.tasks[0].image).toBe('data:image/png;base64,AAA')
+describe('taskReducer — attachments (snapshot + picked files)', () => {
+  const snap = (dataUrl: string): Attachment => ({
+    id: SNAPSHOT_ID,
+    name: 'block.png',
+    kind: 'snapshot',
+    dataUrl,
+    thumbDataUrl: dataUrl
   })
 
-  it('retake overwrites the previous image', () => {
+  it('adds attachments to the task and exposes the snapshot via taskSnapshot', () => {
     let s = run(initialTaskState, { type: 'toggle-block', ids: ['p1'], additive: false })
-    const id = s.tasks[0].id
-    s = run(
-      s,
-      { type: 'attach-image', taskId: id, image: 'one' },
-      { type: 'attach-image', taskId: id, image: 'two' }
-    )
-    expect(s.tasks[0].image).toBe('two')
+    s = run(s, { type: 'add-attachments', taskId: s.tasks[0].id, items: [snap('data:image/png;base64,AAA')] })
+    expect(taskSnapshot(s.tasks[0])?.dataUrl).toBe('data:image/png;base64,AAA')
   })
 
-  it('an empty image clears the staged shot (the snapshot un-press)', () => {
+  it('re-adding the same id replaces in place (retake the snapshot)', () => {
     let s = run(initialTaskState, { type: 'toggle-block', ids: ['p1'], additive: false })
     const id = s.tasks[0].id
-    s = run(s, { type: 'attach-image', taskId: id, image: 'data:image/png;base64,AAA' })
-    expect(s.tasks[0].image).toBe('data:image/png;base64,AAA')
-    s = run(s, { type: 'attach-image', taskId: id, image: '' })
-    expect(s.tasks[0].image).toBeUndefined()
+    s = run(s, { type: 'add-attachments', taskId: id, items: [snap('one')] })
+    s = run(s, { type: 'add-attachments', taskId: id, items: [snap('two')] })
+    expect(s.tasks[0].attachments).toHaveLength(1)
+    expect(taskSnapshot(s.tasks[0])?.dataUrl).toBe('two')
+  })
+
+  it('keeps distinct attachments side by side', () => {
+    let s = run(initialTaskState, { type: 'toggle-block', ids: ['p1'], additive: false })
+    const id = s.tasks[0].id
+    s = run(s, {
+      type: 'add-attachments',
+      taskId: id,
+      items: [snap('AAA'), { id: 'f1', name: 'refs.pdf', kind: 'pdf', srcPath: '/tmp/refs.pdf' }]
+    })
+    expect(s.tasks[0].attachments).toHaveLength(2)
+  })
+
+  it('remove-attachment drops one by id; emptying clears the field', () => {
+    let s = run(initialTaskState, { type: 'toggle-block', ids: ['p1'], additive: false })
+    const id = s.tasks[0].id
+    s = run(s, { type: 'add-attachments', taskId: id, items: [snap('AAA')] })
+    s = run(s, { type: 'remove-attachment', taskId: id, id: SNAPSHOT_ID })
+    expect(taskSnapshot(s.tasks[0])).toBeUndefined()
+    expect(s.tasks[0].attachments).toBeUndefined()
   })
 })
 

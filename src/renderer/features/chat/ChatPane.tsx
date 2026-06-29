@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import type { JSX } from 'react'
-import { ArrowUp, Check, FileText, GitCommitHorizontal, Sparkles, Undo2, X } from 'lucide-react'
-import { Avatar, Button, DiffHunk, Kbd, StatusDot } from '@renderer/components'
-import type { ReviewProposal } from '@shared/ipc'
+import { ArrowUp, Check, FileText, GitCommitHorizontal, Paperclip, Sparkles, Undo2, X } from 'lucide-react'
+import { Avatar, Button, DiffHunk, IconButton, Kbd, StatusDot, Tooltip } from '@renderer/components'
+import type { Attachment, ReviewProposal } from '@shared/ipc'
 import { summarizeBlocks } from '@shared/blocks/changes'
+import { useAutoGrowTextarea } from '@renderer/hooks/useAutoGrowTextarea'
+import { useComposerAttachments } from '@renderer/hooks/useComposerAttachments'
+import { AttachmentChips } from './AttachmentChips'
+import { AiDisabledNotice } from '@renderer/features/assistant/AiDisabledNotice'
 
 export interface ChatMessage {
   role: 'user' | 'claude'
@@ -16,7 +20,10 @@ export interface ChatMessage {
 interface Props {
   messages: ChatMessage[]
   busy: boolean
-  onSubmit: (instruction: string) => void
+  /** False when Claude is unavailable — the composer is disabled and a notice shows.
+   *  The panel still opens so the user can read prior messages + the fix. */
+  aiEnabled?: boolean
+  onSubmit: (instruction: string, attachments?: Attachment[]) => void
   onResolveOp: (opId: string, accept: boolean) => void
 }
 
@@ -81,18 +88,23 @@ function ProposalBlock({ proposal, resolved, onResolve }: { proposal?: ReviewPro
  *  questions, template changes, and whole-file edits. It is independent of
  *  block selection (⌘B) — selecting blocks never scopes or disables this chat;
  *  block-scoped editing lives in the rail bubbles. */
-export function ChatPane({ messages, busy, onSubmit, onResolveOp }: Props): JSX.Element {
+export function ChatPane({ messages, busy, aiEnabled = true, onSubmit, onResolveOp }: Props): JSX.Element {
   const [instruction, setInstruction] = useState('')
   const streamRef = useRef<HTMLDivElement | null>(null)
+  const taRef = useRef<HTMLTextAreaElement | null>(null)
+  const att = useComposerAttachments()
 
   useEffect(() => {
     if (streamRef.current) streamRef.current.scrollTop = streamRef.current.scrollHeight
   }, [messages.length, busy])
+  // One-line at rest, grows with the prompt up to a cap (then scrolls).
+  useAutoGrowTextarea(taRef, instruction, 120)
 
   const submit = (): void => {
-    if (!instruction.trim() || busy) return
-    onSubmit(instruction.trim())
+    if (!instruction.trim() || busy || !aiEnabled) return
+    onSubmit(instruction.trim(), att.attachments.length ? att.attachments : undefined)
     setInstruction('')
+    att.clear()
   }
 
   return (
@@ -122,7 +134,11 @@ export function ChatPane({ messages, busy, onSubmit, onResolveOp }: Props): JSX.
           Assistant
         </span>
         <div style={{ flex: 1 }} />
-        <StatusDot tone={busy ? 'busy' : 'ok'} pulse={busy} label={busy ? 'Editing…' : 'Session ready'} />
+        {aiEnabled ? (
+          <StatusDot tone={busy ? 'busy' : 'ok'} pulse={busy} label={busy ? 'Editing…' : 'Session ready'} />
+        ) : (
+          <StatusDot tone="error" label="Signed out" />
+        )}
       </div>
 
       <div
@@ -196,23 +212,34 @@ export function ChatPane({ messages, busy, onSubmit, onResolveOp }: Props): JSX.
             <FileText size={11} /> Whole document
           </span>
         </div>
+        <AttachmentChips attachments={att.attachments} onRemove={att.remove} />
         <div
           className="stz-field"
+          onDragOver={att.onDragOver}
+          onDragLeave={att.onDragLeave}
+          onDrop={att.onDrop}
           style={{
             display: 'flex',
-            alignItems: 'flex-end',
+            alignItems: 'flex-start',
             gap: 8,
-            background: 'var(--surface-card)',
-            border: '1px solid var(--border-strong)',
+            background: att.dragging ? 'var(--clay-50)' : 'var(--surface-card)',
+            border: `1px solid ${att.dragging ? 'var(--clay-400)' : 'var(--border-strong)'}`,
             borderRadius: 'var(--radius-lg)',
-            padding: '8px 8px 8px 12px',
+            padding: '8px 8px 8px 10px',
             boxShadow: 'var(--shadow-inset)'
           }}
         >
+          <Tooltip label="Attach files" side="top">
+            <IconButton size="sm" variant="ghost" label="Attach files" onClick={() => void att.pick()}>
+              <Paperclip size={15} />
+            </IconButton>
+          </Tooltip>
           <textarea
+            ref={taRef}
             spellCheck
             value={instruction}
             onChange={(e) => setInstruction(e.target.value)}
+            onPaste={att.onPaste}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault()
@@ -220,7 +247,7 @@ export function ChatPane({ messages, busy, onSubmit, onResolveOp }: Props): JSX.
               }
             }}
             rows={1}
-            placeholder="Ask a question or edit the whole document…"
+            placeholder="Ask a question, attach a file, or edit the whole document…"
             style={{
               flex: 1,
               resize: 'none',
@@ -229,14 +256,18 @@ export function ChatPane({ messages, busy, onSubmit, onResolveOp }: Props): JSX.
               background: 'transparent',
               font: 'var(--weight-regular) var(--text-base)/1.45 var(--font-sans)',
               color: 'var(--ink-900)',
-              maxHeight: 96,
               padding: '5px 0'
             }}
           />
-          <Button size="sm" variant="primary" disabled={!instruction.trim() || busy} onClick={submit} style={{ padding: '0 10px' }} iconLeft={<ArrowUp size={15} />}>
+          <Button size="sm" variant="primary" disabled={!instruction.trim() || busy || !aiEnabled} onClick={submit} style={{ padding: '0 10px' }} iconLeft={<ArrowUp size={15} />}>
             Run
           </Button>
         </div>
+        {!aiEnabled && (
+          <div style={{ marginTop: 9 }}>
+            <AiDisabledNotice />
+          </div>
+        )}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 7, paddingLeft: 2 }}>
           <span style={{ font: 'var(--text-2xs)/1 var(--font-sans)', color: 'var(--ink-400)' }}>
             Claude Code edits the <span style={{ fontFamily: 'var(--font-mono)' }}>.tex</span> source directly ·{' '}
