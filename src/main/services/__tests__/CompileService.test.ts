@@ -82,6 +82,46 @@ describe('CompileService.compile', () => {
     ])
   })
 
+  test('failure surfaces a tectonic stderr error when the .log has none', async () => {
+    // A driver-stage font failure: TeX succeeds (`Output written on main.xdv`)
+    // so the .log carries no `!` line; the fatal reason is only on stderr.
+    const log = ['(./main.tex', ')', 'Output written on main.xdv (20 pages).'].join('\n')
+    const stderr = [
+      'warning: Could not locate a virtual/physical font for TFM "bbm10".',
+      'error: Cannot proceed without .vf or "physical" font for PDF output...',
+    ].join('\n')
+    const runner = new MockRunner(() => ({ ...ok, code: 1, stderr }))
+    const service = new CompileService(runner, doc, (absPath) =>
+      absPath === '/proj/main.log' ? log : null,
+    )
+
+    const result = await service.compile({})
+
+    expect(result.ok).toBe(false)
+    expect(result.errors).toEqual([
+      {
+        file: '',
+        line: null,
+        message: 'Cannot proceed without .vf or "physical" font for PDF output...',
+      },
+    ])
+    // The raw-log console must carry BOTH the TeX log and tectonic's stderr.
+    expect(result.log).toContain('Output written on main.xdv')
+    expect(result.log).toContain('Cannot proceed without')
+  })
+
+  test('failure with no parseable errors still reports a generic failure', async () => {
+    const runner = new MockRunner(() => ({ ...ok, code: 1 }))
+    const service = new CompileService(runner, doc, () => null)
+
+    const result = await service.compile({})
+
+    expect(result.ok).toBe(false)
+    expect(result.errors).toEqual([
+      { file: '', line: null, message: 'Compilation failed (exit 1). See the raw log.' },
+    ])
+  })
+
   test('tectonic missing from PATH yields install guidance', async () => {
     const runner = new MockRunner(() => {
       throw Object.assign(new Error('spawn tectonic ENOENT'), { code: 'ENOENT' })

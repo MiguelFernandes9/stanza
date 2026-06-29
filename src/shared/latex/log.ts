@@ -77,3 +77,19 @@ function looksLikeFile(token: string): boolean {
 function normalize(path: string): string {
   return path.startsWith('./') ? path.slice(2) : path
 }
+
+/** Extract tectonic's own fatal diagnostics from its stderr. Tectonic prints
+ *  driver-stage failures (font generation, xdvipdfmx, bundle fetch, output
+ *  write) as `error: <msg>` lines on stderr — and these NEVER reach the TeX
+ *  `.log` (the .log can even end with `Output written on …xdv` while the run
+ *  fails at PDF output). So parseCompileLog can't see them; this fills the gap.
+ *  `warning:`/`note:` lines are progress/diagnostics, not errors. Each error is
+ *  fileless (file:'', line:null) — driver errors have no source position. */
+export function parseTectonicErrors(stderr: string): CompileError[] {
+  const errors: CompileError[] = []
+  for (const line of stderr.split('\n')) {
+    const m = /^error:\s*(.+)$/.exec(line)
+    if (m) errors.push({ file: '', line: null, message: m[1]!.trim() })
+  }
+  return errors
+}

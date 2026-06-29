@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, test } from 'vitest'
-import { parseCompileLog } from '../log'
+import { parseCompileLog, parseTectonicErrors } from '../log'
 
 const MAIN = 'main.tex'
 
@@ -135,6 +135,52 @@ describe('parseCompileLog', () => {
     expect(parseCompileLog(log, MAIN)).toEqual([
       { file: 'chapters/ch1.tex', line: 12, message: 'Undefined control sequence.' },
       { file: 'main.tex', line: 99, message: 'Missing } inserted.' },
+    ])
+  })
+})
+
+describe('parseTectonicErrors (driver-stage stderr)', () => {
+  // tectonic emits a font failure ONLY on stderr — the TeX .log shows success
+  // (`Output written on main.xdv`). Real capture from a doc that loads `bbm`.
+  const fontFailureStderr = [
+    'warning: algorithm.sty:11: ',
+    'Invalid UTF-8 byte or sequence at line 11 replaced by U+FFFD.',
+    'warning: warnings were issued by the TeX engine; use --print and/or --keep-logs for details.',
+    'warning: Tectonic unable to generate PK font "bbm10" (dpi 600) on-the-fly',
+    'warning: Could not locate a virtual/physical font for TFM "bbm10".',
+    'error: Cannot proceed without .vf or "physical" font for PDF output...',
+  ].join('\n')
+
+  test('extracts the tectonic error: line as a fileless error', () => {
+    expect(parseTectonicErrors(fontFailureStderr)).toEqual([
+      {
+        file: '',
+        line: null,
+        message: 'Cannot proceed without .vf or "physical" font for PDF output...',
+      },
+    ])
+  })
+
+  test('warning: and note: lines are not errors', () => {
+    const stderr = [
+      'note: Running TeX ...',
+      'warning: algorithm.sty:11: Invalid UTF-8 byte or sequence',
+      'warning: warnings were issued by the TeX engine; use --keep-logs for details.',
+    ].join('\n')
+    expect(parseTectonicErrors(stderr)).toEqual([])
+  })
+
+  test('empty stderr yields no errors', () => {
+    expect(parseTectonicErrors('')).toEqual([])
+  })
+
+  test('multiple error: lines each become an error', () => {
+    const stderr = ['error: first thing failed', 'note: ...', 'error: second thing failed'].join(
+      '\n',
+    )
+    expect(parseTectonicErrors(stderr)).toEqual([
+      { file: '', line: null, message: 'first thing failed' },
+      { file: '', line: null, message: 'second thing failed' },
     ])
   })
 })

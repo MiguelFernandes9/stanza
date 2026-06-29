@@ -11,7 +11,7 @@ import type { BlockSpan } from '../../shared/ipc/claude'
 import type { DocumentInfo } from '../../shared/ipc/document'
 import type { CompileOptions } from '../../shared/ipc/settings'
 import type { ProcessRunner } from '../infra/ProcessRunner'
-import { parseCompileLog } from '../../shared/latex/log'
+import { parseCompileLog, parseTectonicErrors } from '../../shared/latex/log'
 import { parseEditOutput, parseViewOutput } from '../../shared/latex/synctex'
 
 const TECTONIC_HINT = 'tectonic not found — install with: brew install tectonic'
@@ -154,8 +154,23 @@ export class CompileService {
         errors: [],
       }
     }
-    const log = this.readLog(join(this.root, `${base}.log`)) ?? proc.stderr
-    return { ok: false, errors: parseCompileLog(log, this.doc.mainFile), log }
+    // Errors live in TWO places: TeX `!` lines in the .log, AND tectonic's own
+    // driver-stage failures (font/xdvipdfmx/bundle), which it prints only to
+    // stderr and never writes into the .log. Read both, and always carry stderr
+    // into the raw-log console so the real reason is visible. The catch-all keeps
+    // a non-zero exit from ever surfacing as a silent "0 errors" failure.
+    const fileLog = this.readLog(join(this.root, `${base}.log`))
+    const texErrors = fileLog ? parseCompileLog(fileLog, this.doc.mainFile) : []
+    const driverErrors = parseTectonicErrors(proc.stderr)
+    const errors = [...texErrors, ...driverErrors]
+    const log = [fileLog, proc.stderr].filter(Boolean).join('\n')
+    return {
+      ok: false,
+      errors: errors.length
+        ? errors
+        : [{ file: '', line: null, message: `Compilation failed (exit ${proc.code}). See the raw log.` }],
+      log,
+    }
   }
 
   async inverse(p: InversePoint): Promise<SourceLocation | null> {
