@@ -35,8 +35,11 @@ export function ensureSpeller(): Promise<void> {
       for (const term of LATEX_TERMS) s.add(term) // LaTeX/technical vocabulary
       for (const w of await loadLearnedWords()) s.add(w) // persisted personal words
       speller = s
-    } catch {
-      loading = null // download/build failed — allow a retry on the next call
+    } catch (err) {
+      // Surface it (don't swallow): missing IPC handler (stale main), offline, or
+      // a bad dictionary all land here. loading=null lets the next call retry.
+      console.error(`[spell] failed to load dictionary "${activeLang}":`, err)
+      loading = null
     }
   })()
   return loading
