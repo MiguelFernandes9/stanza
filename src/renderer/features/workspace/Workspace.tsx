@@ -51,6 +51,7 @@ import { usePaneWidths } from './usePaneWidths'
 import { uniqueName } from './fileMenu'
 import { TitleBar } from './TitleBar'
 import type { CompileInfo } from './TitleBar'
+import { BugReportDialog } from '@renderer/features/bug-report/BugReportDialog'
 
 interface Props {
   doc: DocumentInfo
@@ -84,6 +85,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings, aiEnabled = true,
   } | null>(null)
   const [sourceOpen, setSourceOpen] = useState(false)
   const [chatOpen, setChatOpen] = useState(false)
+  const [bugOpen, setBugOpen] = useState(false)
   // Drag-resizable sidebar + editor widths (clamped, persisted); PaperPane
   // keeps flex:1 and fills the remainder.
   const panes = usePaneWidths()
@@ -909,6 +911,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings, aiEnabled = true,
         chatUnread={unreadNotes > 0}
         onToggleChat={() => setChatOpen((v) => !v)}
         onOpenSettings={onOpenSettings}
+        onReportBug={() => setBugOpen(true)}
         aiStatus={aiStatus}
       />
       <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
@@ -1160,6 +1163,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings, aiEnabled = true,
           onCancel={() => setPendingClose(null)}
         />
       )}
+      <BugReportDialog open={bugOpen} doc={doc} onClose={() => setBugOpen(false)} />
     </div>
   )
 }

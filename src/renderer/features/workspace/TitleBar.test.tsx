@@ -32,6 +32,7 @@ const props = (aiStatus?: AiStatus, onOpenSettings = vi.fn()) => ({
   chatUnread: false,
   onToggleChat: vi.fn(),
   onOpenSettings,
+  onReportBug: vi.fn(),
   aiStatus
 })
 
