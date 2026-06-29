@@ -126,6 +126,49 @@ describe('ClaudeService.runForkTurn', () => {
     expect(opId).toMatch(UUID_RE)
   })
 
+  test('streams thinking + tool activity from stream-json; note comes from the result line', async () => {
+    const lines = [
+      JSON.stringify({ type: 'system', subtype: 'init' }),
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'thinking', thinking: 'Plan: tighten it.' }] } }),
+      JSON.stringify({
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: '/proj/main.tex' } }] },
+      }),
+      JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'Tightened.' }),
+    ]
+    const runner = new MockRunner((spec) => {
+      lines.forEach((l) => spec.onStdoutLine?.(l)) // drive the live stream
+      return { code: 0, stdout: lines.join('\n'), stderr: '', timedOut: false, truncated: false }
+    })
+    const service = new ClaudeService(runner, globalSettings, doc)
+    const statuses: ClaudeStatus[] = []
+
+    const { note } = await service.runForkTurn(WD, 'fork-1', 'sess', { instruction: 'tighten', spans: [] }, (s) =>
+      statuses.push(s),
+    )
+
+    // The resume call asks the CLI for a streaming format.
+    const resume = runner.calls[0]! // sess given → no prime
+    expect(resume.args).toContain('stream-json')
+    expect(resume.args).toContain('--verbose')
+    expect(typeof resume.onStdoutLine).toBe('function')
+
+    const acts = statuses.flatMap((s) => (s.activity ? [s.activity] : []))
+    expect(acts).toContainEqual({ kind: 'thinking', text: 'Plan: tighten it.' })
+    expect(acts).toContainEqual({ kind: 'tool', label: 'Editing main.tex' })
+    expect(note).toBe('Tightened.') // from the result line, not the raw JSONL
+  })
+
+  test('an errored result line rejects with the model message', async () => {
+    const line = JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: 'API Error: 401' })
+    const runner = new MockRunner(() => ({ code: 0, stdout: line, stderr: '', timedOut: false, truncated: false }))
+    const service = new ClaudeService(runner, globalSettings, doc)
+
+    await expect(
+      service.runForkTurn(WD, 'fork-1', 'sess', { instruction: 'x', spans: [] }, () => {}),
+    ).rejects.toThrow(/API Error: 401/)
+  })
+
   test('never persists a session to the project store (ephemeral by default)', async () => {
     const runner = new MockRunner(() => claudeJson('ok'))
     const service = new ClaudeService(runner, globalSettings, doc)

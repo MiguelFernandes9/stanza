@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { StringDecoder } from 'node:string_decoder'
 
 export interface ProcResult {
   code: number | null
@@ -26,6 +27,11 @@ export interface RunSpec {
    *  this to scrub vars — e.g. ClaudeService strips ANTHROPIC_API_KEY so the
    *  claude CLI uses the logged-in subscription, not a pay-per-token key. */
   env?: NodeJS.ProcessEnv
+  /** Called once per complete `\n`-terminated stdout line as it arrives (the
+   *  trailing partial line, if any, is flushed on close). Lets a caller consume
+   *  a streaming protocol live — e.g. ClaudeService parsing `--output-format
+   *  stream-json`. The full buffered `stdout` is still returned at the end. */
+  onStdoutLine?: (line: string) => void
 }
 
 export interface ProcessRunner {
@@ -92,8 +98,24 @@ export class DefaultProcessRunner implements ProcessRunner {
         return soFar + chunk.length
       }
 
+      // Optional line streaming: decode incrementally (so a multibyte char split
+      // across chunks isn't mangled) and emit each complete `\n` line live; the
+      // trailing partial is flushed on close.
+      const decoder = spec.onStdoutLine ? new StringDecoder('utf8') : null
+      let lineBuf = ''
+      const emitLines = (chunk: Buffer): void => {
+        if (!spec.onStdoutLine || !decoder) return
+        lineBuf += decoder.write(chunk)
+        let nl: number
+        while ((nl = lineBuf.indexOf('\n')) !== -1) {
+          spec.onStdoutLine(lineBuf.slice(0, nl))
+          lineBuf = lineBuf.slice(nl + 1)
+        }
+      }
+
       child.stdout.on('data', (chunk: Buffer) => {
         stdoutBytes = collect(stdoutChunks, stdoutBytes, chunk)
+        emitLines(chunk)
       })
       child.stderr.on('data', (chunk: Buffer) => {
         stderrBytes = collect(stderrChunks, stderrBytes, chunk)
@@ -104,6 +126,10 @@ export class DefaultProcessRunner implements ProcessRunner {
       })
       child.on('close', (code) => {
         cleanup()
+        if (decoder) {
+          lineBuf += decoder.end()
+          if (lineBuf) spec.onStdoutLine?.(lineBuf) // flush the final unterminated line
+        }
         resolve({
           code,
           stdout: Buffer.concat(stdoutChunks).toString('utf8'),

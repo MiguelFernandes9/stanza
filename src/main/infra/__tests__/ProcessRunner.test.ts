@@ -128,4 +128,28 @@ describe('DefaultProcessRunner', () => {
     expect(result.truncated).toBe(false)
     expect(result.stdout).toBe('hello\n')
   })
+
+  test('onStdoutLine streams complete lines and flushes a trailing partial', async () => {
+    const lines: string[] = []
+    const result = await runner.run({
+      cmd: 'node',
+      args: ['-e', 'process.stdout.write("a\\nbb\\nccc")'], // 2 full lines + an unterminated "ccc"
+      cwd,
+      onStdoutLine: (l) => lines.push(l),
+    })
+    expect(result.code).toBe(0)
+    expect(lines).toEqual(['a', 'bb', 'ccc']) // trailing partial emitted on close
+    expect(result.stdout).toBe('a\nbb\nccc') // full buffered stdout still returned
+  })
+
+  test('assembles a line split across stdout chunks', async () => {
+    const lines: string[] = []
+    await runner.run({
+      cmd: 'node',
+      args: ['-e', 'process.stdout.write("he"); setTimeout(() => process.stdout.write("llo\\nworld\\n"), 30)'],
+      cwd,
+      onStdoutLine: (l) => lines.push(l),
+    })
+    expect(lines).toEqual(['hello', 'world']) // "he" + "llo" joined across chunks
+  })
 })
