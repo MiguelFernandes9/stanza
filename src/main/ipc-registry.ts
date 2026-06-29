@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, webContents } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell, webContents } from 'electron'
 import type { IpcMainInvokeEvent, WebContents } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
@@ -50,9 +50,14 @@ import type { Fork, ForkScope } from './fork/Fork'
 import { DocumentSession } from './session'
 import { mapRecents } from './recents'
 import { setSpellcheckEnabled } from './spellcheck'
+import { errorLog } from './infra/errorLog'
+import { BugReportService } from './services/BugReportService'
+import type { BugReportMeta } from './services/BugReportService'
+import type { BugReportInput } from '@shared/ipc'
 
 const runner = new DefaultProcessRunner()
 let store: Store
+let bugReports: BugReportService
 let globalSettings: GlobalSettingsStore
 let dictionaries: DictionaryService
 /** App-global Claude availability (CLI installed + logged in). One probe, cached,
@@ -140,6 +145,7 @@ export function registerIpcHandlers(): void {
   store = new Store(join(app.getPath('userData'), 'projects.json'))
   globalSettings = new GlobalSettingsStore(join(app.getPath('userData'), 'settings.json'))
   dictionaries = new DictionaryService(join(app.getPath('userData'), 'dictionaries'))
+  bugReports = new BugReportService(join(app.getPath('userData'), 'bug-reports'))
   availability = new AvailabilityMonitor(runner, (value) =>
     broadcast(IpcChannels.claudeAvailabilityChanged, value),
   )
@@ -181,6 +187,26 @@ export function registerIpcHandlers(): void {
   })
 
   ipcMain.handle(IpcChannels.documentRecents, (): RecentProject[] => getRecentProjects())
+
+  // In-app bug reporter (alpha). The renderer supplies the description, images,
+  // and the current block-geometry snapshot; main attaches the context it owns
+  // (app version, platform, recent main errors, and the open doc's root) and
+  // writes the report folder under userData.
+  ipcMain.handle(IpcChannels.bugSubmit, (event, input: BugReportInput) => {
+    const meta: BugReportMeta = {
+      appVersion: app.getVersion(),
+      platform: process.platform,
+      errors: errorLog.recent(),
+      docPath: input.docPath ?? sessions.get(event.sender.id)?.info.root,
+    }
+    return bugReports.write(input, meta)
+  })
+
+  // Reveal a report folder in the OS file manager — guarded so the renderer can
+  // only open paths inside the bug-reports dir.
+  ipcMain.handle(IpcChannels.bugReveal, (_event, dir: string): void => {
+    if (bugReports.isWithinBase(dir)) shell.showItemInFolder(dir)
+  })
 
   ipcMain.handle(IpcChannels.documentHistory, (event) => sessionFor(event).git.log(50))
 

@@ -54,6 +54,8 @@ export const IpcChannels = {
   spellAddWord: 'spell:addWord',                 // invoke string → void (append a learned word, deduped)
   spellDictionary: 'spell:dictionary',           // invoke code → { aff, dic } (download+cache the language if needed)
   spellInstalledLanguages: 'spell:installedLanguages', // invoke → string[] (language codes cached on disk)
+  bugSubmit: 'bug:submit',            // invoke BugReportInput → BugReportResult (writes <userData>/bug-reports/<id>/)
+  bugReveal: 'bug:reveal',            // invoke dir → void — reveal a report folder in the OS file manager
   documentFilesChanged: 'document:files-changed' // main→renderer event: void — external fs change; renderer re-fetches document:files
 } as const
 export type IpcChannel = (typeof IpcChannels)[keyof typeof IpcChannels]

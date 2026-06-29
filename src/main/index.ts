@@ -9,6 +9,7 @@ import {
   setRecentsListener,
   setWindowSpawner,
 } from './ipc-registry'
+import { errorLog } from './infra/errorLog'
 import { applyUserPath } from './infra/resolveUserPath'
 import { buildAppMenu } from './menu'
 import { handleDocProtocol, registerDocScheme } from './protocol'
@@ -49,6 +50,7 @@ if (process.env.STANZA_USER_DATA) {
 // swallow silently — the console.error keeps real bugs visible.
 function reportMainError(label: string, err: unknown): void {
   console.error(`[stanza] ${label}:`, err)
+  errorLog.record(label, err) // retain for the in-app bug reporter's context
   if (!app.isReady()) return
   try {
     void dialog.showMessageBox({
