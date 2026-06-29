@@ -44,7 +44,6 @@
     "chokidar": "^5.0.0",
     "codemirror": "^6.0.2",
     "codemirror-lang-latex": "^0.4.1",
-    "dictionary-en": "^4.0.0",
     "diff": "^9.0.0",
     "lucide-react": "^1.18.0",
     "nspell": "^2.1.5",

@@ -8,8 +8,10 @@ import type { PrimeVariant } from '@renderer/features/project/primeSteps'
 import { Workspace } from '@renderer/features/workspace/Workspace'
 import { SettingsModal } from '@renderer/features/settings/SettingsModal'
 import { applyGlobalSettings } from '@renderer/features/settings/applyGlobalSettings'
+import { setActiveLanguage, setEnabled } from '@renderer/features/editor/spell/engine'
 import { client } from '@renderer/lib/client'
-import type { DocumentInfo, PrimeStep } from '@shared/ipc'
+import { DEFAULT_SPELL_LANGUAGE } from '@shared/spell/languages'
+import type { DocumentInfo, GlobalSettings, PrimeStep } from '@shared/ipc'
 
 interface Priming {
   project: string
@@ -44,10 +46,21 @@ export default function App(): JSX.Element {
   // Lives in App (above both screens) so it covers the home screen too; 'system'
   // theme follows the OS preference live.
   useEffect(() => {
+    // Editor spellcheck language + on/off follow the same global-settings stream.
+    const applySpell = (g: GlobalSettings): void => {
+      setActiveLanguage(g.spellLanguage ?? DEFAULT_SPELL_LANGUAGE)
+      setEnabled(g.spellcheckEnabled !== false)
+    }
     const apply = (): void =>
-      void client.settingsGetGlobal().then((g) => applyGlobalSettings(g), () => undefined)
+      void client.settingsGetGlobal().then((g) => {
+        applyGlobalSettings(g)
+        applySpell(g)
+      }, () => undefined)
     apply()
-    const offChanged = client.onSettingsChanged((p) => applyGlobalSettings(p.global))
+    const offChanged = client.onSettingsChanged((p) => {
+      applyGlobalSettings(p.global)
+      applySpell(p.global)
+    })
     const mq = window.matchMedia?.('(prefers-color-scheme: dark)')
     mq?.addEventListener('change', apply)
     return () => {

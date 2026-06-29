@@ -2,7 +2,7 @@ import { syntaxTree } from '@codemirror/language'
 import type { SyntaxNode } from '@lezer/common'
 import { type EditorState, type Extension, type Range, StateEffect, StateField } from '@codemirror/state'
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from '@codemirror/view'
-import { ensureSpeller, isMisspelled } from './spell/engine'
+import { ensureSpeller, isMisspelled, onReload } from './spell/engine'
 
 /** LaTeX-aware spellcheck: check the prose, never the markup.
  *
@@ -140,14 +140,21 @@ export function latexSpellcheck(): Extension {
     EditorView.contentAttributes.of({ spellcheck: 'false', autocorrect: 'off', autocapitalize: 'off' }),
     ViewPlugin.fromClass(
       class {
+        private readonly unsubscribe: () => void
         constructor(view: EditorView) {
           recompute(view)
+          // Recompute when the dictionary (re)loads: language switch or on/off toggle.
+          this.unsubscribe = onReload(() => recompute(view))
         }
         update(u: ViewUpdate): void {
           if (u.docChanged || u.viewportChanged || syntaxTree(u.state) !== syntaxTree(u.startState)) {
             clearTimeout(timer)
             timer = window.setTimeout(() => recompute(u.view), 250)
           }
+        }
+        destroy(): void {
+          this.unsubscribe()
+          clearTimeout(timer)
         }
       }
     )

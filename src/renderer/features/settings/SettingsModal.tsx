@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { JSX } from 'react'
 import { Button, Input, Modal, SegmentedControl, Select, Toggle } from '@renderer/components'
 import { client } from '@renderer/lib/client'
+import { DEFAULT_SPELL_LANGUAGE, SPELL_LANGUAGES } from '@shared/spell/languages'
 import type { CompileOptions, DocumentInfo, DocumentSettings, GlobalSettings } from '@shared/ipc'
 
 interface Props {
@@ -246,12 +247,25 @@ export function SettingsModal({ open, doc, onClose, onDocChanged }: Props): JSX.
           </Field>
           <Field
             label="Check spelling as you type"
-            hint="Native macOS spellcheck on the prompt and chat boxes. Right-click a flagged word for suggestions."
+            hint="Underlines misspellings in the editor and the prompt/chat boxes. Right-click a flagged word for suggestions."
           >
             <Toggle
               aria-label="Check spelling as you type"
               checked={global.spellcheckEnabled ?? true}
               onChange={(c) => patchGlobal({ spellcheckEnabled: c })}
+            />
+          </Field>
+          <Field
+            label="Editor language"
+            hint="Dictionary the .tex editor checks against — downloaded on first use. The prompt/chat boxes follow your macOS system language."
+          >
+            <Select
+              aria-label="Editor spellcheck language"
+              size="md"
+              value={global.spellLanguage ?? DEFAULT_SPELL_LANGUAGE}
+              options={SPELL_LANGUAGES.map((l) => ({ label: l.label, value: l.code }))}
+              onChange={(v) => patchGlobal({ spellLanguage: v })}
+              wrapStyle={{ width: '100%' }}
             />
           </Field>
         </Section>

@@ -125,6 +125,10 @@ export const api = {
   /** Personal spell dictionary — words the user taught via "Add to Dictionary". */
   spellGetWords: () => invoke<string[]>(IpcChannels.spellGetWords),
   spellAddWord: (word: string) => invoke<void>(IpcChannels.spellAddWord, word),
+  /** Editor language dictionary (downloaded + cached on demand) + installed list. */
+  spellDictionary: (code: string) =>
+    invoke<{ aff: string; dic: string }>(IpcChannels.spellDictionary, code),
+  spellInstalledLanguages: () => invoke<string[]>(IpcChannels.spellInstalledLanguages),
   /** Per-document settings (main-file override + compiler options). setDocument
    *  returns a fresh DocumentInfo when the main file changed (session rebuilt). */
   settingsGetDocument: () => invoke<DocumentSettings>(IpcChannels.settingsGetDocument),

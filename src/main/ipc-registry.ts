@@ -39,6 +39,7 @@ import { Store, GlobalSettingsStore } from './infra/Store'
 import { appendTurns, patchTurnByOpId, removeThread, upsertThread } from './threadStore'
 import { changedFilesInDiff } from './services/diffSpans'
 import { DocumentService } from './services/DocumentService'
+import { DictionaryService } from './services/DictionaryService'
 import { buildOutline } from './services/paperOutline'
 import { ActiveOps, describeScope } from './services/sessionBus'
 import type { LiveConflict } from '@shared/ipc'
@@ -50,6 +51,7 @@ import { setSpellcheckEnabled } from './spellcheck'
 const runner = new DefaultProcessRunner()
 let store: Store
 let globalSettings: GlobalSettingsStore
+let dictionaries: DictionaryService
 /** In-flight ops across all windows (shared by every DocumentSession) — the session
  *  bus reads it so one window's op sees what its siblings are editing right now. */
 const activeOps = new ActiveOps()
@@ -131,6 +133,7 @@ export function getRecentProjects(): RecentProject[] {
 export function registerIpcHandlers(): void {
   store = new Store(join(app.getPath('userData'), 'projects.json'))
   globalSettings = new GlobalSettingsStore(join(app.getPath('userData'), 'settings.json'))
+  dictionaries = new DictionaryService(join(app.getPath('userData'), 'dictionaries'))
   documents = new DocumentService({
     store,
     makeGit: (root) => new GitClient(runner, root),
@@ -406,6 +409,9 @@ export function registerIpcHandlers(): void {
     const words = globalSettings.get().customDictionary ?? []
     if (!words.includes(word)) globalSettings.set({ customDictionary: [...words, word] })
   })
+  // Editor dictionaries: download on demand from the CDN, cache in userData.
+  ipcMain.handle(IpcChannels.spellDictionary, (_e, code: string) => dictionaries.ensure(code))
+  ipcMain.handle(IpcChannels.spellInstalledLanguages, () => dictionaries.installed())
 
   ipcMain.handle(IpcChannels.settingsGetDocument, (event): DocumentSettings => {
     const rec = store.getProject(sessionFor(event).info.root)
