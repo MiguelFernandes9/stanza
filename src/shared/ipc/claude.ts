@@ -11,11 +11,30 @@ export interface ClaudeRequest {
   /** @deprecated Single block snapshot (data URL) — folded into `attachments`.
    *  Kept transiently during the renderer migration; the bridge normalizes it. */
   imageDataUrl?: string
+  /** Renderer-supplied correlation tag echoed on every `claude:status` for this
+   *  run, so live activity can be routed to the originating card BEFORE the op
+   *  resolves (the opId is only known once claude:run returns). The renderer sets
+   *  it to the task id. */
+  clientRef?: string
+}
+/** A single live step of a running op — the model's reasoning as it streams, or
+ *  a tool call rendered as a human activity line. Carried on `claude:status`. */
+export interface ClaudeActivity {
+  kind: 'thinking' | 'text' | 'tool'
+  /** Reasoning/prose chunk (kind 'thinking' | 'text') — appended to the feed. */
+  text?: string
+  /** Human label for a tool call (kind 'tool'), e.g. "Reading intro.tex". */
+  label?: string
 }
 export interface ClaudeStatus {
   opId: string
   state: 'priming' | 'running' | 'done' | 'failed'
   detail?: string
+  /** Echo of ClaudeRequest.clientRef — routes the event to its card. */
+  clientRef?: string
+  /** Live activity while state is 'running' (streamed from --output-format
+   *  stream-json). Absent on bare state transitions. */
+  activity?: ClaudeActivity
 }
 /** A deterministic live-overlap signal, computed by span math the moment an op
  *  starts: another fork was editing overlapping content right then. Drives the

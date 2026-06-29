@@ -2,15 +2,20 @@ import { randomUUID } from 'node:crypto'
 import { copyFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ClaudeRequest, ClaudeStatus } from '../../shared/ipc/claude'
+import type { ClaudeActivity, ClaudeRequest, ClaudeStatus } from '../../shared/ipc/claude'
 import type { Attachment, StagedAttachment } from '../../shared/ipc/attachments'
 import type { CommitInfo, DocumentInfo } from '../../shared/ipc/document'
 import type { ProcessRunner, ProcResult } from '../infra/ProcessRunner'
 import type { GlobalSettingsStore } from '../infra/Store'
 import { claudeBin, claudeEnv } from './claudeCli'
+import { extractStreamNote, interpretStreamLine } from './claudeStream'
 import type { OutlineSection } from './paperOutline'
 import { opPrompt, primePrompt } from './prompts'
 import { ActiveOps, formatSessionDigest } from './sessionBus'
+
+/** Coalesce window for streamed thinking/text deltas — bound IPC traffic while
+ *  still feeling live (a long op can emit hundreds of token deltas a second). */
+const ACTIVITY_FLUSH_MS = 80
 
 // A Claude op is an agentic CLI run — extended thinking plus many tool
 // calls and recompiles — so it can legitimately run for many minutes. This
@@ -87,6 +92,7 @@ export class ClaudeService {
     onStatus: (s: ClaudeStatus) => void,
   ): Promise<{ opId: string; note: string }> {
     let shotDir: string | undefined
+    const stream = new ActivityStream((activity) => onStatus({ opId, state: 'running', activity }))
     try {
       onStatus({ opId, state: 'running' })
       const staged = writeAttachments(opId, normalizeAttachments(req))
@@ -104,13 +110,22 @@ export class ClaudeService {
       // every project file, needless work when no sibling is in flight.
       const outline = others.length > 0 ? this.sections() : []
       const digest = formatSessionDigest(commits, others, limit, outline)
-      args.push('--output-format', 'json', '--permission-mode', 'acceptEdits', opPrompt(req, staged?.files ?? [], digest ?? undefined))
-      const proc = await this.claudeIn(workDir, args)
+      // stream-json (needs --verbose) lets us surface the model's live reasoning +
+      // tool activity per line; --include-partial-messages adds token-level deltas
+      // where the CLI supports them. The final note is read back from the result line.
+      args.push(
+        '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
+        '--permission-mode', 'acceptEdits',
+        opPrompt(req, staged?.files ?? [], digest ?? undefined),
+      )
+      const proc = await this.claudeIn(workDir, args, undefined, (line) => stream.onLine(line))
       assertCompleted(proc, this.timeoutMs)
-      const note = extractNote(proc.stdout)
+      const { note, isError } = extractStreamNote(proc.stdout)
+      if (isError) throw new Error(note) // the model reported a failure (e.g. auth)
       onStatus({ opId, state: 'done' })
       return { opId, note }
     } finally {
+      stream.stop()
       if (shotDir) rmSync(shotDir, { recursive: true, force: true })
     }
   }
@@ -138,7 +153,12 @@ export class ClaudeService {
     return sessionId
   }
 
-  private claudeIn(workDir: string, args: string[], signal?: AbortSignal): Promise<ProcResult> {
+  private claudeIn(
+    workDir: string,
+    args: string[],
+    signal?: AbortSignal,
+    onStdoutLine?: (line: string) => void,
+  ): Promise<ProcResult> {
     return this.runner.run({
       cmd: claudeBin(),
       args: [...this.modelFlags(), ...args],
@@ -146,6 +166,7 @@ export class ClaudeService {
       timeoutMs: this.timeoutMs,
       env: claudeEnv(),
       ...(signal ? { signal } : {}),
+      ...(onStdoutLine ? { onStdoutLine } : {}),
     })
   }
 
@@ -160,6 +181,47 @@ export class ClaudeService {
     if (g.claudeModel) flags.push('--model', g.claudeModel)
     if (g.claudeEffort) flags.push('--effort', g.claudeEffort)
     return flags
+  }
+}
+
+/** Turns the raw stream-json line feed into coalesced ClaudeActivity callbacks.
+ *  Thinking/text deltas accumulate in a buffer flushed on a timer (so token
+ *  streaming doesn't flood IPC); tool calls flush the buffer then emit at once,
+ *  preserving order. `stop()` flushes the tail and clears the timer. */
+class ActivityStream {
+  private buf = ''
+  private bufKind: 'thinking' | 'text' | null = null
+  private timer: ReturnType<typeof setInterval> | null = null
+
+  constructor(private emit: (a: ClaudeActivity) => void) {
+    this.timer = setInterval(() => this.flush(), ACTIVITY_FLUSH_MS)
+  }
+
+  onLine(line: string): void {
+    for (const ev of interpretStreamLine(line)) {
+      if (ev.kind === 'tool') {
+        this.flush() // keep the reasoning that preceded this call ahead of it
+        this.emit({ kind: 'tool', label: ev.label })
+      } else if (ev.kind === 'thinking' || ev.kind === 'text') {
+        if (this.bufKind && this.bufKind !== ev.kind) this.flush()
+        this.bufKind = ev.kind
+        this.buf += ev.text
+      }
+      // 'result' is handled post-hoc by extractStreamNote — not live activity.
+    }
+  }
+
+  private flush(): void {
+    if (!this.bufKind || !this.buf) return
+    this.emit({ kind: this.bufKind, text: this.buf })
+    this.buf = ''
+    this.bufKind = null
+  }
+
+  stop(): void {
+    if (this.timer) clearInterval(this.timer)
+    this.timer = null
+    this.flush()
   }
 }
 

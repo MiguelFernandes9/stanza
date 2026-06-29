@@ -699,7 +699,7 @@ async function runClaudeOp(
         req.spans,
         async (workDir) => {
           op = await doc.claude.runForkTurn(workDir, fork.forkId, fork.claudeSessionId, req, (status) =>
-            sendTo(wc, IpcChannels.claudeStatus, status),
+            sendTo(wc, IpcChannels.claudeStatus, { ...status, clientRef: req.clientRef }),
           )
           fork.claudeSessionId = op.sessionId
           return op.opId
@@ -830,7 +830,7 @@ async function runClaudeTurn(
         req.spans,
         async (workDir) => {
           turn = await doc.claude.runForkTurn(workDir, fork.forkId, resumeId, claudeReq, (status) =>
-            sendTo(wc, IpcChannels.claudeStatus, status),
+            sendTo(wc, IpcChannels.claudeStatus, { ...status, clientRef: req.clientRef }),
           )
           fork.claudeSessionId = turn.sessionId
           // A fresh prime (first turn OR self-heal) yields a new session id —

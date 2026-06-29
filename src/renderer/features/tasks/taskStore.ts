@@ -1,4 +1,4 @@
-import type { Attachment, LiveConflict, ReviewProposal, ThreadTurn } from '../../../shared/ipc'
+import type { Attachment, ClaudeActivity, LiveConflict, ReviewProposal, ThreadTurn } from '../../../shared/ipc'
 import { restoredTask, withResolvedTurn, withTurnError, withTurnResult, withUserTurn } from './taskStore.threads'
 
 /** Fixed id for the block snapshot, so re-capturing replaces it and the camera
@@ -35,6 +35,10 @@ export interface EditTask {
   conflict?: LiveConflict
   /** Last op error (task returned to compose). */
   error?: string
+  /** Live view of the running op (busy phase): the model's streamed reasoning
+   *  and a list of tool activity steps. Set by `op-activity`, cleared when the op
+   *  resolves. */
+  activity?: { thinking: string; steps: string[] }
   /** "Keep chat": this task is a persistent multi-turn conversation bubble. */
   persistent?: boolean
   /** Stable id for the persisted thread record (set on the first turn). */
@@ -86,6 +90,7 @@ export type TaskAction =
   | { type: 'submit'; taskId: number }
   | { type: 'start-whole-doc'; instruction: string }
   | { type: 'op-started'; taskId: number; opId: string }
+  | { type: 'op-activity'; taskId: number; activity: ClaudeActivity }
   | { type: 'proposal'; taskId: number; proposal: ReviewProposal; note: string; conflict?: LiveConflict }
   | { type: 'op-noop'; taskId: number; note: string; conflict?: LiveConflict }
   | { type: 'op-failed'; taskId: number; error: string }
@@ -239,7 +244,7 @@ export function taskReducer(s: TaskState, a: TaskAction): TaskState {
     case 'submit': {
       const t = s.tasks.find((x) => x.id === a.taskId)
       if (!t || t.phase !== 'compose' || !t.instruction.trim()) return s
-      return { ...patchTask(s, a.taskId, { phase: 'busy', error: undefined }), adding: false }
+      return { ...patchTask(s, a.taskId, { phase: 'busy', error: undefined, activity: undefined }), adding: false }
     }
     case 'start-whole-doc': {
       // No selection → an unscoped, whole-project op. Goes straight to busy
@@ -255,16 +260,28 @@ export function taskReducer(s: TaskState, a: TaskAction): TaskState {
     }
     case 'op-started':
       return patchTask(s, a.taskId, { opId: a.opId })
+    case 'op-activity': {
+      // Live reasoning/activity only while the op runs — drop late events that
+      // arrive after the card has moved to review/noop/compose.
+      const t = s.tasks.find((x) => x.id === a.taskId)
+      if (!t || t.phase !== 'busy') return s
+      const cur = t.activity ?? { thinking: '', steps: [] }
+      const next =
+        a.activity.kind === 'tool'
+          ? { ...cur, steps: [...cur.steps, a.activity.label ?? ''] }
+          : { ...cur, thinking: cur.thinking + (a.activity.text ?? '') }
+      return patchTask(s, a.taskId, { activity: next })
+    }
     case 'proposal':
       return {
-        ...patchTask(s, a.taskId, { phase: 'review', proposal: a.proposal, note: a.note, conflict: a.conflict }),
+        ...patchTask(s, a.taskId, { phase: 'review', proposal: a.proposal, note: a.note, conflict: a.conflict, activity: undefined }),
         activeTask: a.taskId
       }
     case 'op-noop':
       // No proposal (refusal / no changes) — surface the note on the card.
-      return { ...patchTask(s, a.taskId, { phase: 'noop', note: a.note, conflict: a.conflict }), activeTask: a.taskId }
+      return { ...patchTask(s, a.taskId, { phase: 'noop', note: a.note, conflict: a.conflict, activity: undefined }), activeTask: a.taskId }
     case 'op-failed':
-      return patchTask(s, a.taskId, { phase: 'compose', error: a.error })
+      return patchTask(s, a.taskId, { phase: 'compose', error: a.error, activity: undefined })
     case 'restore-proposal': {
       // Crash recovery / re-emitted pending proposals (FR7): attach to the
       // owning task when present, else surface an unanchored review card.

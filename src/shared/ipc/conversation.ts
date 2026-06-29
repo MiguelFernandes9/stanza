@@ -54,6 +54,10 @@ export interface ClaudeTurnRequest {
   /** @deprecated Single block snapshot (data URL) — folded into `attachments`.
    *  Kept transiently during the renderer migration; the bridge normalizes it. */
   imageDataUrl?: string
+  /** Correlation tag echoed on every `claude:status` for this turn, so live
+   *  activity routes to the originating card before the turn resolves (set to
+   *  the task id by the renderer). */
+  clientRef?: string
 }
 
 export interface ClaudeTurnResult {

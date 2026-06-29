@@ -12,6 +12,7 @@ import type { PageBlock } from '../paper/paperModel'
 import type { EditTask } from './taskStore'
 import { taskSnapshot } from './taskStore'
 import { AttachmentChips } from '../chat/AttachmentChips'
+import { OpActivityPanel } from './OpActivityPanel'
 import { summarizeBlocks } from '@shared/blocks/changes'
 import { AiDisabledNotice } from '@renderer/features/assistant/AiDisabledNotice'
 
@@ -521,9 +522,10 @@ export function TaskCard({
                 ))}
               </span>
               <span style={{ font: 'var(--text-2xs)/1 var(--font-mono)', color: 'var(--ink-400)' }}>
-                claude -p · {blocks[0]?.span.file ?? 'whole project'}
+                {task.activity?.steps.at(-1) ?? `claude -p · ${blocks[0]?.span.file ?? 'whole project'}`}
               </span>
             </div>
+            <OpActivityPanel activity={task.activity} />
           </div>
         )}
 
