@@ -820,6 +820,24 @@ export function binBlocks(
       continue
     }
     for (const u of run) {
+      // A detached row that sits INSIDE another block's box (its backward-map hit a
+      // delimiter line — e.g. an equation's \begin — but it renders among that block's
+      // own rows) belongs to that block: attach it there, never orphan it UP into the
+      // block above (which would drag that box down over this one). Containment beats
+      // upward-contiguity; the tightest container wins. A true galley strut on the
+      // preceding paragraph's last line renders ABOVE the equation, so no box contains
+      // it and it still falls through to the nearest-box-above extension below (#151).
+      let host: PdfRect | null = null
+      for (const b of placed) {
+        if (b.page !== u.page || !(b.x < u.xRight && u.xLeft < b.x + b.width)) continue
+        if (b.y - 2 <= u.yTop && u.yBottom <= b.y + b.height + 2 && (!host || b.height < host.height)) host = b
+      }
+      if (host) {
+        const right = Math.max(host.x + host.width, u.xRight)
+        host.x = Math.min(host.x, u.xLeft)
+        host.width = right - host.x
+        continue
+      }
       let best: PdfRect | null = null
       let bestGap = MAX_LINE_GAP
       for (const b of placed) {

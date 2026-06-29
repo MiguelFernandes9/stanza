@@ -1641,3 +1641,38 @@ describe('binBlocks — galley-overhang trim (display equation steals the line a
     expect(eq[0]!.y).toBeLessThan(100) // keeps the strut-recovered top (no foreign box to cede to)
   })
 })
+
+describe('binBlocks — a detached fragment inside an equation re-homes there, not up', () => {
+  // Real bug (IEEEtran 2-col, main_v2 page 4): a display equation's first rendered line
+  // has a LEFT fragment ("x_{c,t}=") whose synctex backward-map hits the \begin line, so
+  // mapsToLeadingDelimiter detaches it (arrives null). It renders AMONG the equation's own
+  // rows but pokes a few pt left of them, so it isn't "covered" by the equation box. Without
+  // the containment rule the orphan pass binds it UP to the run-in \paragraph above (gap
+  // < MAX_LINE_GAP), dragging that box DOWN over the equation (~20pt overlap). It must
+  // instead re-home to the equation it sits inside.
+  const parRows = [trow(547, 557, 312, 563), trow(560, 569, 312, 480), trow(572, 580, 312, 360)]
+  const eqRows = [trow(585, 596, 419, 435), trow(599, 606, 387, 396), trow(595, 605, 437, 563), trow(610, 617, 420, 434)]
+  const frag = trow(595, 605, 381, 407) // detached eq fragment: xLeft 381 < eqRows' min x (387)
+  const rowsByPage = new Map([[1, [...parRows, frag, ...eqRows]], [2, bodyRun(45, 700, 312, 563)]])
+  const toRect = (r: TextRow): PdfRect => prect(1, r.xLeft, r.yTop, r.xRight - r.xLeft, r.yBottom - r.yTop)
+
+  it('keeps the paragraph box off the equation and gives the fragment to the equation', () => {
+    const units: AttributedUnit[] = [
+      ...parRows.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'par#a')),
+      aunit(1, frag.xLeft, frag.yTop, frag.xRight, frag.yBottom, null), // detached upstream
+      ...eqRows.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'eq#1'))
+    ]
+    const regionsById = new Map<string, PdfRect[]>([
+      ['par#a', parRows.map(toRect)],
+      ['eq#1', eqRows.map(toRect)]
+    ])
+    const { boxesById } = binBlocks(units, rowsByPage, new Set(), regionsById, new Set())
+    const par = boxesById.get('par#a')!
+    const eq = boxesById.get('eq#1')!
+    expect(par).toHaveLength(1)
+    expect(eq).toHaveLength(1)
+    expect(boxBottom(par[0]!)).toBeLessThan(585) // paragraph stays off the equation (was dragged to ~605)
+    expect(eq[0]!.y).toBeGreaterThanOrEqual(boxBottom(par[0]!) - 2) // no overlap
+    expect(eq[0]!.x).toBeLessThanOrEqual(382) // equation regained its detached left fragment (x≈381)
+  })
+})
