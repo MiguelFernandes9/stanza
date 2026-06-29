@@ -236,6 +236,87 @@ describe('front matter (\\title…\\maketitle) as one block (Bug B)', () => {
   })
 })
 
+describe('prose-less declarative macros are not phantom blocks (IEEE Access)', () => {
+  // IEEE Access interposes title-page macros (not in FRONTMATTER_MACROS) and the
+  // abstract/keywords envs between \author and \maketitle. Each lone macro used to
+  // become its own phantom paragraph block that collided on the title page.
+  // line numbers:                              1
+  const DOC = [
+    '\\begin{document}', //                     1
+    '\\history{Date xxxx}', //                  2
+    '\\doi{10.1109/X}', //                      3
+    '', //                                      4
+    '\\title{A Paper}', //                      5
+    '\\author{Jane Doe}', //                    6
+    '\\address[1]{Univ. of Coimbra}', //        7
+    '\\markboth{IEEE Access}{Doe}', //          8
+    '\\corresp{me@x.com}', //                   9
+    '', //                                     10
+    '\\begin{abstract}', //                    11
+    'Abstract prose here.', //                 12
+    '\\end{abstract}', //                      13
+    '', //                                     14
+    '\\begin{IEEEkeywords}', //                15
+    'kw one, kw two', //                       16
+    '\\end{IEEEkeywords}', //                  17
+    '', //                                     18
+    '\\titlepgskip=-15pt', //                  19
+    '\\maketitle', //                          20
+    '', //                                     21
+    '\\section{Introduction}', //              22
+    'Intro prose.', //                         23
+    '', //                                     24
+    '\\EOD', //                                25
+    '\\appendices', //                         26
+    '\\end{document}', //                      27
+  ].join('\n')
+
+  test('yields only frontmatter, abstract, keywords, section — no phantom paragraphs', () => {
+    const roots = parseBlocks(FILE, DOC)
+    expect(roots.map((b) => b.kind)).toEqual(['environment', 'environment', 'environment', 'section'])
+    expect(roots.map((b) => b.name)).toEqual(['frontmatter', 'abstract', 'IEEEkeywords', 'Introduction'])
+  })
+
+  test('the title-page macros fold into the single frontmatter block', () => {
+    const roots = parseBlocks(FILE, DOC)
+    const fm = roots[0]!
+    expect(fm).toMatchObject({ kind: 'environment', name: 'frontmatter' })
+    expect(blockAtLine(roots, FILE, 5)).toBe(fm) // \title
+    expect(blockAtLine(roots, FILE, 7)).toBe(fm) // \address — folded, not its own block
+    expect(blockAtLine(roots, FILE, 9)).toBe(fm) // \corresp — folded
+  })
+
+  test('lone declarative macros render no block: \\titlepgskip, \\EOD, \\appendices', () => {
+    const roots = parseBlocks(FILE, DOC)
+    expect(blockAtLine(roots, FILE, 19)).toBe(null) // \titlepgskip=-15pt (assignment, not prose)
+    expect(blockAtLine(roots, FILE, 25)).toBe(null) // \EOD
+    expect(blockAtLine(roots, FILE, 26)).toBe(null) // \appendices
+  })
+
+  test('the abstract and keywords are each exactly one block', () => {
+    const roots = parseBlocks(FILE, DOC)
+    const abstract = roots[1]!
+    const keywords = roots[2]!
+    expect(abstract).toMatchObject({ kind: 'environment', name: 'abstract', span: { startLine: 11, endLine: 13 } })
+    expect(keywords).toMatchObject({ kind: 'environment', name: 'IEEEkeywords', span: { startLine: 15, endLine: 17 } })
+  })
+
+  test('the section keeps its real prose paragraph (regression: prose still blocks)', () => {
+    const roots = parseBlocks(FILE, DOC)
+    const section = roots[3]!
+    expect(section.children.map((c) => c.kind)).toEqual(['paragraph'])
+    expect(blockAtLine(roots, FILE, 23)).toBe(section.children[0]) // "Intro prose."
+  })
+})
+
+describe('a paragraph led by a text macro still blocks (prose-rule regression)', () => {
+  test('\\textbf{Note:} followed by prose is one paragraph block', () => {
+    const roots = parseBlocks(FILE, '\\textbf{Note:} this is real prose text.\n')
+    expect(roots.map((b) => b.kind)).toEqual(['paragraph'])
+    expect(blockAtLine(roots, FILE, 1)).toBe(roots[0])
+  })
+})
+
 describe('transparent marker macros (\\label etc.)', () => {
   test('a bare \\label after \\chapter makes no phantom paragraph block', () => {
     const roots = parseBlocks('ch1.tex', '\\chapter{X}\n\\label{y}\n\n\\section{Z}')

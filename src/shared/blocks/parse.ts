@@ -181,7 +181,14 @@ function walkBody(file: string, nodes: Ast.Node[]): BlockNode[] {
  *  the outer paragraph (BUG-22). */
 function walkScope(file: string, nodes: Ast.Node[], out: BlockNode[]): void {
   const sectionStack: { block: BlockNode; level: number }[] = []
-  let paragraph: { startLine: number; endLine: number } | null = null
+  // `hasProse`: did this run accumulate any rendered text/math? A run of only
+  // declarative macros (\address, \titlepgskip, …) has none and is never a block.
+  let paragraph: { startLine: number; endLine: number; hasProse: boolean } | null = null
+  // True right after a macro call: an UNKNOWN macro's braces/optionals leak as
+  // sibling group/`[..]`/`=..` nodes (unified-latex only attaches args for macros
+  // it knows), so those are the macro's arguments — not standalone prose. Reset by
+  // any real prose / parbreak / section / environment.
+  let afterMacro = false
   // Open front-matter span (\title…), closed by \maketitle. Survives the blank
   // lines (parbreaks) between \title/\author/\maketitle — so it is NOT tied to
   // the paragraph accumulator.
@@ -194,7 +201,15 @@ function walkScope(file: string, nodes: Ast.Node[], out: BlockNode[]): void {
 
   const flushParagraph = () => {
     if (!paragraph) return
-    attach(block('paragraph', file, paragraph.startLine, paragraph.endLine))
+    // A run with no rendered prose (only declarative macros like the IEEE title-page
+    // \address/\markboth/\titlepgskip, or a stray \EOD/\appendices) is NOT a block.
+    // While the front matter is open it folds into that one block (so the title-page
+    // macros stay selectable as the title page); otherwise it's dropped.
+    if (paragraph.hasProse) {
+      attach(block('paragraph', file, paragraph.startLine, paragraph.endLine))
+    } else if (frontMatter) {
+      frontMatter.endLine = Math.max(frontMatter.endLine, paragraph.endLine)
+    }
     paragraph = null
   }
 
@@ -205,9 +220,12 @@ function walkScope(file: string, nodes: Ast.Node[], out: BlockNode[]): void {
     frontMatter = null
   }
 
-  const joinParagraph = (startLine: number, endLine: number) => {
-    if (!paragraph) paragraph = { startLine, endLine }
-    else paragraph.endLine = Math.max(paragraph.endLine, endLine)
+  const joinParagraph = (startLine: number, endLine: number, prose: boolean) => {
+    if (!paragraph) paragraph = { startLine, endLine, hasProse: prose }
+    else {
+      paragraph.endLine = Math.max(paragraph.endLine, endLine)
+      if (prose) paragraph.hasProse = true
+    }
   }
 
   const walkNodes = (ns: Ast.Node[]): void => {
@@ -220,12 +238,15 @@ function walkScope(file: string, nodes: Ast.Node[], out: BlockNode[]): void {
         // An own-line comment after prose is a soft paragraph break: unified-latex
         // emits parbreak only on a blank line, so a bare `% note` between two
         // paragraphs would otherwise fuse them (M2-3). Inline `prose % note` absorbs.
-        if (!node.sameline) flushParagraph()
-        else if (paragraph) paragraph.endLine = Math.max(paragraph.endLine, end.line)
+        if (!node.sameline) {
+          flushParagraph()
+          afterMacro = false
+        } else if (paragraph) paragraph.endLine = Math.max(paragraph.endLine, end.line)
         continue
       }
       if (node.type === 'parbreak') {
         flushParagraph()
+        afterMacro = false
         continue
       }
       if (node.type === 'macro' && (node.content === 'bibliography' || node.content === 'printbibliography')) {
@@ -277,12 +298,14 @@ function walkScope(file: string, nodes: Ast.Node[], out: BlockNode[]): void {
         const section = block('section', file, start.line, end.line, sectionTitle(node))
         attach(section)
         sectionStack.push({ block: section, level })
+        afterMacro = false
         continue
       }
 
       if (ENVIRONMENT_TYPES.has(node.type)) {
         flushParagraph()
         flushFrontMatter(start.line - 1) // close the front matter, absorbing the gap before this env
+        afterMacro = false
         const env = node as Ast.Environment
         const name = envName(env)
         // A backmatter sectioning env (bibliography/index) is a top-level division:
@@ -301,20 +324,46 @@ function walkScope(file: string, nodes: Ast.Node[], out: BlockNode[]): void {
         continue
       }
 
-      // A brace group ({\large …}) is transparent for block structure: recurse
-      // with the same paragraph/section state so an internal parbreak splits and a
-      // nested \section/env still attaches; an inline group joins the open paragraph (BUG-22).
+      // A brace group: an UNKNOWN macro's `{..}` argument leaks here as a sibling
+      // (afterMacro) — it's the macro's argument text, NOT a standalone block, so
+      // skip it. A genuine prose group ({\large …}) recurses so an internal parbreak
+      // splits and a nested \section/env still attaches (BUG-22).
       if (node.type === 'group') {
+        if (afterMacro) continue // macro argument
         walkNodes(node.content)
         continue
       }
 
-      // anything else (string, inline macro, inline or display math) joins a
-      // paragraph — incl. 'displaymath' \[..\]/$$..$$, which is not a \begin
-      // env and so never breaks the paragraph (BUG-45). Real prose also closes an
-      // open front-matter span (it never runs into body text).
-      if (frontMatter) flushFrontMatter(start.line - 1)
-      joinParagraph(start.line, end.line)
+      // An inline/declarative macro (\cite mid-prose, or a lone \address/\markboth):
+      // joins the run but carries no rendered prose by itself, and marks afterMacro
+      // so its following `{..}`/`[..]`/`=..` arguments don't leak as prose.
+      if (node.type === 'macro') {
+        joinParagraph(start.line, end.line, false)
+        afterMacro = true
+        continue
+      }
+
+      // anything else (string, inline or display math) joins a paragraph — incl.
+      // 'displaymath' \[..\]/$$..$$, which is not a \begin env and so never breaks
+      // the paragraph (BUG-45).
+      //
+      // It counts as rendered PROSE only when it's visible text or math. A string
+      // right after an unknown macro that does NOT start with a letter is an
+      // argument/value token, not prose — its optional `[1]` or assignment value
+      // (`\address[1]{..}`, `\titlepgskip=-15pt` → `=`,`-15pt`). Body prose starts
+      // with a letter, so this never suppresses a real sentence.
+      const argTail = afterMacro && node.type === 'string' && !/^\s*\p{L}/u.test(node.content)
+      const prose =
+        node.type === 'inlinemath' ||
+        node.type === 'displaymath' ||
+        (node.type === 'string' && /\p{L}/u.test(node.content) && !argTail)
+      // Real prose closes an open front-matter span (it never runs into body text)
+      // and ends the macro-argument region; a declarative macro's args do not.
+      if (prose) {
+        afterMacro = false
+        if (frontMatter) flushFrontMatter(start.line - 1)
+      }
+      joinParagraph(start.line, end.line, prose)
     }
   }
 
