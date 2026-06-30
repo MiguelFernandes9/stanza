@@ -1684,6 +1684,21 @@ describe('binBlocks — front-matter title/footnote split (Bug B)', () => {
     expect((boxesById.get('sec2/par1#a') ?? []).length).toBeGreaterThan(0) // the paragraph keeps its box
   })
 
+  it('recovers a dropped LEADING line by extending the box below it up', () => {
+    // The first wrapped line of a column continuation is synctex-dropped (null) and sits
+    // just ABOVE the cell box, with nothing above it — extend the box up to cover it (the
+    // live §G "all,…" continuation bug). The common trailing-tail case still extends down.
+    const cont = lineRows([280, 293, 306], 100, 300) // continuation lines (boxed)
+    const dropped = lineRows([267], 100, 250) // dropped leading line, just above the box
+    const rowsByPage = new Map<number, TextRow[]>([[1, [...dropped, ...cont]]])
+    const contU = cont.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'sec1/par1#a'))
+    const dropU = dropped.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, null)) // synctex-null
+    const { boxesById } = binBlocks([...contU, ...dropU], rowsByPage, new Set())
+    const box = boxesById.get('sec1/par1#a')!
+    expect(box).toHaveLength(1)
+    expect(box[0]!.y).toBeLessThanOrEqual(270) // top extended up over the dropped line (yTop≈269)
+  })
+
   it('builds a split cluster box like the main builder — extent-fills to the forward rects', () => {
     // The footnote cluster's last rendered line landed in NULL (not the fm units), but the
     // block's forward line-rect covers it. The split must build its box the SAME way as the

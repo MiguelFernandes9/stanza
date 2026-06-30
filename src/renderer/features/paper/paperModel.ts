@@ -936,14 +936,29 @@ export function binBlocks(
         host.width = right - host.x
         continue
       }
-      let best: PdfRect | null = null
-      let bestGap = MAX_LINE_GAP
+      let above: PdfRect | null = null
+      let aboveGap = MAX_LINE_GAP
+      let below: PdfRect | null = null
+      let belowGap = MAX_LINE_GAP
       for (const b of placed) {
         if (b.page !== u.page || !(b.x < u.xRight && u.xLeft < b.x + b.width)) continue
-        const gap = u.yTop - (b.y + b.height)
-        if (gap >= -2 && gap < bestGap) { bestGap = gap; best = b }
+        const gapA = u.yTop - (b.y + b.height) // box sits ABOVE the orphan (its trailing tail)
+        if (gapA >= -2 && gapA < aboveGap) { aboveGap = gapA; above = b }
+        const gapB = b.y - u.yBottom // box sits BELOW the orphan (orphan is its leading line)
+        if (gapB >= -2 && gapB < belowGap) { belowGap = gapB; below = b }
       }
-      if (best) best.height = Math.max(best.height, u.yBottom - best.y)
+      if (above) above.height = Math.max(above.height, u.yBottom - above.y)
+      else if (below) {
+        // A dropped LEADING line of a column continuation: synctex drops the first wrapped
+        // line of the right-column half (or mis-files it), leaving it just ABOVE the cell's
+        // box. Extend the box UP to cover it (the trailing-tail case above is the common one).
+        const boxBottom = below.y + below.height
+        const right = Math.max(below.x + below.width, u.xRight)
+        below.y = Math.min(below.y, u.yTop)
+        below.x = Math.min(below.x, u.xLeft)
+        below.height = boxBottom - below.y
+        below.width = right - below.x
+      }
     }
   }
 
