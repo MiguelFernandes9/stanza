@@ -376,6 +376,29 @@ describe('contentBand — type block from global row clustering', () => {
     expect(contentBand(new Map())).toBeNull()
     expect(contentBand(new Map([[1, []]]))).toBeNull()
   })
+
+  // Body grid 300..716 (step 13); a footer 17pt below the last line (733) — CHAINED
+  // into the body cluster (gap 17 < 18, so the cluster split misses it) yet recurring.
+  const bodyGrid = (): TextRow[] => {
+    const rows: TextRow[] = []
+    for (let y = 300; y <= 716; y += 13) rows.push(trow(y - 11, y, 36, 540))
+    return rows
+  }
+
+  it('peels a recurring footer too close for the cluster gap (IEEE: ~17pt below body)', () => {
+    const rowsByPage = new Map<number, TextRow[]>()
+    for (let p = 1; p <= 6; p++) rowsByPage.set(p, [...bodyGrid(), trow(726, 733, 36, 83)]) // footer recurs
+    const band = contentBand(rowsByPage)!
+    expect(band.top).toBeCloseTo(300, 0)
+    expect(band.bottom).toBeCloseTo(716, 0) // footer (733) peeled by recurrence, not 733
+  })
+
+  it('keeps a one-off bottom line chained to the body (only repeated furniture is peeled)', () => {
+    const rowsByPage = new Map<number, TextRow[]>()
+    for (let p = 1; p <= 6; p++) rowsByPage.set(p, bodyGrid())
+    rowsByPage.get(1)!.push(trow(726, 733, 36, 540)) // a real last line on ONE page — not furniture
+    expect(contentBand(rowsByPage)!.bottom).toBeCloseTo(733, 0) // kept (doesn't recur)
+  })
 })
 
 describe('binContentToBlocks — one row-union builder for every text block', () => {

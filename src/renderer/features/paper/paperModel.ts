@@ -267,6 +267,13 @@ const MAX_LINE_GAP = 18
  *  cluster is page furniture (a running head or folio — one short line per page,
  *  a minority isolated in the margin) and is peeled off the content band. */
 const FURNITURE_SHARE = 0.25
+/** Min gap (pt) from the body's last/first line to a RECURRING margin row (footer /
+ *  running head) for it to be peeled by recurrence — above the ~13pt body grid, so a
+ *  normal next body line is never trimmed, but a footer a hair under MAX_LINE_GAP is. */
+const FURNITURE_GAP = 14
+/** Only the top/bottom this-fraction of the content band is scanned for a chained
+ *  recurring head/footer — a strongly-recurring baseline mid-body (rare) is never trimmed. */
+const MARGIN_SCAN_FRAC = 0.2
 /** Slack (pt) for content-band membership and region/row binning — absorbs the
  *  sub-pt drift between a synctex rect's baseline (v) and the converted pdf.js
  *  text-row baseline (the bullet measured 719.86 vs 717.7 on the demo). */
@@ -327,7 +334,59 @@ export function contentBand(rowsByPage: Map<number, TextRow[]>): { top: number; 
   let hi = clusters.length - 1
   while (hi > lo && clusters[lo]!.length < FURNITURE_SHARE * maxCount) lo++
   while (hi > lo && clusters[hi]!.length < FURNITURE_SHARE * maxCount) hi--
-  return { top: clusters[lo]![0]!, bottom: clusters[hi]![clusters[hi]!.length - 1]! }
+  const top = clusters[lo]![0]!
+  const bottom = clusters[hi]![clusters[hi]!.length - 1]!
+  return trimRecurringFurniture(rowsByPage, top, bottom)
+}
+
+/** Peel a running head / footer / page-number that the cluster split missed because
+ *  it sits only a body-line below (or above) the text — too close for the
+ *  margin-sized MAX_LINE_GAP, yet it repeats at the SAME baseline on most pages.
+ *  Recurrence is the signal furniture has and content lacks: a one-off line at that
+ *  y stays. Only the top/bottom EXTREMES are trimmed, and only across a gap wider
+ *  than the body's line grid — the interior is never touched. */
+function trimRecurringFurniture(
+  rowsByPage: Map<number, TextRow[]>,
+  top: number,
+  bottom: number,
+): { top: number; bottom: number } {
+  const pages = rowsByPage.size
+  if (pages < 3) return { top, bottom } // no repetition signal on a 1-2 page doc
+  const pagesAt = new Map<number, Set<number>>() // rounded baseline → pages it appears on
+  for (const [page, rows] of rowsByPage)
+    for (const r of rows) {
+      const k = Math.round(r.baseline)
+      if (k < top - 1 || k > bottom + 1) continue
+      ;(pagesAt.get(k) ?? pagesAt.set(k, new Set()).get(k)!).add(page)
+    }
+  const ys = [...pagesAt.keys()].sort((a, b) => a - b)
+  // A footer / running head repeats at the SAME baseline on most pages; body lines do
+  // NOT (text flows differently per page, so a given baseline recurs only by chance).
+  // Require a STRONG majority so a coincidental body alignment isn't mistaken for furniture.
+  const strong = (y: number): boolean => (pagesAt.get(y)?.size ?? 0) >= Math.ceil(0.6 * pages)
+  const span = bottom - top
+  const margin = MARGIN_SCAN_FRAC * span // only scan the top/bottom margin region
+  let newBottom = bottom
+  let newTop = top
+  // Bottom: from the lowest baseline up, the first strongly-recurring line separated from
+  // the content above it by more than the body line grid is the footer — cut it and
+  // anything below (a page-number folio sits below the footer and rides along).
+  for (let k = ys.length - 1; k >= 1; k--) {
+    if (ys[k]! < bottom - margin) break
+    if (strong(ys[k]!) && ys[k]! - ys[k - 1]! > FURNITURE_GAP) {
+      newBottom = ys[k - 1]!
+      break
+    }
+  }
+  // Top: symmetric — a running head chained close enough to escape the cluster split.
+  for (let k = 0; k < ys.length - 1; k++) {
+    if (ys[k]! > top + margin) break
+    if (strong(ys[k]!) && ys[k + 1]! - ys[k]! > FURNITURE_GAP) {
+      newTop = ys[k + 1]!
+      break
+    }
+  }
+  return { top: newTop, bottom: newBottom }
 }
 
 /** A rendered unit (text row / graphic) that falls inside the synctex regions of
