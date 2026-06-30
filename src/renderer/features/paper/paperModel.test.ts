@@ -1192,6 +1192,15 @@ describe('environmentInteriorSpan — exclude \\begin/\\end delimiter lines (BUG
       sectionId: null, parentId: null, depth: 0
     }
     expect(environmentInteriorSpan(bib)).toEqual({ file: 'main.tex', startLine: 373, endLine: 387 })
+    // `\begin{IEEEkeywords}` renders the "INDEX TERMS" label — same rule, so its
+    // full-width first line isn't detached as a delimiter (IEEE Access keywords bug).
+    const kw: PageBlock = {
+      id: 'kw#1', kind: 'environment', envName: 'IEEEkeywords',
+      span: { file: 'main.tex', startLine: 66, endLine: 68 },
+      sectionId: null, parentId: null, depth: 0
+    }
+    expect(environmentInteriorSpan(kw)).toEqual({ file: 'main.tex', startLine: 66, endLine: 67 })
+    expect(mapsToLeadingDelimiter(kw, 'main.tex', 66)).toBe(false) // \begin line is content, not a delimiter
     // a non-heading env still strips \begin (figure's \begin galleys, BUG-21).
     const fig: PageBlock = {
       id: 'fig#1', kind: 'environment', envName: 'figure',
@@ -1583,6 +1592,24 @@ describe('binBlocks — front-matter title/footnote split (Bug B)', () => {
     // The two-column body is unaffected: still an 'l' box and an 'r' box.
     expect(boxesById.get('L#1')!.every((b) => b.col === 'l')).toBe(true)
     expect(boxesById.get('R#1')!.every((b) => b.col === 'r')).toBe(true)
+  })
+
+  it('a full-width block with a SHORT line (keywords label) is still ONE full box', () => {
+    // INDEX TERMS: a short "INDEX TERMS …" label line + full-width terms lines. The short
+    // line classifies 'l' on its own → a 2nd box overlapping the 'full' one (the live bug).
+    // Every line of a full-width block belongs to its single 'full' box.
+    const labelY = 60
+    const fullYs = Array.from({ length: 11 }, (_, i) => 73 + i * 13) // full-width lines (block ≥ furniture share)
+    const body = Array.from({ length: 24 }, (_, i) => 233 + i * 13) // tall two-col body → docGutter exists
+    const kwRows = [...lineRows([labelY], 70, 150), ...lineRows(fullYs, 70, 540)] // short label + full lines
+    const rows = new Map([[1, [...kwRows, ...lineRows(body, ...LCOL), ...lineRows(body, ...RCOL)]]])
+    const kw = kwRows.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'env1#kw'))
+    const L = lineRows(body, ...LCOL).map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'L#1'))
+    const R = lineRows(body, ...RCOL).map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'R#1'))
+    const { boxesById } = binBlocks([...kw, ...L, ...R], rows, new Set())
+    const box = boxesById.get('env1#kw')!
+    expect(box).toHaveLength(1) // NOT a full box + a stray 'l' label box
+    expect(box[0]!.col).toBe('full')
   })
 
   it('builds a split cluster box like the main builder — extent-fills to the forward rects', () => {

@@ -456,20 +456,35 @@ export function binBlocks(
     return false
   }
 
+  // A block is FULL-WIDTH if ANY of its lines in a `single` band spans the gutter
+  // (`columnOf` → 'full'): the IEEE abstract / keywords / title block. A `single` band
+  // has no columns, so EVERY line of such a block is one 'full' box — a short label
+  // ("INDEX TERMS …") or a last fragment must not spawn its own l/r box beside it. A
+  // single-band block with NO spanning line (a one-column figure) is NOT full-width.
+  const fullWidthBlocks = new Set<string>()
+  for (const u of units) {
+    if (!u.blockId) continue
+    const layout = columnsByPage.get(u.page)
+    if (layout && bandKindOf(u) === 'single' && columnOf(layout, u) === 'full') fullWidthBlocks.add(u.blockId)
+  }
+
   // A unit's column: a `*` float is always `full`; a non-float TEXT block on a
-  // two-column page is l/r (columnOf's `full` for a gutter-spanning line or a single
-  // band beside a float is snapped by centre — column is a block-on-page property, not
-  // a per-line one); a single-column page is `full`.
+  // two-column page is l/r (columnOf's `full` for a gutter-spanning line is snapped by
+  // centre — column is a block-on-page property, not a per-line one); a single-column
+  // page is `full`.
   const colOfUnit = (u: AttributedUnit): PdfCol => {
     if (fullWidthIds.has(u.blockId!)) return 'full'
     const layout = columnsByPage.get(u.page)
+    // Every line of a full-width block (in its `single` band) is the one 'full' box,
+    // short lines included — so the abstract/keywords never split into a full box + a
+    // stray l/r box.
+    if (bandKindOf(u) === 'single' && u.blockId && fullWidthBlocks.has(u.blockId)) return 'full'
     const c = layout ? columnOf(layout, u) : 'full'
     if (c !== 'full') return c
-    // columnOf says 'full'. Keep it for genuine full-width content — a unit in a
-    // `single` band (the IEEE abstract/keywords/title block spanning both columns):
-    // it is ONE full box. Only a 'full' from a TWO-column band is snapped to l/r by
-    // the DOC gutter (a gutter-spanning body line / a merged row; the per-page gutter
-    // can be a table's internal boundary on a table-only page, so use the doc gutter).
+    // columnOf says 'full'. Keep it for genuine full-width content in a `single` band;
+    // only a 'full' from a TWO-column band is snapped to l/r by the DOC gutter (a
+    // gutter-spanning body line / a merged row; the per-page gutter can be a table's
+    // internal boundary on a table-only page, so use the doc gutter).
     if (bandKindOf(u) !== 'two') return 'full'
     return docGutter ? ((u.xLeft + u.xRight) / 2 <= docGutter.gx ? 'l' : 'r') : 'full'
   }
@@ -1301,7 +1316,11 @@ export function binContentToBlocks(
 /** Environments whose `\begin` line RENDERS a sectioning heading ("Abstract",
  *  "References") rather than a galley — so geometry must INCLUDE that line, else
  *  the auto-heading sits in no block and the section's box misses its own title. */
-const HEADING_ENVS = new Set(['abstract', 'thebibliography', 'theindex'])
+// Environments whose \begin line itself RENDERS a leading label/title (so the
+// geometry span starts AT \begin and a row mapping there is the env's own content,
+// not a stolen preceding line). `abstract` → "Abstract", `IEEEkeywords` → "INDEX
+// TERMS", `thebibliography`/`theindex` → "References"/"Index".
+const HEADING_ENVS = new Set(['abstract', 'IEEEkeywords', 'thebibliography', 'theindex'])
 
 /** Geometry query span for a block, excluding an environment's \begin/\end
  *  delimiter lines: they carry no visible content and forward-map to stray
