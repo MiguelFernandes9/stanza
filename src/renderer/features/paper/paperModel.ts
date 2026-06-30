@@ -4,7 +4,7 @@ import type { TaskPhase } from '../tasks/taskStore'
 import type { TextRow } from './pdfTextRows'
 import type { GraphicBox } from './pdfGraphics'
 import type { ColumnLayout } from './columnLayout'
-import { columnLayoutByPage, columnOf, dominantGutter } from './columnLayout'
+import { bandKindAt, columnLayoutByPage, columnOf, dominantGutter } from './columnLayout'
 import { isMathEnvName } from '../../../shared/blocks/container'
 
 /** Selection state a task stamps on a block — drives the edge bar, the
@@ -413,16 +413,27 @@ export function binBlocks(
   // is a minority. Used for the row split below AND the column clip in the box loop.
   const docGutter = dominantGutter({ bands: [...columnsByPage.values()].flatMap((l) => l.bands) })
 
+  // The band kind at a unit's vertical centre on its own page: `single` = a
+  // full-width band (title block, abstract, keywords), `two` = the columned body.
+  const bandKindOf = (u: AttributedUnit): 'single' | 'two' | null => {
+    const layout = columnsByPage.get(u.page)
+    return layout ? bandKindAt(layout, (u.yTop + u.yBottom) / 2) : null
+  }
+
   // Split a text unit that spans the gutter into a left half and a right half. pdf.js merges
   // a left-column line and a right-column line on a shared baseline into ONE gutter-crossing
   // row when its per-page gutter detector fails (a figure-topped page), and that row then
   // lands in one block and steals the other column's line. Splitting at the gutter, with the
   // forward-containment override below re-homing each half to the block whose line rect
-  // contains it, undoes the merge. Box-neutral for a genuine full-width row: both halves
-  // re-home to the SAME block and union back. Only text-height units split — a graphic whole.
+  // contains it, undoes the merge. Only text-height units in a TWO-column band split — a
+  // genuine full-width row in a `single` band (the IEEE abstract/keywords spanning both
+  // columns above the body) must stay whole, or its halves column-snap to l/r → two boxes.
   if (docGutter)
     units = units.flatMap((u) =>
-      u.yBottom - u.yTop <= LINE_MAX && u.xLeft < docGutter.left && u.xRight > docGutter.right
+      bandKindOf(u) === 'two' &&
+      u.yBottom - u.yTop <= LINE_MAX &&
+      u.xLeft < docGutter.left &&
+      u.xRight > docGutter.right
         ? [{ ...u, xRight: docGutter.left }, { ...u, xLeft: docGutter.right }]
         : [u]
     )
@@ -454,9 +465,12 @@ export function binBlocks(
     const layout = columnsByPage.get(u.page)
     const c = layout ? columnOf(layout, u) : 'full'
     if (c !== 'full') return c
-    // Snap a gutter-spanning / single-band unit by the DOC gutter, not the per-page one —
-    // on a table-only last page the per-page gutter is the table's internal column boundary
-    // (off-centre), which would misclassify the body and fight the doc-gutter column clip.
+    // columnOf says 'full'. Keep it for genuine full-width content — a unit in a
+    // `single` band (the IEEE abstract/keywords/title block spanning both columns):
+    // it is ONE full box. Only a 'full' from a TWO-column band is snapped to l/r by
+    // the DOC gutter (a gutter-spanning body line / a merged row; the per-page gutter
+    // can be a table's internal boundary on a table-only page, so use the doc gutter).
+    if (bandKindOf(u) !== 'two') return 'full'
     return docGutter ? ((u.xLeft + u.xRight) / 2 <= docGutter.gx ? 'l' : 'r') : 'full'
   }
 

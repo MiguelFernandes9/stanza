@@ -1564,6 +1564,27 @@ describe('binBlocks — front-matter title/footnote split (Bug B)', () => {
     expect(fm[0]!.x + fm[0]!.width).toBeGreaterThan(450) // AND its right — spans the gutter, uncut
   })
 
+  it('boxes a full-width abstract (NOT a *-float) as ONE full box, never split at the gutter', () => {
+    // IEEE Access: the abstract / INDEX TERMS are full-width TEXT above the two-column
+    // body — a 'single' band, not a *-float, so not in fullWidthIds. They must be ONE
+    // 'full' box, not split into l/r by the doc-wide gutter (the live main_ieee bug).
+    const absY = Array.from({ length: 12 }, (_, i) => 60 + i * 13) // full-width abstract band (≥ furniture share)
+    const body = Array.from({ length: 24 }, (_, i) => 233 + i * 13) // tall two-col body → docGutter exists
+    const rows = new Map([[1, [...lineRows(absY, 70, 540), ...lineRows(body, ...LCOL), ...lineRows(body, ...RCOL)]]])
+    const abstract = lineRows(absY, 70, 540).map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'env1#abs'))
+    const L = lineRows(body, ...LCOL).map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'L#1'))
+    const R = lineRows(body, ...RCOL).map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'R#1'))
+    const { boxesById } = binBlocks([...abstract, ...L, ...R], rows, new Set()) // abstract NOT a fullWidthId
+    const abs = boxesById.get('env1#abs')!
+    expect(abs).toHaveLength(1)
+    expect(abs[0]!.col).toBe('full')
+    expect(abs[0]!.x).toBeLessThan(120) // reaches the abstract's left…
+    expect(abs[0]!.x + abs[0]!.width).toBeGreaterThan(450) // …and its right — spans the gutter, uncut
+    // The two-column body is unaffected: still an 'l' box and an 'r' box.
+    expect(boxesById.get('L#1')!.every((b) => b.col === 'l')).toBe(true)
+    expect(boxesById.get('R#1')!.every((b) => b.col === 'r')).toBe(true)
+  })
+
   it('builds a split cluster box like the main builder — extent-fills to the forward rects', () => {
     // The footnote cluster's last rendered line landed in NULL (not the fm units), but the
     // block's forward line-rect covers it. The split must build its box the SAME way as the
