@@ -73,7 +73,7 @@ export class DocumentService {
       override && texFiles.includes(override) ? override : detectMainFile(texFiles, read)
     if (mainFile === null) return null
 
-    return { root, mainFile, texFiles: orderTexFiles(mainFile, texFiles, read) }
+    return { root, mainFile, texFiles: orderTexFiles(mainFile, scopeToProject(mainFile, texFiles, read), read) }
   }
 
   /** "New document": minimal article project in <dir>/<name>.
@@ -186,7 +186,10 @@ function listTexFiles(root: string, dir = ''): string[] {
       if (!SKIP_DIRS.has(entry.name) && !entry.name.startsWith('.')) {
         found.push(...listTexFiles(root, relPath))
       }
-    } else if (entry.name.endsWith('.tex')) {
+    } else if (entry.name.endsWith('.tex') && !entry.name.startsWith('.')) {
+      // Skip hidden `.`-prefixed .tex — they are transient build artifacts
+      // (`.stanza-snippet-*`, `.stanza-scope.*`), never project content; left in
+      // they win main-file detection (a snippet has its own \documentclass).
       found.push(relPath)
     }
   }
@@ -205,6 +208,31 @@ function detectMainFile(
   const withBody = candidates.filter((f) => (read(f) ?? '').includes('\\begin{document}'))
   if (withBody.length === 1) return withBody[0]!
   return (withBody[0] ?? candidates[0])!
+}
+
+/** Scope a folder's .tex files to the ACTIVE document: the main file plus its
+ *  \input/\include subtree, plus orphan files. A folder may hold several
+ *  independent papers (e.g. an llncs `main.tex` alongside an IEEE
+ *  `main_ieee.tex` + `sections/`); a DIFFERENT \documentclass file and the files
+ *  only IT includes belong to that other document, not this one. Parsing them in
+ *  would pollute the outline/Claude context AND collide block ids (a block id is
+ *  structural path + content hash, so the two papers' identical "Introduction"
+ *  sections share an id and overwrite each other's box). Orphan files (no
+ *  \documentclass, not owned by another main) are kept — they may be \input via a
+ *  path the scanner can't follow. */
+function scopeToProject(
+  mainFile: string,
+  texFiles: string[],
+  read: (relPath: string) => string | null,
+): string[] {
+  const owned = new Set(resolveProjectFiles(mainFile, read))
+  const otherDoc = new Set<string>()
+  for (const f of texFiles) {
+    if (f === mainFile || owned.has(f)) continue
+    if (/^\s*\\documentclass/m.test(read(f) ?? ''))
+      for (const inc of resolveProjectFiles(f, read)) if (!owned.has(inc)) otherDoc.add(inc)
+  }
+  return texFiles.filter((f) => !otherDoc.has(f))
 }
 
 /** Inclusion order from the main file first, then remaining .tex files
