@@ -460,7 +460,12 @@ export function binBlocks(
   // Blocks that are a \bibliography / \printbibliography reference list. Their .bbl
   // entries are synctex-null (no per-line map), so they never attribute by backward map;
   // the orphan pass claims the long null run for them instead of leaving it unboxed.
-  bibliographyIds: Set<string> = new Set()
+  bibliographyIds: Set<string> = new Set(),
+  // Section/subsection HEADING blocks. A heading renders as a short title and never
+  // overlaps body text; a heading box that overlaps a body block's box is a synctex
+  // galley artifact (a \section near a column/page break gets a spurious rect in the
+  // other column's body) and is dropped — the body block owns that region.
+  headingIds: Set<string> = new Set()
 ): BinnedContent {
   const columnsByPage = columnLayoutByPage(rowsByPage)
 
@@ -974,6 +979,25 @@ export function binBlocks(
       const cur = contentTopByPage.get(b.page)
       if (cur === undefined || b.y < cur) contentTopByPage.set(b.page, b.y)
     }
+
+  // Heading galley cede: a section heading renders a short title and never overlaps body
+  // text, so a heading box that overlaps a NON-heading block's box is a synctex galley
+  // stray (a \section near a column break gets a phantom rect in the other column's body,
+  // and the body rows there backward-map to the heading). Drop the overlapping heading box;
+  // the body block owns the region. Keep it only if the heading would otherwise lose ALL
+  // its boxes (don't leave a heading unselectable on a pathological overlap).
+  if (headingIds.size) {
+    const bodyBoxes: PdfRect[] = []
+    for (const [id, boxes] of boxesById) if (!headingIds.has(id)) bodyBoxes.push(...boxes)
+    for (const id of headingIds) {
+      const boxes = boxesById.get(id)
+      if (!boxes || boxes.length < 2) continue // a 1-box heading keeps its only box
+      const kept = boxes.filter(
+        (h) => !bodyBoxes.some((b) => b.page === h.page && boxesOverlap(b, h)),
+      )
+      if (kept.length) boxesById.set(id, kept)
+    }
+  }
   return { boxesById, contentTopByPage, columnsByPage, contested: [] }
 }
 

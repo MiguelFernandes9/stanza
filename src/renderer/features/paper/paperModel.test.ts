@@ -1659,6 +1659,31 @@ describe('binBlocks — front-matter title/footnote split (Bug B)', () => {
     expect(boxesById.get('sec3#h') ?? []).toEqual([]) // the off-page heading drew NO box on page 1
   })
 
+  it('drops a heading galley box that overlaps a body block (two-column section break)', () => {
+    // A \section near a column break gets a spurious synctex rect in the OTHER column's
+    // body (the live §III-into-§II.B bug): the heading then has its real right-column box
+    // AND a left-column galley box overlapping a paragraph. The overlapping one is dropped.
+    const body = Array.from({ length: 40 }, (_, i) => 120 + i * 13) // tall two-col body → docGutter
+    const headingReal = lineRows([108], ...RCOL) // heading title, right column
+    const galley = lineRows([648], ...LCOL) // heading galley, left column (overlaps the para)
+    const para = lineRows([636, 649, 662], ...LCOL) // body paragraph, left column
+    const rows = new Map<number, TextRow[]>([
+      [1, [...lineRows(body, ...LCOL), ...lineRows(body, ...RCOL), ...headingReal, ...galley, ...para]],
+    ])
+    const toRect = (r: TextRow): PdfRect => prect(1, r.xLeft, r.yTop, r.xRight - r.xLeft, r.yBottom - r.yTop)
+    const hU = [...headingReal, ...galley].map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'sec3#h'))
+    const pU = para.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'sec2/par1#a'))
+    const regionsById = new Map<string, PdfRect[]>([
+      ['sec3#h', [...headingReal, ...galley].map(toRect)],
+      ['sec2/par1#a', para.map(toRect)],
+    ])
+    const { boxesById } = binBlocks([...hU, ...pU], rows, new Set(), regionsById, new Set(), new Set(['sec3#h']))
+    const h = boxesById.get('sec3#h')!
+    expect(h.length).toBeGreaterThan(0)
+    expect(h.every((b) => b.y < 200)).toBe(true) // only the real (right-top) box; the y648 galley box dropped
+    expect((boxesById.get('sec2/par1#a') ?? []).length).toBeGreaterThan(0) // the paragraph keeps its box
+  })
+
   it('builds a split cluster box like the main builder — extent-fills to the forward rects', () => {
     // The footnote cluster's last rendered line landed in NULL (not the fm units), but the
     // block's forward line-rect covers it. The split must build its box the SAME way as the
