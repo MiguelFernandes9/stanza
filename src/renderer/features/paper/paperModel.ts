@@ -874,6 +874,62 @@ export function binBlocks(
     placed.some((b) => b.page === u.page && b.x - 2 <= u.xLeft && u.xRight <= b.x + b.width + 2 && b.y - 2 <= u.yTop && u.yBottom <= b.y + b.height + 2)
   const orphanCol = (u: AttributedUnit): PdfCol =>
     !docGutter ? 'full' : (u.xLeft + u.xRight) / 2 <= docGutter.gx ? 'l' : 'r'
+
+  // Forward-region reclaim — runs BEFORE the orphan pass so a reclaimed row is `covered` and the
+  // orphan pass can't absorb it into a neighbour's box (else a long .bbl run gets swallowed into
+  // the preceding conclusion paragraph). Synctex's BACKWARD map can be corrupt for back matter: a
+  // multi-file IEEEtran doc maps its .bbl reference rows onto preamble lines and its \appendix
+  // sections onto nothing, so those blocks get NO rendered row attributed — and thus no box —
+  // even though their FORWARD map (source line → PDF rect) is correct. Recover from the forward
+  // map: assign each still-UNOWNED rendered row to the block whose forward region contains it, the
+  // SMALLEST containing rect winning when several do (a tight appendix-heading rect beats the
+  // whole-column .bbl galley). Additive — only rows no main/displaced box already covers — a no-op
+  // wherever the backward map worked.
+  if (gating) {
+    // Only a block the backward map MISSED ENTIRELY (no attributed unit anywhere — the .bbl
+    // bibliography and the synctex-untagged \appendix headings) may reclaim. A block that IS
+    // backward-present somewhere must NOT be extended here via its phantom galley rects: synctex
+    // forward over-reports a block (a section's last paragraph, an equation strut) as line-rects
+    // sprawling down/across the column, and letting a backward-known block claim unowned rows in
+    // that sprawl draws a galley-sized box over its neighbours (the IEEE §III paragraph swallowing
+    // §II). Recovering only truly-missed blocks keeps the working backward attribution intact.
+    const reclaimed = new Map<string, AttributedUnit[]>()
+    for (const u of units) {
+      if (u.yBottom - u.yTop > LINE_MAX || !inBand(u.yTop, u.yBottom) || covered(u)) continue
+      let best: string | null = null
+      let bestArea = Infinity
+      for (const [id, rects] of regionsById) {
+        if (byBlock.has(id)) continue
+        for (const r of rects) {
+          if (r.page !== u.page || !(r.x - 2 < u.xRight && u.xLeft < r.x + r.width + 2 &&
+              r.y - MAX_LINE_GAP < u.yBottom && u.yTop < r.y + r.height + MAX_LINE_GAP)) continue
+          const area = Math.max(1, r.width) * Math.max(1, r.height)
+          if (area < bestArea) { bestArea = area; best = id }
+          break
+        }
+      }
+      if (!best) continue
+      const a = reclaimed.get(best)
+      if (a) a.push(u); else reclaimed.set(best, [u])
+    }
+    for (const [id, us] of reclaimed) {
+      const cells = new Map<string, AttributedUnit[]>()
+      for (const u of us) {
+        const k = `${u.page}|${orphanCol(u)}`
+        const a = cells.get(k)
+        if (a) a.push(u); else cells.set(k, [u])
+      }
+      const add: PdfRect[] = []
+      for (const [k, cu] of cells) {
+        let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity
+        for (const u of cu) { x = Math.min(x, u.xLeft); y = Math.min(y, u.yTop); right = Math.max(right, u.xRight); bottom = Math.max(bottom, u.yBottom) }
+        add.push({ page: Number(k.slice(0, k.indexOf('|'))), x, y, width: right - x, height: bottom - y, col: k.slice(k.indexOf('|') + 1) as PdfCol })
+      }
+      boxesById.set(id, [...(boxesById.get(id) ?? []), ...add].sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x))
+      for (const b of add) placed.push(b)
+    }
+  }
+
   // Orphan = a row with no box: either synctex-null, OR backward-mapped to a block that
   // does NOT render on this page (`!inRegion` — a cross-section/file synctex slip, e.g. a
   // paragraph's dropped last wrapped line that maps to a later section's heading). Both are

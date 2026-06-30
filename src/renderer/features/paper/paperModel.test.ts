@@ -1561,6 +1561,42 @@ describe('binBlocks — bibliography reference list (Bug A)', () => {
   })
 })
 
+describe('binBlocks — forward-region reclaim (backward map corrupt for back matter)', () => {
+  // Synctex's backward map can mis-file a block's rendered rows (a multi-file IEEEtran doc maps
+  // its \appendix sections onto nothing), so the block gets no attributed unit and no box. The
+  // reclaim recovers a block the backward map MISSED ENTIRELY from its (reliable) forward region.
+  const toRect = (page: number, r: TextRow): PdfRect => prect(page, r.xLeft, r.yTop, r.xRight - r.xLeft, r.yBottom - r.yTop)
+
+  it('recovers a block the backward map missed entirely, from its forward region', () => {
+    const head = lineRows([300], 90, 280) // an \appendix heading line; its rows are synctex-null
+    const body = bodyRun(313, 460, 90, 280) // immediately below the heading (one band, not peeled)
+    const rowsByPage = new Map<number, TextRow[]>([[2, [...head, ...body]]])
+    const headU = head.map((r) => aunit(2, r.xLeft, r.yTop, r.xRight, r.yBottom, null)) // missed
+    const bodyU = body.map((r) => aunit(2, r.xLeft, r.yTop, r.xRight, r.yBottom, 'sec/par#a'))
+    const regionsById = new Map<string, PdfRect[]>([
+      ['app#h', head.map((r) => toRect(2, r))],
+      ['sec/par#a', body.map((r) => toRect(2, r))],
+    ])
+    const { boxesById } = binBlocks([...headU, ...bodyU], rowsByPage, new Set(), regionsById, new Set())
+    expect((boxesById.get('app#h') ?? []).length).toBe(1) // recovered from its forward region
+    expect((boxesById.get('sec/par#a') ?? []).length).toBeGreaterThan(0)
+  })
+
+  it('leaves a synctex-null row unboxed when it is in no block forward region', () => {
+    const stray = lineRows([320], 90, 280) // in-band null row whose owning block renders on another page
+    const body = bodyRun(333, 460, 90, 280)
+    const rowsByPage = new Map<number, TextRow[]>([[2, [...stray, ...body]]])
+    const strayU = stray.map((r) => aunit(2, r.xLeft, r.yTop, r.xRight, r.yBottom, null))
+    const bodyU = body.map((r) => aunit(2, r.xLeft, r.yTop, r.xRight, r.yBottom, 'sec/par#a'))
+    const regionsById = new Map<string, PdfRect[]>([
+      ['x#h', [prect(5, 90, 300, 190, 10)]], // forward region on page 5, not page 2
+      ['sec/par#a', body.map((r) => toRect(2, r))],
+    ])
+    const { boxesById } = binBlocks([...strayU, ...bodyU], rowsByPage, new Set(), regionsById, new Set())
+    expect(boxesById.get('x#h')).toBeUndefined() // not reclaimed — its region doesn't contain the row
+  })
+})
+
 describe('binBlocks — front-matter title/footnote split (Bug B)', () => {
   it('splits a block whose box would engulf another block into top + bottom boxes', () => {
     // The \maketitle front-matter block: the title+author at the column top and the
