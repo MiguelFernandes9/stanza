@@ -869,8 +869,13 @@ export function binBlocks(
     placed.some((b) => b.page === u.page && b.x - 2 <= u.xLeft && u.xRight <= b.x + b.width + 2 && b.y - 2 <= u.yTop && u.yBottom <= b.y + b.height + 2)
   const orphanCol = (u: AttributedUnit): PdfCol =>
     !docGutter ? 'full' : (u.xLeft + u.xRight) / 2 <= docGutter.gx ? 'l' : 'r'
+  // Orphan = a row with no box: either synctex-null, OR backward-mapped to a block that
+  // does NOT render on this page (`!inRegion` — a cross-section/file synctex slip, e.g. a
+  // paragraph's dropped last wrapped line that maps to a later section's heading). Both are
+  // the trailing tail of the box directly above; re-home them there. (Gating off in unit
+  // tests → inRegion is always true, so only null rows orphan — behaviour unchanged.)
   const orphans = units
-    .filter((u) => !u.blockId && u.yBottom - u.yTop <= LINE_MAX && inBand(u.yTop, u.yBottom) && !covered(u))
+    .filter((u) => (!u.blockId || !inRegion(u)) && u.yBottom - u.yTop <= LINE_MAX && inBand(u.yTop, u.yBottom) && !covered(u))
     .sort((a, b) => a.page - b.page || (orphanCol(a) < orphanCol(b) ? -1 : orphanCol(a) > orphanCol(b) ? 1 : 0) || a.yTop - b.yTop)
   // contiguous same-page same-column runs
   const runs: AttributedUnit[][] = []

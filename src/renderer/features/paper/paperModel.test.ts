@@ -1635,6 +1635,30 @@ describe('binBlocks — front-matter title/footnote split (Bug B)', () => {
     expect(box[0]!.col).toBe('full')
   })
 
+  it('reclaims a dropped last line that mis-maps to an off-page block, extending the box above', () => {
+    // A paragraph's last wrapped line backward-maps to a heading that renders on a LATER
+    // page (a synctex cross-section slip — the live main_ieee §II "…framework." bug). It
+    // fails inRegion here, so instead of being lost it re-homes to the box directly above.
+    const para = lineRows([100, 113, 126, 139], 36, 278) // 4 mapped lines
+    const tail = lineRows([152], 36, 90) // short dropped last line
+    const rowsByPage = new Map<number, TextRow[]>([
+      [1, [...para, ...tail]],
+      [2, bodyRun(45, 640, 36, 278)], // a 2nd page so contentBand keeps page-1 rows
+    ])
+    const paraU = para.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'sec1/par1#a'))
+    const tailU = tail.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'sec3#h')) // mis-mapped
+    const toRect = (r: TextRow): PdfRect => prect(1, r.xLeft, r.yTop, r.xRight - r.xLeft, r.yBottom - r.yTop)
+    const regionsById = new Map<string, PdfRect[]>([
+      ['sec1/par1#a', para.map(toRect)],
+      ['sec3#h', [prect(2, 36, 100, 200, 10)]], // §III heading renders on PAGE 2 → fails inRegion on page 1
+    ])
+    const { boxesById } = binBlocks([...paraU, ...tailU], rowsByPage, new Set(), regionsById)
+    const box = boxesById.get('sec1/par1#a')!
+    expect(box).toHaveLength(1)
+    expect(boxBottom(box[0]!)).toBeGreaterThanOrEqual(152) // extended to cover the dropped last line
+    expect(boxesById.get('sec3#h') ?? []).toEqual([]) // the off-page heading drew NO box on page 1
+  })
+
   it('builds a split cluster box like the main builder — extent-fills to the forward rects', () => {
     // The footnote cluster's last rendered line landed in NULL (not the fm units), but the
     // block's forward line-rect covers it. The split must build its box the SAME way as the
