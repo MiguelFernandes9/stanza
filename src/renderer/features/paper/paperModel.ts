@@ -901,13 +901,24 @@ export function binBlocks(
     if (!bibClaim || anchorPage < bibClaim.anchorPage) bibClaim = { id, anchorPage }
   }
   const ORPHAN_RUN_MAX = 3
+  // The reference list flows across several pages, but synctex forward-maps it to ONE galley
+  // page (the anchor). Its pages are the CONTIGUOUS chain of long-null-run pages connected to
+  // that anchor — so a list that starts more than one page before the anchor is fully boxed,
+  // not just its tail (the live IEEE "beginning of references missing"). An isolated long null
+  // run elsewhere (a rare source-less math tail) is not on the chain and stays unboxed.
+  const longNullPages = new Set(runs.filter((r) => r.length > ORPHAN_RUN_MAX).map((r) => r[0]!.page))
+  const refPages = new Set<number>()
+  if (bibClaim)
+    for (const seed of [bibClaim.anchorPage, bibClaim.anchorPage - 1]) {
+      if (!longNullPages.has(seed)) continue
+      for (let p = seed; longNullPages.has(p); p--) refPages.add(p)
+      for (let p = seed + 1; longNullPages.has(p); p++) refPages.add(p)
+    }
   for (const run of runs) {
     if (run.length > ORPHAN_RUN_MAX) {
-      // A long null run that renders at/after a bibliography block (its galley anchors a
-      // page; the list often spills back one column into the previous page) IS the
-      // reference list — box it for that block (one box per cell). Otherwise it is a
-      // source-less math tail: leave it unboxed, as before.
-      if (bibClaim && run[0]!.page >= bibClaim.anchorPage - 1) {
+      // A long null run on a reference page IS the .bbl list — box it for the bib block (one
+      // box per cell). Otherwise it is a source-less math tail: leave it unboxed, as before.
+      if (bibClaim && refPages.has(run[0]!.page)) {
         let x = Infinity, y = Infinity, right = -Infinity, bottom = -Infinity
         for (const u of run) { x = Math.min(x, u.xLeft); y = Math.min(y, u.yTop); right = Math.max(right, u.xRight); bottom = Math.max(bottom, u.yBottom) }
         const box: PdfRect = { page: run[0]!.page, x, y, width: right - x, height: bottom - y, col: orphanCol(run[0]!) }

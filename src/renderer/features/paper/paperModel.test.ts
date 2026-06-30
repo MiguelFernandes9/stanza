@@ -1537,6 +1537,22 @@ describe('binBlocks — bibliography reference list (Bug A)', () => {
     expect(boxes.map((b) => b.page).sort()).toEqual([2, 3])
   })
 
+  it('claims references that span MORE than one page before the galley anchor', () => {
+    // A long bibliography fills pages 7, 8 AND 9, but the \bibliography galley forward-maps
+    // to page 9 only. Pages 7-8 (>1 page before the anchor) must still be boxed — the live
+    // "beginning of the references not detected" bug.
+    const units = [...refUnits(7, 540, 720), ...refUnits(8, 55, 720), ...refUnits(9, 55, 300)]
+    const rowsByPage = new Map([
+      [7, bodyRun(540, 720, 90, 520)],
+      [8, bodyRun(55, 720, 90, 520)],
+      [9, bodyRun(55, 300, 90, 520)],
+    ])
+    const regionsById = new Map<string, PdfRect[]>([['env9#bib', [prect(9, 48, 50, 514, 660)]]]) // galley → page 9
+    const { boxesById } = binBlocks(units, rowsByPage, new Set(), regionsById, new Set(['env9#bib']))
+    const pages = [...new Set((boxesById.get('env9#bib') ?? []).map((b) => b.page))].sort((a, b) => a - b)
+    expect(pages).toEqual([7, 8, 9]) // all three reference pages boxed, not just the anchor + one back
+  })
+
   it('leaves a long null run unboxed when there is NO bibliography block (a math tail)', () => {
     const units = refUnits(2, 60, 220)
     const rowsByPage = new Map([[2, bodyRun(60, 220, 90, 520)]])
