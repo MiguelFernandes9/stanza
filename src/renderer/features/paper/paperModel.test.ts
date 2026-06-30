@@ -376,6 +376,29 @@ describe('contentBand — type block from global row clustering', () => {
     expect(contentBand(new Map())).toBeNull()
     expect(contentBand(new Map([[1, []]]))).toBeNull()
   })
+
+  // Body grid 300..716 (step 13); a footer 17pt below the last line (733) — CHAINED
+  // into the body cluster (gap 17 < 18, so the cluster split misses it) yet recurring.
+  const bodyGrid = (): TextRow[] => {
+    const rows: TextRow[] = []
+    for (let y = 300; y <= 716; y += 13) rows.push(trow(y - 11, y, 36, 540))
+    return rows
+  }
+
+  it('peels a recurring footer too close for the cluster gap (IEEE: ~17pt below body)', () => {
+    const rowsByPage = new Map<number, TextRow[]>()
+    for (let p = 1; p <= 6; p++) rowsByPage.set(p, [...bodyGrid(), trow(726, 733, 36, 83)]) // footer recurs
+    const band = contentBand(rowsByPage)!
+    expect(band.top).toBeCloseTo(300, 0)
+    expect(band.bottom).toBeCloseTo(716, 0) // footer (733) peeled by recurrence, not 733
+  })
+
+  it('keeps a one-off bottom line chained to the body (only repeated furniture is peeled)', () => {
+    const rowsByPage = new Map<number, TextRow[]>()
+    for (let p = 1; p <= 6; p++) rowsByPage.set(p, bodyGrid())
+    rowsByPage.get(1)!.push(trow(726, 733, 36, 540)) // a real last line on ONE page — not furniture
+    expect(contentBand(rowsByPage)!.bottom).toBeCloseTo(733, 0) // kept (doesn't recur)
+  })
 })
 
 describe('binContentToBlocks — one row-union builder for every text block', () => {
@@ -1192,6 +1215,15 @@ describe('environmentInteriorSpan — exclude \\begin/\\end delimiter lines (BUG
       sectionId: null, parentId: null, depth: 0
     }
     expect(environmentInteriorSpan(bib)).toEqual({ file: 'main.tex', startLine: 373, endLine: 387 })
+    // `\begin{IEEEkeywords}` renders the "INDEX TERMS" label — same rule, so its
+    // full-width first line isn't detached as a delimiter (IEEE Access keywords bug).
+    const kw: PageBlock = {
+      id: 'kw#1', kind: 'environment', envName: 'IEEEkeywords',
+      span: { file: 'main.tex', startLine: 66, endLine: 68 },
+      sectionId: null, parentId: null, depth: 0
+    }
+    expect(environmentInteriorSpan(kw)).toEqual({ file: 'main.tex', startLine: 66, endLine: 67 })
+    expect(mapsToLeadingDelimiter(kw, 'main.tex', 66)).toBe(false) // \begin line is content, not a delimiter
     // a non-heading env still strips \begin (figure's \begin galleys, BUG-21).
     const fig: PageBlock = {
       id: 'fig#1', kind: 'environment', envName: 'figure',
@@ -1505,11 +1537,63 @@ describe('binBlocks — bibliography reference list (Bug A)', () => {
     expect(boxes.map((b) => b.page).sort()).toEqual([2, 3])
   })
 
+  it('claims references that span MORE than one page before the galley anchor', () => {
+    // A long bibliography fills pages 7, 8 AND 9, but the \bibliography galley forward-maps
+    // to page 9 only. Pages 7-8 (>1 page before the anchor) must still be boxed — the live
+    // "beginning of the references not detected" bug.
+    const units = [...refUnits(7, 540, 720), ...refUnits(8, 55, 720), ...refUnits(9, 55, 300)]
+    const rowsByPage = new Map([
+      [7, bodyRun(540, 720, 90, 520)],
+      [8, bodyRun(55, 720, 90, 520)],
+      [9, bodyRun(55, 300, 90, 520)],
+    ])
+    const regionsById = new Map<string, PdfRect[]>([['env9#bib', [prect(9, 48, 50, 514, 660)]]]) // galley → page 9
+    const { boxesById } = binBlocks(units, rowsByPage, new Set(), regionsById, new Set(['env9#bib']))
+    const pages = [...new Set((boxesById.get('env9#bib') ?? []).map((b) => b.page))].sort((a, b) => a - b)
+    expect(pages).toEqual([7, 8, 9]) // all three reference pages boxed, not just the anchor + one back
+  })
+
   it('leaves a long null run unboxed when there is NO bibliography block (a math tail)', () => {
     const units = refUnits(2, 60, 220)
     const rowsByPage = new Map([[2, bodyRun(60, 220, 90, 520)]])
     const { boxesById } = binBlocks(units, rowsByPage, new Set(), new Map(), new Set())
     expect([...boxesById.values()].flat()).toHaveLength(0)
+  })
+})
+
+describe('binBlocks — forward-region reclaim (backward map corrupt for back matter)', () => {
+  // Synctex's backward map can mis-file a block's rendered rows (a multi-file IEEEtran doc maps
+  // its \appendix sections onto nothing), so the block gets no attributed unit and no box. The
+  // reclaim recovers a block the backward map MISSED ENTIRELY from its (reliable) forward region.
+  const toRect = (page: number, r: TextRow): PdfRect => prect(page, r.xLeft, r.yTop, r.xRight - r.xLeft, r.yBottom - r.yTop)
+
+  it('recovers a block the backward map missed entirely, from its forward region', () => {
+    const head = lineRows([300], 90, 280) // an \appendix heading line; its rows are synctex-null
+    const body = bodyRun(313, 460, 90, 280) // immediately below the heading (one band, not peeled)
+    const rowsByPage = new Map<number, TextRow[]>([[2, [...head, ...body]]])
+    const headU = head.map((r) => aunit(2, r.xLeft, r.yTop, r.xRight, r.yBottom, null)) // missed
+    const bodyU = body.map((r) => aunit(2, r.xLeft, r.yTop, r.xRight, r.yBottom, 'sec/par#a'))
+    const regionsById = new Map<string, PdfRect[]>([
+      ['app#h', head.map((r) => toRect(2, r))],
+      ['sec/par#a', body.map((r) => toRect(2, r))],
+    ])
+    const { boxesById } = binBlocks([...headU, ...bodyU], rowsByPage, new Set(), regionsById, new Set())
+    expect((boxesById.get('app#h') ?? []).length).toBe(1) // recovered from its forward region
+    expect((boxesById.get('sec/par#a') ?? []).length).toBeGreaterThan(0)
+  })
+
+  it('leaves a synctex-null row unboxed when it is in no block forward region', () => {
+    const stray = lineRows([320], 90, 280) // in-band null row whose owning block renders on another page
+    const body = bodyRun(333, 460, 90, 280)
+    const rowsByPage = new Map<number, TextRow[]>([[2, [...stray, ...body]]])
+    const strayU = stray.map((r) => aunit(2, r.xLeft, r.yTop, r.xRight, r.yBottom, null))
+    const bodyU = body.map((r) => aunit(2, r.xLeft, r.yTop, r.xRight, r.yBottom, 'sec/par#a'))
+    const regionsById = new Map<string, PdfRect[]>([
+      ['x#h', [prect(5, 90, 300, 190, 10)]], // forward region on page 5, not page 2
+      ['sec/par#a', body.map((r) => toRect(2, r))],
+    ])
+    const { boxesById } = binBlocks([...strayU, ...bodyU], rowsByPage, new Set(), regionsById, new Set())
+    expect(boxesById.get('x#h')).toBeUndefined() // not reclaimed — its region doesn't contain the row
   })
 })
 
@@ -1562,6 +1646,109 @@ describe('binBlocks — front-matter title/footnote split (Bug B)', () => {
     expect(fm[0]!.col).toBe('full')
     expect(fm[0]!.x).toBeLessThan(120) // reaches the title's left
     expect(fm[0]!.x + fm[0]!.width).toBeGreaterThan(450) // AND its right — spans the gutter, uncut
+  })
+
+  it('boxes a full-width abstract (NOT a *-float) as ONE full box, never split at the gutter', () => {
+    // IEEE Access: the abstract / INDEX TERMS are full-width TEXT above the two-column
+    // body — a 'single' band, not a *-float, so not in fullWidthIds. They must be ONE
+    // 'full' box, not split into l/r by the doc-wide gutter (the live main_ieee bug).
+    const absY = Array.from({ length: 12 }, (_, i) => 60 + i * 13) // full-width abstract band (≥ furniture share)
+    const body = Array.from({ length: 24 }, (_, i) => 233 + i * 13) // tall two-col body → docGutter exists
+    const rows = new Map([[1, [...lineRows(absY, 70, 540), ...lineRows(body, ...LCOL), ...lineRows(body, ...RCOL)]]])
+    const abstract = lineRows(absY, 70, 540).map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'env1#abs'))
+    const L = lineRows(body, ...LCOL).map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'L#1'))
+    const R = lineRows(body, ...RCOL).map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'R#1'))
+    const { boxesById } = binBlocks([...abstract, ...L, ...R], rows, new Set()) // abstract NOT a fullWidthId
+    const abs = boxesById.get('env1#abs')!
+    expect(abs).toHaveLength(1)
+    expect(abs[0]!.col).toBe('full')
+    expect(abs[0]!.x).toBeLessThan(120) // reaches the abstract's left…
+    expect(abs[0]!.x + abs[0]!.width).toBeGreaterThan(450) // …and its right — spans the gutter, uncut
+    // The two-column body is unaffected: still an 'l' box and an 'r' box.
+    expect(boxesById.get('L#1')!.every((b) => b.col === 'l')).toBe(true)
+    expect(boxesById.get('R#1')!.every((b) => b.col === 'r')).toBe(true)
+  })
+
+  it('a full-width block with a SHORT line (keywords label) is still ONE full box', () => {
+    // INDEX TERMS: a short "INDEX TERMS …" label line + full-width terms lines. The short
+    // line classifies 'l' on its own → a 2nd box overlapping the 'full' one (the live bug).
+    // Every line of a full-width block belongs to its single 'full' box.
+    const labelY = 60
+    const fullYs = Array.from({ length: 11 }, (_, i) => 73 + i * 13) // full-width lines (block ≥ furniture share)
+    const body = Array.from({ length: 24 }, (_, i) => 233 + i * 13) // tall two-col body → docGutter exists
+    const kwRows = [...lineRows([labelY], 70, 150), ...lineRows(fullYs, 70, 540)] // short label + full lines
+    const rows = new Map([[1, [...kwRows, ...lineRows(body, ...LCOL), ...lineRows(body, ...RCOL)]]])
+    const kw = kwRows.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'env1#kw'))
+    const L = lineRows(body, ...LCOL).map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'L#1'))
+    const R = lineRows(body, ...RCOL).map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'R#1'))
+    const { boxesById } = binBlocks([...kw, ...L, ...R], rows, new Set())
+    const box = boxesById.get('env1#kw')!
+    expect(box).toHaveLength(1) // NOT a full box + a stray 'l' label box
+    expect(box[0]!.col).toBe('full')
+  })
+
+  it('reclaims a dropped last line that mis-maps to an off-page block, extending the box above', () => {
+    // A paragraph's last wrapped line backward-maps to a heading that renders on a LATER
+    // page (a synctex cross-section slip — the live main_ieee §II "…framework." bug). It
+    // fails inRegion here, so instead of being lost it re-homes to the box directly above.
+    const para = lineRows([100, 113, 126, 139], 36, 278) // 4 mapped lines
+    const tail = lineRows([152], 36, 90) // short dropped last line
+    const rowsByPage = new Map<number, TextRow[]>([
+      [1, [...para, ...tail]],
+      [2, bodyRun(45, 640, 36, 278)], // a 2nd page so contentBand keeps page-1 rows
+    ])
+    const paraU = para.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'sec1/par1#a'))
+    const tailU = tail.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'sec3#h')) // mis-mapped
+    const toRect = (r: TextRow): PdfRect => prect(1, r.xLeft, r.yTop, r.xRight - r.xLeft, r.yBottom - r.yTop)
+    const regionsById = new Map<string, PdfRect[]>([
+      ['sec1/par1#a', para.map(toRect)],
+      ['sec3#h', [prect(2, 36, 100, 200, 10)]], // §III heading renders on PAGE 2 → fails inRegion on page 1
+    ])
+    const { boxesById } = binBlocks([...paraU, ...tailU], rowsByPage, new Set(), regionsById)
+    const box = boxesById.get('sec1/par1#a')!
+    expect(box).toHaveLength(1)
+    expect(boxBottom(box[0]!)).toBeGreaterThanOrEqual(152) // extended to cover the dropped last line
+    expect(boxesById.get('sec3#h') ?? []).toEqual([]) // the off-page heading drew NO box on page 1
+  })
+
+  it('drops a heading galley box that overlaps a body block (two-column section break)', () => {
+    // A \section near a column break gets a spurious synctex rect in the OTHER column's
+    // body (the live §III-into-§II.B bug): the heading then has its real right-column box
+    // AND a left-column galley box overlapping a paragraph. The overlapping one is dropped.
+    const body = Array.from({ length: 40 }, (_, i) => 120 + i * 13) // tall two-col body → docGutter
+    const headingReal = lineRows([108], ...RCOL) // heading title, right column
+    const galley = lineRows([648], ...LCOL) // heading galley, left column (overlaps the para)
+    const para = lineRows([636, 649, 662], ...LCOL) // body paragraph, left column
+    const rows = new Map<number, TextRow[]>([
+      [1, [...lineRows(body, ...LCOL), ...lineRows(body, ...RCOL), ...headingReal, ...galley, ...para]],
+    ])
+    const toRect = (r: TextRow): PdfRect => prect(1, r.xLeft, r.yTop, r.xRight - r.xLeft, r.yBottom - r.yTop)
+    const hU = [...headingReal, ...galley].map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'sec3#h'))
+    const pU = para.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'sec2/par1#a'))
+    const regionsById = new Map<string, PdfRect[]>([
+      ['sec3#h', [...headingReal, ...galley].map(toRect)],
+      ['sec2/par1#a', para.map(toRect)],
+    ])
+    const { boxesById } = binBlocks([...hU, ...pU], rows, new Set(), regionsById, new Set(), new Set(['sec3#h']))
+    const h = boxesById.get('sec3#h')!
+    expect(h.length).toBeGreaterThan(0)
+    expect(h.every((b) => b.y < 200)).toBe(true) // only the real (right-top) box; the y648 galley box dropped
+    expect((boxesById.get('sec2/par1#a') ?? []).length).toBeGreaterThan(0) // the paragraph keeps its box
+  })
+
+  it('recovers a dropped LEADING line by extending the box below it up', () => {
+    // The first wrapped line of a column continuation is synctex-dropped (null) and sits
+    // just ABOVE the cell box, with nothing above it — extend the box up to cover it (the
+    // live §G "all,…" continuation bug). The common trailing-tail case still extends down.
+    const cont = lineRows([280, 293, 306], 100, 300) // continuation lines (boxed)
+    const dropped = lineRows([267], 100, 250) // dropped leading line, just above the box
+    const rowsByPage = new Map<number, TextRow[]>([[1, [...dropped, ...cont]]])
+    const contU = cont.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'sec1/par1#a'))
+    const dropU = dropped.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, null)) // synctex-null
+    const { boxesById } = binBlocks([...contU, ...dropU], rowsByPage, new Set())
+    const box = boxesById.get('sec1/par1#a')!
+    expect(box).toHaveLength(1)
+    expect(box[0]!.y).toBeLessThanOrEqual(270) // top extended up over the dropped line (yTop≈269)
   })
 
   it('builds a split cluster box like the main builder — extent-fills to the forward rects', () => {
