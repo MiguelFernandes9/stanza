@@ -141,6 +141,16 @@ describe('span labels', () => {
       ])
     ).toBe('ch1.tex:24–44, ch2.tex:3–9')
   })
+  it('summarizes a selection spanning 3+ files as first + "+N files" (the Appendix chip)', () => {
+    expect(
+      combinedSpanLabel([
+        { file: 'main.tex', startLine: 136, endLine: 136 },
+        { file: 'appendices/app_a.tex', startLine: 1, endLine: 59 },
+        { file: 'appendices/app_b.tex', startLine: 1, endLine: 49 },
+        { file: 'appendices/app_c.tex', startLine: 1, endLine: 26 },
+      ])
+    ).toBe('main.tex:136–136, +3 files')
+  })
 })
 
 describe('taskSpans', () => {
@@ -1895,6 +1905,25 @@ describe('binBlocks — front-matter title/footnote split (Bug B)', () => {
     const box = boxesById.get('sec1/par1#a')!
     expect(box).toHaveLength(1)
     expect(box[0]!.y).toBeLessThanOrEqual(270) // top extended up over the dropped line (yTop≈269)
+  })
+
+  it('attaches an orphan to the CLOSER block below, not the farther block above', () => {
+    // The auto "References" title renders in the section-break gap between the conclusion and
+    // the .bbl list — nearer its own list below than the paragraph above. A null heading row
+    // with a farther box above and a nearer box below joins the block below (extends it up),
+    // so the conclusion never swallows the "References" line (the live ftfei regression).
+    const concl = lineRows([200, 213, 226], 90, 300) // paragraph above (box bottom ≈226)
+    const title = lineRows([250], 150, 240)          // centered heading, synctex-null, in the gap
+    const bib = lineRows([262, 275, 288], 90, 300)   // the reference list below (box top ≈251)
+    const rowsByPage = new Map<number, TextRow[]>([[1, [...concl, ...title, ...bib]]])
+    const conclU = concl.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'sec1/par1#c'))
+    const titleU = title.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, null)) // null → orphan
+    const bibU = bib.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'env#bib'))
+    const { boxesById } = binBlocks([...conclU, ...titleU, ...bibU], rowsByPage, new Set())
+    const c = boxesById.get('sec1/par1#c')!
+    expect(boxBottom(c[0]!)).toBeLessThanOrEqual(240) // conclusion did NOT reach down to the title (y239)
+    const b = boxesById.get('env#bib')!
+    expect(b[0]!.y).toBeLessThanOrEqual(240) // the bib box extended UP to cover the title
   })
 
   it('builds a split cluster box like the main builder — extent-fills to the forward rects', () => {

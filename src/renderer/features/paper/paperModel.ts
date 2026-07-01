@@ -1078,11 +1078,16 @@ export function binBlocks(
         const gapB = b.y - u.yBottom // box sits BELOW the orphan (orphan is its leading line)
         if (gapB >= -2 && gapB < belowGap) { belowGap = gapB; below = b }
       }
-      if (above) above.height = Math.max(above.height, u.yBottom - above.y)
+      // Attach to the CLOSER real box, not unconditionally the one above. A trailing tail
+      // sits a hair below its block (above wins on the small gap); but a heading that renders
+      // in the section-break gap between two blocks — e.g. the auto "References" title between
+      // the conclusion and the .bbl list — is nearer the block BELOW (its own list) than the
+      // paragraph above, and belongs there. Ties keep the above default (the common tail case).
+      if (above && (!below || aboveGap <= belowGap)) above.height = Math.max(above.height, u.yBottom - above.y)
       else if (below) {
-        // A dropped LEADING line of a column continuation: synctex drops the first wrapped
-        // line of the right-column half (or mis-files it), leaving it just ABOVE the cell's
-        // box. Extend the box UP to cover it (the trailing-tail case above is the common one).
+        // A dropped LEADING line of a column continuation (or a heading nearer the block below):
+        // synctex drops the first wrapped line of the right-column half (or mis-files it), leaving
+        // it just ABOVE the cell's box. Extend the box UP to cover it.
         const boxBottom = below.y + below.height
         const right = Math.max(below.x + below.width, u.xRight)
         below.y = Math.min(below.y, u.yTop)
@@ -1727,8 +1732,10 @@ export function spanLabel(span: BlockSpan): string {
 }
 
 /** A min–max range per file, e.g. "main.tex:24–40" for one file or
- *  "ch1.tex:24–44, ch2.tex:3–9" when a selection crosses files. Files
- *  appear in first-seen order. */
+ *  "ch1.tex:24–44, ch2.tex:3–9" when a selection crosses two files. A selection
+ *  spanning MORE files (an Appendix nesting several \input files) is summarized
+ *  as "first.tex:24–40, +N files" so the chip stays one short line instead of
+ *  listing every range. Files appear in first-seen order. */
 export function combinedSpanLabel(spans: BlockSpan[]): string {
   const byFile = new Map<string, { start: number; end: number }>()
   for (const s of spans) {
@@ -1740,9 +1747,9 @@ export function combinedSpanLabel(spans: BlockSpan[]): string {
       byFile.set(s.file, { start: s.startLine, end: s.endLine })
     }
   }
-  return [...byFile]
-    .map(([file, { start, end }]) => `${basename(file)}:${start}–${end}`)
-    .join(', ')
+  const parts = [...byFile].map(([file, { start, end }]) => `${basename(file)}:${start}–${end}`)
+  if (parts.length <= 2) return parts.join(', ')
+  return `${parts[0]}, +${parts.length - 1} files`
 }
 
 /** Spans for claude:run. A fully-selected section contributes its own span; its
