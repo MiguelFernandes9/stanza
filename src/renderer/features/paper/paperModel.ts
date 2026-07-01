@@ -472,7 +472,13 @@ export function binBlocks(
   // overlaps body text; a heading box that overlaps a body block's box is a synctex
   // galley artifact (a \section near a column/page break gets a spurious rect in the
   // other column's body) and is dropped — the body block owns that region.
-  headingIds: Set<string> = new Set()
+  headingIds: Set<string> = new Set(),
+  // Environment blocks (equation / matrix / table / figure). A display equation's LHS ("M ="
+  // beside a \begin{bmatrix}) is synctex-null and its forward rect is a tall multi-line rect
+  // filtered by LINE_MAX, so the box starts at the matrix and misses the LHS. In a SINGLE-column
+  // document that interior null row is absorbed into the environment box so the equation covers
+  // its own "M =". (Only single-column: in two columns "beside" a box can be the other column.)
+  environmentIds: Set<string> = new Set()
 ): BinnedContent {
   const columnsByPage = columnLayoutByPage(rowsByPage)
 
@@ -905,9 +911,30 @@ export function binBlocks(
     // sprawling down/across the column, and letting a backward-known block claim unowned rows in
     // that sprawl draws a galley-sized box over its neighbours (the IEEE §III paragraph swallowing
     // §II). Recovering only truly-missed blocks keeps the working backward attribution intact.
+    // Single-column only: absorb a display equation's synctex-null LHS ("M =") into the equation
+    // box so it covers its own left-hand side, instead of leaving it unboxed or reclaiming it to
+    // the paragraph below. A row STRICTLY inside an environment box's vertical span and sitting
+    // ENTIRELY just beside it is that env's interior. Skipped in two-column docs (docGutter set),
+    // where "beside" a box can be the ADJACENT column — there the absorb would leak across the
+    // gutter, so it stays off (a no-op on the two-column papers).
+    const envBoxes: PdfRect[] = docGutter ? [] : (() => {
+      const bs: PdfRect[] = []
+      for (const [id, arr] of boxesById) if (byBlock.has(id) && environmentIds.has(id)) bs.push(...arr)
+      return bs
+    })()
     const reclaimed = new Map<string, AttributedUnit[]>()
     for (const u of units) {
       if (u.yBottom - u.yTop > LINE_MAX || !inBand(u.yTop, u.yBottom) || covered(u)) continue
+      const host = envBoxes.find((b) => b.page === u.page &&
+        b.y + 4 <= u.yTop && u.yBottom <= b.y + b.height - 4 &&
+        ((u.xRight <= b.x && u.xRight >= b.x - MAX_LINE_GAP) ||
+          (u.xLeft >= b.x + b.width && u.xLeft <= b.x + b.width + MAX_LINE_GAP)))
+      if (host) {
+        const right = Math.max(host.x + host.width, u.xRight)
+        host.x = Math.min(host.x, u.xLeft)
+        host.width = right - host.x
+        continue // absorbed into the equation box; now `covered`, so the orphan pass skips it too
+      }
       let best: string | null = null
       let bestArea = Infinity
       for (const [id, rects] of regionsById) {

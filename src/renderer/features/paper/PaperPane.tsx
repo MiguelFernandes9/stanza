@@ -355,6 +355,9 @@ export function PaperPane(props: Props): JSX.Element {
       const bibliographyIds = new Set(pageBlocks.filter((b) => b.envName === 'bibliography').map((b) => b.id))
       // Section/subsection headings: a heading box overlapping a body box is a galley stray.
       const headingIds = new Set(pageBlocks.filter((b) => b.kind === 'heading').map((b) => b.id))
+      // Environment blocks: a display equation's synctex-null "M =" LHS is absorbed into the env
+      // box (single-column docs only), so the equation covers its own left-hand side.
+      const environmentIds = new Set(pageBlocks.filter((b) => b.kind === 'environment').map((b) => b.id))
       const blockById = new Map(pageBlocks.map((b) => [b.id, b]))
       const attributed = units.map((u, i): AttributedUnit => {
         const loc = locs[i]
@@ -370,7 +373,7 @@ export function PaperPane(props: Props): JSX.Element {
         }
         return { page: u.page, xLeft: u.xLeft, yTop: u.yTop, xRight: u.xRight, yBottom: u.yBottom, blockId }
       })
-      const result = binBlocks(attributed, rowsByPage, fullWidthIds, regionsById, bibliographyIds, headingIds)
+      const result = binBlocks(attributed, rowsByPage, fullWidthIds, regionsById, bibliographyIds, headingIds, environmentIds)
       // One box per block from its rendered ink; a section's box is its heading
       // line, selection expands to its members via expandIds (selection layer).
       setBlockRects(result.boxesById)

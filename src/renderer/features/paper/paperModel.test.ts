@@ -1625,6 +1625,52 @@ describe('binBlocks — forward-region reclaim (backward map corrupt for back ma
     expect((boxesById.get('sec/par#a') ?? []).length).toBeGreaterThan(0)
   })
 
+  it('single-column: absorbs a display-equation null LHS into the equation, not a stray below', () => {
+    // §6.3 "A Block Matrix": "M =" beside a bmatrix is synctex-null and the equation's forward rect
+    // there is a tall bmatrix rect (LINE_MAX-filtered), so the box starts at the matrix. In a
+    // single-column doc (no docGutter), absorb the LHS into the equation box; never draw it as a
+    // stray fragment of the paragraph below.
+    const matrix = lineRows([210, 222, 234], 220, 400) // equation matrix rows (backward-attributed)
+    const lhs = lineRows([222], 190, 214) // "M =" LHS: null, y-interior, just left of the matrix
+    const para = lineRows([260, 272, 284], 72, 400) // paragraph below (synctex-null, recovered by forward)
+    const rowsByPage = new Map<number, TextRow[]>([[1, [...matrix, ...lhs, ...para]]])
+    const eqU = matrix.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'eq#1'))
+    const lhsU = lhs.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, null))
+    const paraU = para.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, null))
+    const regionsById = new Map<string, PdfRect[]>([
+      ['eq#1', matrix.map((r) => toRect(1, r))],
+      ['par#1', para.map((r) => toRect(1, r))],
+    ])
+    const { boxesById } = binBlocks([...eqU, ...lhsU, ...paraU], rowsByPage, new Set(), regionsById,
+      new Set(), new Set(), new Set(['eq#1']))
+    const eq = boxesById.get('eq#1')!
+    expect(eq).toHaveLength(1)
+    expect(eq[0]!.x).toBeLessThanOrEqual(200) // equation box widened left to cover "M =" (x190-214)
+    const par = boxesById.get('par#1') ?? []
+    expect(par.every((b) => b.y > 240)).toBe(true) // paragraph at its OWN rows — no stray up in the equation
+  })
+
+  it('two-column: the equation-LHS absorb is a no-op (single-column-only, no gutter-leak)', () => {
+    // Same shape but a two-column body sets docGutter → the single-column absorb is OFF. Passing
+    // environmentIds must produce the IDENTICAL boxes as not passing them (a null row beside the
+    // equation is never pulled across the gutter into the equation).
+    const body = Array.from({ length: 24 }, (_, i) => 60 + i * 13) // tall two-col body → docGutter
+    const matrix = lineRows([390, 402, 414], 330, 540) // equation in the RIGHT column
+    const beside = lineRows([402], 300, 326) // a null row just left of it
+    const rowsByPage = new Map<number, TextRow[]>([
+      [1, [...lineRows(body, ...LCOL), ...lineRows(body, ...RCOL), ...matrix, ...beside]],
+    ])
+    const eqU = matrix.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'eq#2'))
+    const besideU = beside.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, null))
+    const bl = lineRows(body, ...LCOL).map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'L#1'))
+    const br = lineRows(body, ...RCOL).map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'R#1'))
+    const rid = new Map<string, PdfRect[]>([['eq#2', matrix.map((r) => toRect(1, r))]])
+    const units = [...eqU, ...besideU, ...bl, ...br]
+    const withEnv = binBlocks(units, rowsByPage, new Set(), rid, new Set(), new Set(), new Set(['eq#2']))
+    const without = binBlocks(units, rowsByPage, new Set(), rid, new Set(), new Set(), new Set())
+    expect(withEnv.boxesById.get('eq#2')).toEqual(without.boxesById.get('eq#2')) // absorb is a no-op here
+  })
+
   it('leaves a synctex-null row unboxed when it is in no block forward region', () => {
     const stray = lineRows([320], 90, 280) // in-band null row whose owning block renders on another page
     const body = bodyRun(333, 460, 90, 280)
