@@ -1,6 +1,7 @@
 import { parse } from '@unified-latex/unified-latex-util-parse'
 import type * as Ast from '@unified-latex/unified-latex-types'
 import type { BlockNode } from './types'
+import { appendixSection } from '../latex/project'
 
 // Display sectioning commands only. `\paragraph`/`\subparagraph` are deliberately
 // EXCLUDED: they are run-in headings (the title renders inline with the following
@@ -47,6 +48,7 @@ const STANDALONE_MACROS = new Set([
   'newpage',
   'clearpage',
   'appendix',
+  'appendices',
   'frontmatter',
   'mainmatter',
   'backmatter',
@@ -155,14 +157,38 @@ export function parseProjectBlocks(
   texFiles: string[],
   read: (relPath: string) => string | null,
 ): BlockNode[] {
+  // A template's `\appendix` / `\appendices` renders no section-style heading for the files it
+  // pulls in, but they are still structurally the appendix's sections. Nest every file the main
+  // file \inputs AFTER that macro under one synthetic "Appendix" node so the outline shows them as
+  // its children (they would otherwise be top-level siblings of the body sections).
+  const mainFile = texFiles[0]
+  const mainSource = mainFile ? read(mainFile) : null
+  const appendix = mainSource ? appendixSection(mainSource) : null
   const roots: BlockNode[] = []
+  let appendixNode: BlockNode | null = null
   for (const file of texFiles) {
     const source = read(file)
     if (source === null) continue
+    let fileRoots: BlockNode[]
     try {
-      roots.push(...parseBlocks(file, source))
+      fileRoots = parseBlocks(file, source)
     } catch {
-      // unparsable file: skip
+      continue // unparsable file: skip
+    }
+    if (appendix && file !== mainFile && appendix.files.has(file)) {
+      if (!appendixNode) {
+        appendixNode = {
+          id: `appendix#${contentHash(`${mainFile}@${appendix.line}`)}`,
+          kind: 'section',
+          name: 'Appendix',
+          span: { file: mainFile!, startLine: appendix.line, endLine: appendix.line },
+          children: [],
+        }
+        roots.push(appendixNode)
+      }
+      appendixNode.children.push(...fileRoots)
+    } else {
+      roots.push(...fileRoots)
     }
   }
   return roots

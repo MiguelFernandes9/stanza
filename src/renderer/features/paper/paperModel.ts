@@ -465,7 +465,13 @@ export function binBlocks(
   // overlaps body text; a heading box that overlaps a body block's box is a synctex
   // galley artifact (a \section near a column/page break gets a spurious rect in the
   // other column's body) and is dropped — the body block owns that region.
-  headingIds: Set<string> = new Set()
+  headingIds: Set<string> = new Set(),
+  // Environment blocks (equation / matrix / table / figure). A display equation's LHS ("M ="
+  // beside a \begin{bmatrix}) is synctex-null and its forward rect is a tall multi-line rect
+  // filtered by LINE_MAX, so the box starts at the matrix and misses the LHS. In a SINGLE-column
+  // document that interior null row is absorbed into the environment box so the equation covers
+  // its own "M =". (Only single-column: in two columns "beside" a box can be the other column.)
+  environmentIds: Set<string> = new Set()
 ): BinnedContent {
   const columnsByPage = columnLayoutByPage(rowsByPage)
 
@@ -520,16 +526,19 @@ export function binBlocks(
     return false
   }
 
-  // A block is FULL-WIDTH if ANY of its lines in a `single` band spans the gutter
-  // (`columnOf` → 'full'): the IEEE abstract / keywords / title block. A `single` band
-  // has no columns, so EVERY line of such a block is one 'full' box — a short label
-  // ("INDEX TERMS …") or a last fragment must not spawn its own l/r box beside it. A
-  // single-band block with NO spanning line (a one-column figure) is NOT full-width.
+  // A block is FULL-WIDTH if ANY of its lines actually CROSSES the doc gutter (spans both
+  // columns): the IEEE abstract / keywords / title block. Then EVERY line of the block is one
+  // 'full' box — a short label ("INDEX TERMS …") or a last fragment must not spawn its own l/r
+  // box beside it. NOTE: in a `single` band `columnOf` returns 'full' for EVERY line (the band has
+  // no columns), so it alone can't tell full-width content from a one-column line on a page merely
+  // mis-detected as single (a sparse appendix page dominated by a full-width table) — require the
+  // line to straddle the doc gutter, else every appendix paragraph would be marked full-width.
   const fullWidthBlocks = new Set<string>()
   for (const u of units) {
     if (!u.blockId) continue
     const layout = columnsByPage.get(u.page)
-    if (layout && bandKindOf(u) === 'single' && columnOf(layout, u) === 'full') fullWidthBlocks.add(u.blockId)
+    if (layout && bandKindOf(u) === 'single' && columnOf(layout, u) === 'full' &&
+        (!docGutter || (u.xLeft < docGutter.gx - 2 && u.xRight > docGutter.gx + 2))) fullWidthBlocks.add(u.blockId)
   }
 
   // A unit's column: a `*` float is always `full`; a non-float TEXT block on a
@@ -545,11 +554,13 @@ export function binBlocks(
     if (bandKindOf(u) === 'single' && u.blockId && fullWidthBlocks.has(u.blockId)) return 'full'
     const c = layout ? columnOf(layout, u) : 'full'
     if (c !== 'full') return c
-    // columnOf says 'full'. Keep it for genuine full-width content in a `single` band;
-    // only a 'full' from a TWO-column band is snapped to l/r by the DOC gutter (a
-    // gutter-spanning body line / a merged row; the per-page gutter can be a table's
-    // internal boundary on a table-only page, so use the doc gutter).
-    if (bandKindOf(u) !== 'two') return 'full'
+    // columnOf says 'full'. A KNOWN full-width block already returned above (fullWidthBlocks: the
+    // abstract / keywords / title). Any other unit columnOf couldn't pin — a gutter-spanning body
+    // line / merged row, OR a one-column line on a page MIS-DETECTED as single (a sparse appendix
+    // page dominated by a full-width table) — is snapped to its column by the DOC gutter, as a
+    // two-column body always is; only a genuinely single-column document (no doc gutter) stays
+    // 'full'. (Gating this on a `two` band wrongly kept single-band appendix paragraphs full-width,
+    // spanning both columns — the two-column-appendix regression.)
     return docGutter ? ((u.xLeft + u.xRight) / 2 <= docGutter.gx ? 'l' : 'r') : 'full'
   }
 
@@ -893,16 +904,62 @@ export function binBlocks(
     // sprawling down/across the column, and letting a backward-known block claim unowned rows in
     // that sprawl draws a galley-sized box over its neighbours (the IEEE §III paragraph swallowing
     // §II). Recovering only truly-missed blocks keeps the working backward attribution intact.
+    // Single-column only: absorb a display equation's synctex-null LHS ("M =") into the equation
+    // box so it covers its own left-hand side, instead of leaving it unboxed or reclaiming it to
+    // the paragraph below. A row STRICTLY inside an environment box's vertical span and sitting
+    // ENTIRELY just beside it is that env's interior. Skipped in two-column docs (docGutter set),
+    // where "beside" a box can be the ADJACENT column — there the absorb would leak across the
+    // gutter, so it stays off (a no-op on the two-column papers).
+    const envBoxes: PdfRect[] = docGutter ? [] : (() => {
+      const bs: PdfRect[] = []
+      for (const [id, arr] of boxesById) if (byBlock.has(id) && environmentIds.has(id)) bs.push(...arr)
+      return bs
+    })()
+    // Backward-PRESENT boxes (a block the backward map DID attribute) paired with their id, so a
+    // reclaim candidate can defer to an adjacent one that also forward-owns the row (below).
+    const presentBoxes: { id: string; box: PdfRect }[] = []
+    for (const [id, arr] of boxesById) if (byBlock.has(id)) for (const box of arr) presentBoxes.push({ id, box })
     const reclaimed = new Map<string, AttributedUnit[]>()
     for (const u of units) {
       if (u.yBottom - u.yTop > LINE_MAX || !inBand(u.yTop, u.yBottom) || covered(u)) continue
+      // Synctex forward OVER-reports a row at a column/page boundary to BOTH the block that ends
+      // there (backward-present) and the next block (backward-missed, reclaiming here). When a
+      // backward-present neighbour's real box sits contiguously against this row AND its forward
+      // region also covers it, the row is that neighbour's trailing/leading line — leave it for
+      // the orphan pass to attach there, don't reclaim it to a FAR block's forward phantom (a
+      // paragraph's last left-column line stolen by the next-column paragraph past a [t] float).
+      const deferToPresent = presentBoxes.some(({ id, box }) => {
+        if (box.page !== u.page || !(box.x - 2 < u.xRight && u.xLeft < box.x + box.width + 2)) return false
+        const gapAbove = u.yTop - (box.y + box.height)
+        const gapBelow = box.y - u.yBottom
+        if (!((gapAbove >= -2 && gapAbove <= MAX_LINE_GAP) || (gapBelow >= -2 && gapBelow <= MAX_LINE_GAP))) return false
+        return (regionsById.get(id) ?? []).some((r) => r.page === u.page &&
+          r.x - 2 < u.xRight && u.xLeft < r.x + r.width + 2 && r.y < u.yBottom && u.yTop < r.y + r.height)
+      })
+      if (deferToPresent) continue
+      const host = envBoxes.find((b) => b.page === u.page &&
+        b.y + 4 <= u.yTop && u.yBottom <= b.y + b.height - 4 &&
+        ((u.xRight <= b.x && u.xRight >= b.x - MAX_LINE_GAP) ||
+          (u.xLeft >= b.x + b.width && u.xLeft <= b.x + b.width + MAX_LINE_GAP)))
+      if (host) {
+        const right = Math.max(host.x + host.width, u.xRight)
+        host.x = Math.min(host.x, u.xLeft)
+        host.width = right - host.x
+        continue // absorbed into the equation box; now `covered`, so the orphan pass skips it too
+      }
       let best: string | null = null
       let bestArea = Infinity
       for (const [id, rects] of regionsById) {
         if (byBlock.has(id)) continue
+        // Match STRICTLY — the row must OVERLAP the block's own forward rect, no line-gap slop.
+        // The reclaim recovers rows the forward map already covers; a null row a line BELOW a
+        // block's last rect is NOT that block's (a dropped trailing line is the orphan pass's job).
+        // Slop here let a block reach a line past its own ink and steal the neighbour's row — the
+        // "Appendix" heading eating the last reference, the backward-missed Conclusion eating the
+        // first reference, and a paragraph split across a stray far rect.
         for (const r of rects) {
           if (r.page !== u.page || !(r.x - 2 < u.xRight && u.xLeft < r.x + r.width + 2 &&
-              r.y - MAX_LINE_GAP < u.yBottom && u.yTop < r.y + r.height + MAX_LINE_GAP)) continue
+              r.y < u.yBottom && u.yTop < r.y + r.height)) continue
           const area = Math.max(1, r.width) * Math.max(1, r.height)
           if (area < bestArea) { bestArea = area; best = id }
           break
@@ -949,12 +1006,13 @@ export function binBlocks(
   // The bibliography block to claim a long null run for: the one whose forward galley
   // anchors the earliest page. Its .bbl rows are synctex-null, so they only ever surface
   // here as a long null run; box them per cell instead of leaving them unselectable.
-  let bibClaim: { id: string; anchorPage: number } | null = null
+  let bibClaim: { id: string; anchorPage: number; pages: Set<number> } | null = null
   for (const id of bibliographyIds) {
     const rects = regionsById.get(id)
     if (!rects || !rects.length) continue
-    const anchorPage = Math.min(...rects.map((r) => r.page))
-    if (!bibClaim || anchorPage < bibClaim.anchorPage) bibClaim = { id, anchorPage }
+    const pages = new Set(rects.filter((r) => r.width > 0 || r.height > 0).map((r) => r.page))
+    const anchorPage = Math.min(...pages)
+    if (!bibClaim || anchorPage < bibClaim.anchorPage) bibClaim = { id, anchorPage, pages }
   }
   const ORPHAN_RUN_MAX = 3
   // The reference list flows across several pages, but synctex forward-maps it to ONE galley
@@ -965,7 +1023,13 @@ export function binBlocks(
   const longNullPages = new Set(runs.filter((r) => r.length > ORPHAN_RUN_MAX).map((r) => r[0]!.page))
   const refPages = new Set<number>()
   if (bibClaim)
-    for (const seed of [bibClaim.anchorPage, bibClaim.anchorPage - 1]) {
+    // Seed from the anchor, the page before it (a list can spill back a column), AND every forward
+    // page of the galley — synctex can forward-map the galley onto a BODY page (making that the
+    // anchor) while the references actually render on a later forward page in the OTHER column
+    // (two-column back matter: the galley anchors p12-left but [12]-[20] render p13-right). Seeding
+    // only at the anchor left those unclaimed; a forward page that carries a long null run is a
+    // reference page. The contiguity walk + long-run gate still exclude an unrelated null region.
+    for (const seed of new Set([bibClaim.anchorPage, bibClaim.anchorPage - 1, ...bibClaim.pages])) {
       if (!longNullPages.has(seed)) continue
       for (let p = seed; longNullPages.has(p); p--) refPages.add(p)
       for (let p = seed + 1; longNullPages.has(p); p++) refPages.add(p)
@@ -1014,11 +1078,16 @@ export function binBlocks(
         const gapB = b.y - u.yBottom // box sits BELOW the orphan (orphan is its leading line)
         if (gapB >= -2 && gapB < belowGap) { belowGap = gapB; below = b }
       }
-      if (above) above.height = Math.max(above.height, u.yBottom - above.y)
+      // Attach to the CLOSER real box, not unconditionally the one above. A trailing tail
+      // sits a hair below its block (above wins on the small gap); but a heading that renders
+      // in the section-break gap between two blocks — e.g. the auto "References" title between
+      // the conclusion and the .bbl list — is nearer the block BELOW (its own list) than the
+      // paragraph above, and belongs there. Ties keep the above default (the common tail case).
+      if (above && (!below || aboveGap <= belowGap)) above.height = Math.max(above.height, u.yBottom - above.y)
       else if (below) {
-        // A dropped LEADING line of a column continuation: synctex drops the first wrapped
-        // line of the right-column half (or mis-files it), leaving it just ABOVE the cell's
-        // box. Extend the box UP to cover it (the trailing-tail case above is the common one).
+        // A dropped LEADING line of a column continuation (or a heading nearer the block below):
+        // synctex drops the first wrapped line of the right-column half (or mis-files it), leaving
+        // it just ABOVE the cell's box. Extend the box UP to cover it.
         const boxBottom = below.y + below.height
         const right = Math.max(below.x + below.width, u.xRight)
         below.y = Math.min(below.y, u.yTop)
@@ -1663,8 +1732,10 @@ export function spanLabel(span: BlockSpan): string {
 }
 
 /** A min–max range per file, e.g. "main.tex:24–40" for one file or
- *  "ch1.tex:24–44, ch2.tex:3–9" when a selection crosses files. Files
- *  appear in first-seen order. */
+ *  "ch1.tex:24–44, ch2.tex:3–9" when a selection crosses two files. A selection
+ *  spanning MORE files (an Appendix nesting several \input files) is summarized
+ *  as "first.tex:24–40, +N files" so the chip stays one short line instead of
+ *  listing every range. Files appear in first-seen order. */
 export function combinedSpanLabel(spans: BlockSpan[]): string {
   const byFile = new Map<string, { start: number; end: number }>()
   for (const s of spans) {
@@ -1676,9 +1747,9 @@ export function combinedSpanLabel(spans: BlockSpan[]): string {
       byFile.set(s.file, { start: s.startLine, end: s.endLine })
     }
   }
-  return [...byFile]
-    .map(([file, { start, end }]) => `${basename(file)}:${start}–${end}`)
-    .join(', ')
+  const parts = [...byFile].map(([file, { start, end }]) => `${basename(file)}:${start}–${end}`)
+  if (parts.length <= 2) return parts.join(', ')
+  return `${parts[0]}, +${parts.length - 1} files`
 }
 
 /** Spans for claude:run. A fully-selected section contributes its own span; its
