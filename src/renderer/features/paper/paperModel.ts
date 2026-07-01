@@ -58,13 +58,6 @@ export function flattenBlocks(roots: BlockNode[]): PageBlock[] {
     for (const node of nodes) {
       if (node.kind === 'preamble') continue
       if (node.kind === 'section') {
-        if (node.synthetic) {
-          // Outline-only container (the synthesised "Appendix"): emit no heading PageBlock, and
-          // recurse its children with the INCOMING context so they flatten exactly as they would
-          // without the container — no geometry change, no stolen box.
-          walk(node.children, sectionId, parentId, depth)
-          continue
-        }
         out.push({
           id: node.id,
           kind: 'heading',
@@ -939,9 +932,14 @@ export function binBlocks(
       let bestArea = Infinity
       for (const [id, rects] of regionsById) {
         if (byBlock.has(id)) continue
+        // A HEADING is a single title line: match it STRICTLY (its own row only), no line-gap
+        // slop — else its tight forward rect out-specifics the reference galley and steals the
+        // adjacent reference rows (the IEEEtran "Appendix" heading swallowing the last reference).
+        // A .bbl / block body keeps the gap tolerance so a dropped/spilled line is still caught.
+        const gap = headingIds.has(id) ? 0 : MAX_LINE_GAP
         for (const r of rects) {
           if (r.page !== u.page || !(r.x - 2 < u.xRight && u.xLeft < r.x + r.width + 2 &&
-              r.y - MAX_LINE_GAP < u.yBottom && u.yTop < r.y + r.height + MAX_LINE_GAP)) continue
+              r.y - gap < u.yBottom && u.yTop < r.y + r.height + gap)) continue
           const area = Math.max(1, r.width) * Math.max(1, r.height)
           if (area < bestArea) { bestArea = area; best = id }
           break

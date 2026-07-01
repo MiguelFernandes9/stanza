@@ -86,23 +86,6 @@ describe('flattenBlocks', () => {
     expect(flat[2]).toMatchObject({ kind: 'environment', envName: 'equation' })
   })
 
-  it('emits NO PageBlock for a synthetic container, promoting its children to top-level', () => {
-    // The synthesised "Appendix" node groups its sections in the outline tree only — it must
-    // render no heading (no box), and its children flatten exactly as if they were top-level.
-    const withAppendix: BlockNode[] = [
-      {
-        id: 'appendix#z', kind: 'section', name: 'Appendix', synthetic: true,
-        span: { file: 'main.tex', startLine: 5, endLine: 5 }, children: [
-          { id: 'sec1#a', kind: 'section', name: 'First', span: { file: 'a.tex', startLine: 1, endLine: 2 }, children: [] },
-          { id: 'sec2#b', kind: 'section', name: 'Second', span: { file: 'b.tex', startLine: 1, endLine: 2 }, children: [] },
-        ],
-      },
-    ]
-    const flat = flattenBlocks(withAppendix)
-    expect(flat.map((b) => b.id)).toEqual(['sec1#a', 'sec2#b']) // the Appendix container itself is omitted
-    expect(flat.every((b) => b.parentId === null && b.depth === 0)).toBe(true) // children promoted to top-level
-  })
-
   it('recurses container envs: child rows carry parentId + depth', () => {
     const flat = flattenBlocks(nestedTree)
     expect(flat.map((b) => b.id)).toEqual(['sec#x', 'thm#y', 'par#z', 'eq#w'])
@@ -1623,6 +1606,27 @@ describe('binBlocks — forward-region reclaim (backward map corrupt for back ma
     const { boxesById } = binBlocks([...headU, ...bodyU], rowsByPage, new Set(), regionsById, new Set())
     expect((boxesById.get('app#h') ?? []).length).toBe(1) // recovered from its forward region
     expect((boxesById.get('sec/par#a') ?? []).length).toBeGreaterThan(0)
+  })
+
+  it('a heading reclaims STRICTLY — it does not pull an adjacent reference row into itself', () => {
+    // The IEEEtran "Appendix" heading (which owns the whole appendix in the tree) renders a line
+    // apart from the last .bbl reference. Its reclaim must match its OWN row only (no line-gap
+    // slop) so it doesn't swallow the reference — that belongs to the bibliography.
+    const refs = lineRows([300, 312, 324], 90, 300) // reference lines (synctex-null), last ends ~y324
+    const head = lineRows([336], 90, 180) // "Appendix" heading, one contiguous line below the refs
+    const rowsByPage = new Map<number, TextRow[]>([[1, [...refs, ...head]]])
+    const refU = refs.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, null))
+    const headU = head.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, null))
+    const regionsById = new Map<string, PdfRect[]>([
+      ['app#h', head.map((r) => toRect(1, r))], // tight one-line heading rect
+      ['env#bib', [prect(1, 88, 289, 220, 40)]], // .bbl galley over the references
+    ])
+    const { boxesById } = binBlocks([...refU, ...headU], rowsByPage, new Set(), regionsById,
+      new Set(['env#bib']), new Set(['app#h']))
+    const h = boxesById.get('app#h') ?? []
+    expect(h.length).toBe(1)
+    expect(h.every((b) => b.y >= 320)).toBe(true) // heading box is its OWN line — NOT extended up into the refs
+    expect((boxesById.get('env#bib') ?? []).some((b) => b.y < 320)).toBe(true) // the refs went to the .bbl block
   })
 
   it('single-column: absorbs a display-equation null LHS into the equation, not a stray below', () => {

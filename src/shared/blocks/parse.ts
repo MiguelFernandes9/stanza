@@ -183,7 +183,6 @@ export function parseProjectBlocks(
           name: 'Appendix',
           span: { file: mainFile!, startLine: appendix.line, endLine: appendix.line },
           children: [],
-          synthetic: true, // outline-only container — no PageBlock / no box (flattenBlocks skips it)
         }
         roots.push(appendixNode)
       }
