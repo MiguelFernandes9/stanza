@@ -58,6 +58,13 @@ export function flattenBlocks(roots: BlockNode[]): PageBlock[] {
     for (const node of nodes) {
       if (node.kind === 'preamble') continue
       if (node.kind === 'section') {
+        if (node.synthetic) {
+          // Outline-only container (the synthesised "Appendix"): emit no heading PageBlock, and
+          // recurse its children with the INCOMING context so they flatten exactly as they would
+          // without the container — no geometry change, no stolen box.
+          walk(node.children, sectionId, parentId, depth)
+          continue
+        }
         out.push({
           id: node.id,
           kind: 'heading',

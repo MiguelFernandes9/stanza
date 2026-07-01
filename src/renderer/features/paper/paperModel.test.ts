@@ -86,6 +86,23 @@ describe('flattenBlocks', () => {
     expect(flat[2]).toMatchObject({ kind: 'environment', envName: 'equation' })
   })
 
+  it('emits NO PageBlock for a synthetic container, promoting its children to top-level', () => {
+    // The synthesised "Appendix" node groups its sections in the outline tree only — it must
+    // render no heading (no box), and its children flatten exactly as if they were top-level.
+    const withAppendix: BlockNode[] = [
+      {
+        id: 'appendix#z', kind: 'section', name: 'Appendix', synthetic: true,
+        span: { file: 'main.tex', startLine: 5, endLine: 5 }, children: [
+          { id: 'sec1#a', kind: 'section', name: 'First', span: { file: 'a.tex', startLine: 1, endLine: 2 }, children: [] },
+          { id: 'sec2#b', kind: 'section', name: 'Second', span: { file: 'b.tex', startLine: 1, endLine: 2 }, children: [] },
+        ],
+      },
+    ]
+    const flat = flattenBlocks(withAppendix)
+    expect(flat.map((b) => b.id)).toEqual(['sec1#a', 'sec2#b']) // the Appendix container itself is omitted
+    expect(flat.every((b) => b.parentId === null && b.depth === 0)).toBe(true) // children promoted to top-level
+  })
+
   it('recurses container envs: child rows carry parentId + depth', () => {
     const flat = flattenBlocks(nestedTree)
     expect(flat.map((b) => b.id)).toEqual(['sec#x', 'thm#y', 'par#z', 'eq#w'])
