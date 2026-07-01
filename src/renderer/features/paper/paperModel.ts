@@ -915,9 +915,28 @@ export function binBlocks(
       for (const [id, arr] of boxesById) if (byBlock.has(id) && environmentIds.has(id)) bs.push(...arr)
       return bs
     })()
+    // Backward-PRESENT boxes (a block the backward map DID attribute) paired with their id, so a
+    // reclaim candidate can defer to an adjacent one that also forward-owns the row (below).
+    const presentBoxes: { id: string; box: PdfRect }[] = []
+    for (const [id, arr] of boxesById) if (byBlock.has(id)) for (const box of arr) presentBoxes.push({ id, box })
     const reclaimed = new Map<string, AttributedUnit[]>()
     for (const u of units) {
       if (u.yBottom - u.yTop > LINE_MAX || !inBand(u.yTop, u.yBottom) || covered(u)) continue
+      // Synctex forward OVER-reports a row at a column/page boundary to BOTH the block that ends
+      // there (backward-present) and the next block (backward-missed, reclaiming here). When a
+      // backward-present neighbour's real box sits contiguously against this row AND its forward
+      // region also covers it, the row is that neighbour's trailing/leading line — leave it for
+      // the orphan pass to attach there, don't reclaim it to a FAR block's forward phantom (a
+      // paragraph's last left-column line stolen by the next-column paragraph past a [t] float).
+      const deferToPresent = presentBoxes.some(({ id, box }) => {
+        if (box.page !== u.page || !(box.x - 2 < u.xRight && u.xLeft < box.x + box.width + 2)) return false
+        const gapAbove = u.yTop - (box.y + box.height)
+        const gapBelow = box.y - u.yBottom
+        if (!((gapAbove >= -2 && gapAbove <= MAX_LINE_GAP) || (gapBelow >= -2 && gapBelow <= MAX_LINE_GAP))) return false
+        return (regionsById.get(id) ?? []).some((r) => r.page === u.page &&
+          r.x - 2 < u.xRight && u.xLeft < r.x + r.width + 2 && r.y < u.yBottom && u.yTop < r.y + r.height)
+      })
+      if (deferToPresent) continue
       const host = envBoxes.find((b) => b.page === u.page &&
         b.y + 4 <= u.yTop && u.yBottom <= b.y + b.height - 4 &&
         ((u.xRight <= b.x && u.xRight >= b.x - MAX_LINE_GAP) ||
@@ -932,14 +951,15 @@ export function binBlocks(
       let bestArea = Infinity
       for (const [id, rects] of regionsById) {
         if (byBlock.has(id)) continue
-        // A HEADING is a single title line: match it STRICTLY (its own row only), no line-gap
-        // slop — else its tight forward rect out-specifics the reference galley and steals the
-        // adjacent reference rows (the IEEEtran "Appendix" heading swallowing the last reference).
-        // A .bbl / block body keeps the gap tolerance so a dropped/spilled line is still caught.
-        const gap = headingIds.has(id) ? 0 : MAX_LINE_GAP
+        // Match STRICTLY — the row must OVERLAP the block's own forward rect, no line-gap slop.
+        // The reclaim recovers rows the forward map already covers; a null row a line BELOW a
+        // block's last rect is NOT that block's (a dropped trailing line is the orphan pass's job).
+        // Slop here let a block reach a line past its own ink and steal the neighbour's row — the
+        // "Appendix" heading eating the last reference, the backward-missed Conclusion eating the
+        // first reference, and a paragraph split across a stray far rect.
         for (const r of rects) {
           if (r.page !== u.page || !(r.x - 2 < u.xRight && u.xLeft < r.x + r.width + 2 &&
-              r.y - gap < u.yBottom && u.yTop < r.y + r.height + gap)) continue
+              r.y < u.yBottom && u.yTop < r.y + r.height)) continue
           const area = Math.max(1, r.width) * Math.max(1, r.height)
           if (area < bestArea) { bestArea = area; best = id }
           break

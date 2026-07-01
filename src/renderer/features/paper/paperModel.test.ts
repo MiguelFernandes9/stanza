@@ -1629,6 +1629,38 @@ describe('binBlocks — forward-region reclaim (backward map corrupt for back ma
     expect((boxesById.get('env#bib') ?? []).some((b) => b.y < 320)).toBe(true) // the refs went to the .bbl block
   })
 
+  it('defers a forward-over-reported row to the backward-present neighbour it sits against', () => {
+    // Two-column: a paragraph (present) fills the LEFT column to its bottom; the NEXT paragraph
+    // (backward-missed, recovered by forward region) renders past a [t] float in the RIGHT column.
+    // Synctex forward OVER-reports the left column's last line to BOTH paragraphs. It must stay
+    // with the present left paragraph it sits against — not be reclaimed onto the far right one
+    // (the IEEE "first paragraph's last line split into its own block" regression).
+    const body = Array.from({ length: 29 }, (_, i) => 60 + i * 13) // y60..424 → establishes docGutter
+    const p9 = lineRows([437, 449], ...LCOL)          // present left paragraph, near column bottom
+    const tail = lineRows([462], ...LCOL)             // its true last line: synctex-null (over-reported)
+    const p16 = lineRows([437, 449, 461], ...RCOL)    // next paragraph, right column (backward-missed)
+    const rowsByPage = new Map<number, TextRow[]>([
+      [1, [...lineRows(body, ...LCOL), ...lineRows(body, ...RCOL), ...p9, ...tail, ...p16]],
+    ])
+    const bl = lineRows(body, ...LCOL).map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'L#1'))
+    const br = lineRows(body, ...RCOL).map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'R#1'))
+    const p9U = p9.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'par#9')) // backward-PRESENT
+    const tailU = tail.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, null)) // null
+    const p16U = p16.map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, null))   // MISSED
+    const phantom = prect(1, LCOL[0], 451, LCOL[1] - LCOL[0], 11) // the over-reported left-col rect
+    const regionsById = new Map<string, PdfRect[]>([
+      ['par#9', [...p9.map((r) => toRect(1, r)), phantom]],        // present block forward-owns the tail
+      ['par#16', [...p16.map((r) => toRect(1, r)), phantom]],      // AND so does the missed block
+    ])
+    const { boxesById } = binBlocks([...bl, ...br, ...p9U, ...tailU, ...p16U], rowsByPage, new Set(),
+      regionsById, new Set())
+    const b16 = boxesById.get('par#16') ?? []
+    expect(b16.length).toBe(1)                                    // one box…
+    expect(b16.every((b) => b.x >= RCOL[0] - 2)).toBe(true)       // …in the RIGHT column only
+    const b9 = boxesById.get('par#9') ?? []
+    expect(boxBottom(b9[b9.length - 1]!)).toBeGreaterThanOrEqual(462) // present block absorbed the tail
+  })
+
   it('single-column: absorbs a display-equation null LHS into the equation, not a stray below', () => {
     // §6.3 "A Block Matrix": "M =" beside a bmatrix is synctex-null and the equation's forward rect
     // there is a tall bmatrix rect (LINE_MAX-filtered), so the box starts at the matrix. In a
