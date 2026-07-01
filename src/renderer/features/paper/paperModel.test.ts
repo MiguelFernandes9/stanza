@@ -1559,6 +1559,32 @@ describe('binBlocks — bibliography reference list (Bug A)', () => {
     const { boxesById } = binBlocks(units, rowsByPage, new Set(), new Map(), new Set())
     expect([...boxesById.values()].flat()).toHaveLength(0)
   })
+
+  it('claims references in the OTHER column when the galley anchors a body page (two-col back matter)', () => {
+    // Live ftfei: the \bibliography galley forward-maps to page 2 (a BODY page) + page 3-LEFT, but
+    // the references render page 3-RIGHT (synctex-null). The galley's column is wrong AND its
+    // anchor page is body, so the forward-region reclaim (gated to the galley column) misses them
+    // and an anchor-only refPages seed is empty. Seeding refPages from every forward page catches
+    // page 3. (Regression: the IEEE-Access refPages chain broke this two-column bib.)
+    const bodyL = bodyRun(60, 700, ...LCOL) // page 2 two-column body → docGutter exists
+    const bodyR = bodyRun(60, 700, ...RCOL)
+    const refsR = bodyRun(55, 300, ...RCOL).map((r) => aunit(3, r.xLeft, r.yTop, r.xRight, r.yBottom, null)) // page 3 RIGHT, null
+    const rowsByPage = new Map<number, TextRow[]>([
+      [2, [...bodyL, ...bodyR]],
+      [3, bodyRun(55, 300, ...RCOL)], // only the right column has content on page 3
+    ])
+    const bL = bodyL.map((r) => aunit(2, r.xLeft, r.yTop, r.xRight, r.yBottom, 'bL#2'))
+    const bR = bodyR.map((r) => aunit(2, r.xLeft, r.yTop, r.xRight, r.yBottom, 'bR#2'))
+    const toRect2 = (p: number, r: TextRow): PdfRect => prect(p, r.xLeft, r.yTop, r.xRight - r.xLeft, r.yBottom - r.yTop)
+    const regionsById = new Map<string, PdfRect[]>([
+      ['env9#bib', [prect(2, 48, 55, 514, 660), prect(3, LCOL[0], 50, LCOL[1] - LCOL[0], 300)]], // galley: p2 full + p3 LEFT
+      ['bL#2', bodyL.map((r) => toRect2(2, r))],
+      ['bR#2', bodyR.map((r) => toRect2(2, r))],
+    ])
+    const { boxesById } = binBlocks([...bL, ...bR, ...refsR], rowsByPage, new Set(), regionsById, new Set(['env9#bib']))
+    const pages = [...new Set((boxesById.get('env9#bib') ?? []).map((b) => b.page))]
+    expect(pages).toContain(3) // page-3 references (right column) claimed despite the body-page anchor
+  })
 })
 
 describe('binBlocks — forward-region reclaim (backward map corrupt for back matter)', () => {
@@ -1685,6 +1711,27 @@ describe('binBlocks — front-matter title/footnote split (Bug B)', () => {
     const box = boxesById.get('env1#kw')!
     expect(box).toHaveLength(1) // NOT a full box + a stray 'l' label box
     expect(box[0]!.col).toBe('full')
+  })
+
+  it('column-snaps a narrow paragraph on a single-band page (two-col appendix), not full-width', () => {
+    // Live ftfei: a two-column doc's appendix page has ONLY left-column content (a paragraph +
+    // a full-width table), so the page is detected as a 'single' band. Its paragraph lines are
+    // left-column width and do NOT cross the doc gutter, so they must be 'l' — a single band
+    // must not make an ordinary one-column line 'full', spanning both columns. Only a line that
+    // genuinely straddles the gutter (the abstract/keywords, covered above) is 'full'.
+    const body = Array.from({ length: 24 }, (_, i) => 60 + i * 13) // page 1: tall two-col body → docGutter
+    const para = Array.from({ length: 6 }, (_, i) => 60 + i * 13) // page 2: left-column paragraph only
+    const rows = new Map<number, TextRow[]>([
+      [1, [...lineRows(body, ...LCOL), ...lineRows(body, ...RCOL)]],
+      [2, lineRows(para, ...LCOL)], // only the left column → single band on page 2
+    ])
+    const pu = lineRows(para, ...LCOL).map((r) => aunit(2, r.xLeft, r.yTop, r.xRight, r.yBottom, 'app/par#1'))
+    const bl = lineRows(body, ...LCOL).map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'L#1'))
+    const br = lineRows(body, ...RCOL).map((r) => aunit(1, r.xLeft, r.yTop, r.xRight, r.yBottom, 'R#1'))
+    const { boxesById } = binBlocks([...pu, ...bl, ...br], rows, new Set())
+    const box = boxesById.get('app/par#1')!
+    expect(box).toHaveLength(1)
+    expect(box[0]!.col).toBe('l') // column-snapped, NOT 'full' (spanning both columns)
   })
 
   it('reclaims a dropped last line that mis-maps to an off-page block, extending the box above', () => {

@@ -520,16 +520,19 @@ export function binBlocks(
     return false
   }
 
-  // A block is FULL-WIDTH if ANY of its lines in a `single` band spans the gutter
-  // (`columnOf` → 'full'): the IEEE abstract / keywords / title block. A `single` band
-  // has no columns, so EVERY line of such a block is one 'full' box — a short label
-  // ("INDEX TERMS …") or a last fragment must not spawn its own l/r box beside it. A
-  // single-band block with NO spanning line (a one-column figure) is NOT full-width.
+  // A block is FULL-WIDTH if ANY of its lines actually CROSSES the doc gutter (spans both
+  // columns): the IEEE abstract / keywords / title block. Then EVERY line of the block is one
+  // 'full' box — a short label ("INDEX TERMS …") or a last fragment must not spawn its own l/r
+  // box beside it. NOTE: in a `single` band `columnOf` returns 'full' for EVERY line (the band has
+  // no columns), so it alone can't tell full-width content from a one-column line on a page merely
+  // mis-detected as single (a sparse appendix page dominated by a full-width table) — require the
+  // line to straddle the doc gutter, else every appendix paragraph would be marked full-width.
   const fullWidthBlocks = new Set<string>()
   for (const u of units) {
     if (!u.blockId) continue
     const layout = columnsByPage.get(u.page)
-    if (layout && bandKindOf(u) === 'single' && columnOf(layout, u) === 'full') fullWidthBlocks.add(u.blockId)
+    if (layout && bandKindOf(u) === 'single' && columnOf(layout, u) === 'full' &&
+        (!docGutter || (u.xLeft < docGutter.gx - 2 && u.xRight > docGutter.gx + 2))) fullWidthBlocks.add(u.blockId)
   }
 
   // A unit's column: a `*` float is always `full`; a non-float TEXT block on a
@@ -545,11 +548,13 @@ export function binBlocks(
     if (bandKindOf(u) === 'single' && u.blockId && fullWidthBlocks.has(u.blockId)) return 'full'
     const c = layout ? columnOf(layout, u) : 'full'
     if (c !== 'full') return c
-    // columnOf says 'full'. Keep it for genuine full-width content in a `single` band;
-    // only a 'full' from a TWO-column band is snapped to l/r by the DOC gutter (a
-    // gutter-spanning body line / a merged row; the per-page gutter can be a table's
-    // internal boundary on a table-only page, so use the doc gutter).
-    if (bandKindOf(u) !== 'two') return 'full'
+    // columnOf says 'full'. A KNOWN full-width block already returned above (fullWidthBlocks: the
+    // abstract / keywords / title). Any other unit columnOf couldn't pin — a gutter-spanning body
+    // line / merged row, OR a one-column line on a page MIS-DETECTED as single (a sparse appendix
+    // page dominated by a full-width table) — is snapped to its column by the DOC gutter, as a
+    // two-column body always is; only a genuinely single-column document (no doc gutter) stays
+    // 'full'. (Gating this on a `two` band wrongly kept single-band appendix paragraphs full-width,
+    // spanning both columns — the two-column-appendix regression.)
     return docGutter ? ((u.xLeft + u.xRight) / 2 <= docGutter.gx ? 'l' : 'r') : 'full'
   }
 
@@ -949,12 +954,13 @@ export function binBlocks(
   // The bibliography block to claim a long null run for: the one whose forward galley
   // anchors the earliest page. Its .bbl rows are synctex-null, so they only ever surface
   // here as a long null run; box them per cell instead of leaving them unselectable.
-  let bibClaim: { id: string; anchorPage: number } | null = null
+  let bibClaim: { id: string; anchorPage: number; pages: Set<number> } | null = null
   for (const id of bibliographyIds) {
     const rects = regionsById.get(id)
     if (!rects || !rects.length) continue
-    const anchorPage = Math.min(...rects.map((r) => r.page))
-    if (!bibClaim || anchorPage < bibClaim.anchorPage) bibClaim = { id, anchorPage }
+    const pages = new Set(rects.filter((r) => r.width > 0 || r.height > 0).map((r) => r.page))
+    const anchorPage = Math.min(...pages)
+    if (!bibClaim || anchorPage < bibClaim.anchorPage) bibClaim = { id, anchorPage, pages }
   }
   const ORPHAN_RUN_MAX = 3
   // The reference list flows across several pages, but synctex forward-maps it to ONE galley
@@ -965,7 +971,13 @@ export function binBlocks(
   const longNullPages = new Set(runs.filter((r) => r.length > ORPHAN_RUN_MAX).map((r) => r[0]!.page))
   const refPages = new Set<number>()
   if (bibClaim)
-    for (const seed of [bibClaim.anchorPage, bibClaim.anchorPage - 1]) {
+    // Seed from the anchor, the page before it (a list can spill back a column), AND every forward
+    // page of the galley — synctex can forward-map the galley onto a BODY page (making that the
+    // anchor) while the references actually render on a later forward page in the OTHER column
+    // (two-column back matter: the galley anchors p12-left but [12]-[20] render p13-right). Seeding
+    // only at the anchor left those unclaimed; a forward page that carries a long null run is a
+    // reference page. The contiguity walk + long-run gate still exclude an unrelated null region.
+    for (const seed of new Set([bibClaim.anchorPage, bibClaim.anchorPage - 1, ...bibClaim.pages])) {
       if (!longNullPages.has(seed)) continue
       for (let p = seed; longNullPages.has(p); p--) refPages.add(p)
       for (let p = seed + 1; longNullPages.has(p); p++) refPages.add(p)
