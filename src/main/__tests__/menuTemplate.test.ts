@@ -5,8 +5,8 @@ import { IpcChannels } from '../../shared/ipc'
 import type { RecentProject } from '../../shared/ipc'
 
 const recents: RecentProject[] = [
-  { root: '/x/proj-a', name: 'proj-a', hasSession: true, lastOpened: '2026-02-01T00:00:00Z' },
-  { root: '/y/proj-b', name: 'proj-b', hasSession: false },
+  { root: '/x/proj-a', name: 'proj-a', setUp: true, lastOpened: '2026-02-01T00:00:00Z' },
+  { root: '/y/proj-b', name: 'proj-b', setUp: false },
 ]
 
 function harness(rs: RecentProject[] = recents) {

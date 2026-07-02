@@ -365,6 +365,20 @@ export function Workspace({ doc, onDocChanged, onOpenSettings, aiEnabled = true,
     []
   )
 
+  // Live op activity: the running op's streamed thinking + tool steps, routed to
+  // its card by clientRef (= the task id) since the opId isn't known until the
+  // run resolves. Bare priming/running/done transitions carry no activity.
+  useEffect(
+    () =>
+      client.onClaudeStatus((s) => {
+        if (!s.activity || s.clientRef == null) return
+        const taskId = Number(s.clientRef)
+        if (Number.isNaN(taskId)) return
+        dispatch({ type: 'op-activity', taskId, activity: s.activity })
+      }),
+    []
+  )
+
   // Paper-context refresh status → the composer's "context updating" hint.
   useEffect(() => client.onSummaryStatus((s) => setContextBuilding(s.building)), [])
 
@@ -679,7 +693,7 @@ export function Workspace({ doc, onDocChanged, onOpenSettings, aiEnabled = true,
   /** Fire claude:run for a task already in busy phase and wire its result
    *  back by taskId (op-started → proposal/noop, or op-failed). */
   const runOp = (taskId: number, instruction: string, spans: BlockSpan[], attachments?: Attachment[]): void => {
-    void client.claudeRun({ instruction, spans, attachments }).then(
+    void client.claudeRun({ instruction, spans, attachments, clientRef: String(taskId) }).then(
       (res) => {
         dispatch({ type: 'op-started', taskId, opId: res.opId })
         if (res.proposal) dispatch({ type: 'proposal', taskId, proposal: res.proposal, note: res.note, conflict: res.conflict })
@@ -836,7 +850,8 @@ export function Workspace({ doc, onDocChanged, onOpenSettings, aiEnabled = true,
         spans: taskSpans(task.blockIds, blocks),
         blockIds: task.blockIds,
         // Staged attachments ride with this turn (add-user-turn clears them after).
-        attachments: task.attachments
+        attachments: task.attachments,
+        clientRef: String(taskId)
       })
       .then(
         (res) => {

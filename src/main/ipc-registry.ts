@@ -208,6 +208,14 @@ export function registerIpcHandlers(): void {
     if (bugReports.isWithinBase(dir)) shell.showItemInFolder(dir)
   })
 
+  // Remove a project from the recents list. Soft-hide: the record (ops, threads,
+  // summaries) is kept and reopening the folder clears the flag (see bindSession)
+  // — so the on-disk project and the user's chat history are never destroyed.
+  ipcMain.handle(IpcChannels.documentRemoveRecent, (_event, root: string): void => {
+    store.setProject(root, { hidden: true })
+    onRecentsChanged?.() // rebuild the native Open Recent menu too
+  })
+
   ipcMain.handle(IpcChannels.documentHistory, (event) => sessionFor(event).git.log(50))
 
   // "Compact" the document's chats: drop every persistent thread's stored session
@@ -577,7 +585,9 @@ function bindSession(wc: WebContents, info: DocumentInfo): void {
   const session = new DocumentSession(info, runner, store, globalSettings, activeOps, emitSummaryStatus)
   sessions.set(wc.id, session)
   void session.forks.sweepStale().catch(() => {}) // drop fork worktrees left by a crash/quit
-  store.setProject(info.root, { primed: true }) // a reopen now takes the instant path
+  // Opening (re)surfaces the project: mark primed (instant reopen path) and clear
+  // any user "removed from recents" flag so the row returns with its data.
+  store.setProject(info.root, { primed: true, hidden: false })
   // Replace any prior watcher (re-opening a doc in the same window), then watch
   // the new root for external changes → tell this window to re-list its files.
   fileWatchers.get(wc.id)?.()
@@ -715,7 +725,7 @@ async function runClaudeOp(
         req.spans,
         async (workDir) => {
           op = await doc.claude.runForkTurn(workDir, fork.forkId, fork.claudeSessionId, req, (status) =>
-            sendTo(wc, IpcChannels.claudeStatus, status),
+            sendTo(wc, IpcChannels.claudeStatus, { ...status, clientRef: req.clientRef }),
           )
           fork.claudeSessionId = op.sessionId
           return op.opId
@@ -846,7 +856,7 @@ async function runClaudeTurn(
         req.spans,
         async (workDir) => {
           turn = await doc.claude.runForkTurn(workDir, fork.forkId, resumeId, claudeReq, (status) =>
-            sendTo(wc, IpcChannels.claudeStatus, status),
+            sendTo(wc, IpcChannels.claudeStatus, { ...status, clientRef: req.clientRef }),
           )
           fork.claudeSessionId = turn.sessionId
           // A fresh prime (first turn OR self-heal) yields a new session id —

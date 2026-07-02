@@ -57,6 +57,9 @@ export const api = {
   documentCreate: (req: { name: string; dir: string }) =>
     invoke<DocumentInfo | null>(IpcChannels.documentCreate, req),
   documentRecents: () => invoke<RecentProject[]>(IpcChannels.documentRecents),
+  /** Hide a project from the recents list (record kept; reopening restores it). */
+  documentRemoveRecent: (root: string) =>
+    invoke<void>(IpcChannels.documentRemoveRecent, root),
   documentHistory: () => invoke<CommitInfo[]>(IpcChannels.documentHistory),
   /** Clear the open doc's Claude session so the next op primes fresh (Settings). */
   assistantReset: () => invoke<void>(IpcChannels.assistantReset),

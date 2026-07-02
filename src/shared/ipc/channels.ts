@@ -2,6 +2,7 @@ export const IpcChannels = {
   documentOpen: 'document:open',      // invoke → DocumentInfo | null
   documentCreate: 'document:create',  // invoke {name: string; dir: string} → DocumentInfo (article template)
   documentRecents: 'document:recents', // invoke → RecentProject[]
+  documentRemoveRecent: 'document:removeRecent', // invoke root → void (hide from recents; record kept, reopening restores)
   documentHistory: 'document:history', // invoke → CommitInfo[] (sidebar HISTORY)
   documentDiffAt: 'document:diffAt',  // invoke sha → HistoryDiff ({diff, files}: the change that commit introduced)
   documentRevertTo: 'document:revertTo', // invoke sha → ReviewProposal | null (restore the doc to a commit, as a review proposal)

@@ -26,6 +26,47 @@ const proposal: ReviewProposal = {
   blocks: []
 }
 
+describe('taskReducer — live op activity', () => {
+  const busy = (): { s: TaskState; id: number } => {
+    const s = run(initialTaskState, { type: 'start-whole-doc', instruction: 'go' })
+    return { s, id: s.activeTask! }
+  }
+
+  it('accumulates streamed thinking text and pushes tool steps', () => {
+    const { s: s0, id } = busy()
+    const s = run(
+      s0,
+      { type: 'op-activity', taskId: id, activity: { kind: 'thinking', text: 'Plan ' } },
+      { type: 'op-activity', taskId: id, activity: { kind: 'thinking', text: 'it out.' } },
+      { type: 'op-activity', taskId: id, activity: { kind: 'tool', label: 'Editing main.tex' } },
+    )
+    expect(s.tasks.find((t) => t.id === id)!.activity).toEqual({
+      thinking: 'Plan it out.',
+      steps: ['Editing main.tex'],
+    })
+  })
+
+  it('clears activity when the op resolves to a proposal', () => {
+    const { s: s0, id } = busy()
+    const s = run(
+      s0,
+      { type: 'op-activity', taskId: id, activity: { kind: 'thinking', text: 'x' } },
+      { type: 'proposal', taskId: id, proposal, note: 'done' },
+    )
+    expect(s.tasks.find((t) => t.id === id)!.activity).toBeUndefined()
+  })
+
+  it('ignores activity once the task has left the busy phase', () => {
+    const { s: s0, id } = busy()
+    const s = run(
+      s0,
+      { type: 'proposal', taskId: id, proposal, note: 'done' },
+      { type: 'op-activity', taskId: id, activity: { kind: 'thinking', text: 'late' } },
+    )
+    expect(s.tasks.find((t) => t.id === id)!.activity).toBeUndefined()
+  })
+})
+
 describe('taskReducer — selection', () => {
   it('creates a compose task on an unowned block click and activates it', () => {
     const s = run(initialTaskState, { type: 'toggle-block', ids: ['p1'], additive: false })

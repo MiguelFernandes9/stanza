@@ -67,17 +67,36 @@ describe('DocumentService.open', () => {
     expect(info?.mainFile).toBe('thesis.tex')
   })
 
-  test('still ambiguous: first candidate wins, candidates ordered first', async () => {
+  test('still ambiguous: first candidate wins; the OTHER document is excluded', async () => {
     const root = makeProject({
-      'b.tex': ARTICLE,
+      'b.tex': ARTICLE, // a SEPARATE document — not part of a.tex's project
       'a.tex': ARTICLE,
-      'helper.tex': 'no class here',
+      'helper.tex': 'no class here', // orphan include — kept
     })
     const info = await service.open(root)
     expect(info?.mainFile).toBe('a.tex')
-    expect(info?.texFiles[0]).toBe('a.tex')
-    expect(info?.texFiles[1]).toBe('b.tex')
-    expect(info?.texFiles[2]).toBe('helper.tex')
+    expect(info?.texFiles).toEqual(['a.tex', 'helper.tex']) // b.tex (other document) dropped
+  })
+
+  test('a second \\documentclass document in the folder is not part of this project', async () => {
+    // Real case: an IEEE main_ieee.tex (+ sections) alongside a leftover llncs main.tex
+    // of the same paper. main.tex is a separate document; parsing it in collides block
+    // ids (both have \section{Introduction}) and the intro box gets overwritten.
+    const root = makeProject({
+      'main_ieee.tex':
+        '\\documentclass{ieeeaccess}\n\\begin{document}\n\\input{sections/01_introduction}\n\\end{document}\n',
+      'sections/01_introduction.tex': '\\section{Introduction}\nBody of the intro.\n',
+      'main.tex':
+        '\\documentclass{llncs}\n\\begin{document}\n\\section{Introduction}\nOld llncs copy.\n\\end{document}\n',
+    })
+    const store = new Store(join(root, '.store.json'))
+    store.setProject(root, { mainFile: 'main_ieee.tex' })
+    const info = await new DocumentService({
+      store,
+      makeGit: () => null as unknown as never,
+      primeSession: async () => undefined,
+    }).open(root)
+    expect(info?.texFiles).toEqual(['main_ieee.tex', 'sections/01_introduction.tex']) // main.tex excluded
   })
 
   test('.git contents are ignored', async () => {

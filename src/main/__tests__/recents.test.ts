@@ -13,19 +13,35 @@ describe('mapRecents', () => {
     expect(out.map((r) => r.name)).toEqual(['newer-paper', 'older-paper'])
   })
 
-  it('maps hasSession from sessionId and surfaces lastOpened only when present', () => {
-    const [primed, undated] = mapRecents([
-      ['/p/primed', rec({ lastOpened: '2026-02-01T00:00:00Z', sessionId: 'abc' })],
-      ['/p/undated', rec({ sessionId: 'x' })],
+  it('maps setUp from primed or sessionId and surfaces lastOpened only when present', () => {
+    const [byPrimed, byLegacy] = mapRecents([
+      ['/p/primed', rec({ lastOpened: '2026-02-01T00:00:00Z', primed: true })],
+      ['/p/legacy', rec({ sessionId: 'x' })],
     ])
-    expect(primed).toEqual({
+    // The per-fork model writes `primed`, not a doc-level `sessionId` — a primed
+    // project must read as set up (the bug: deriving from sessionId, it didn't).
+    expect(byPrimed).toEqual({
       root: '/p/primed',
       name: 'primed',
-      hasSession: true,
+      setUp: true,
       lastOpened: '2026-02-01T00:00:00Z',
     })
-    expect(undated).toEqual({ root: '/p/undated', name: 'undated', hasSession: true })
-    expect('lastOpened' in undated).toBe(false)
+    // Legacy pre-fork records carry only sessionId — still set up.
+    expect(byLegacy).toEqual({ root: '/p/legacy', name: 'legacy', setUp: true })
+    expect('lastOpened' in byLegacy).toBe(false)
+  })
+
+  it('marks a record with neither primed nor sessionId as not set up', () => {
+    const [row] = mapRecents([['/p/raw', rec({ blockCount: 5 })]])
+    expect(row).toEqual({ root: '/p/raw', name: 'raw', setUp: false })
+  })
+
+  it('omits projects the user hid from recents', () => {
+    const out = mapRecents([
+      ['/p/visible', rec({ primed: true })],
+      ['/p/hidden', rec({ primed: true, hidden: true })],
+    ])
+    expect(out.map((r) => r.root)).toEqual(['/p/visible'])
   })
 
   it('does not mutate the input entries', () => {

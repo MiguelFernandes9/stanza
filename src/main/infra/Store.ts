@@ -23,6 +23,10 @@ export interface ProjectRecord {
   threads?: ThreadRecord[]
   lastOpened?: string // ISO — recents ordering
   blockCount?: number // recents card detail
+  /** User removed this project from the recents list. The record (ops, threads,
+   *  summaries) is KEPT — only the launch-screen row is hidden; reopening the
+   *  folder clears the flag and the row (with its data) returns. */
+  hidden?: boolean
   /** Per-document settings: main-file override + compiler options (Lane S). */
   mainFile?: string
   compile?: CompileOptions

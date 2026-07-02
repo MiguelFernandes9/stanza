@@ -102,7 +102,7 @@ describe('DocumentService.prime', () => {
     expect(await git.isClean()).toBe(true) // .gitignore is in the initial commit
   })
 
-  test('recents gains the project with hasSession and blockCount', async () => {
+  test('recents gains the project set up with a session and blockCount', async () => {
     const info = await service.create({ name: 'Recents', dir })
     await service.prime(info.root, () => {})
 

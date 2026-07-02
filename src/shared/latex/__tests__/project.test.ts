@@ -1,9 +1,31 @@
 import { describe, expect, test } from 'vitest'
-import { resolveProjectFiles } from '../project'
+import { appendixSection, resolveProjectFiles } from '../project'
 
 function fsOf(files: Record<string, string>) {
   return (relPath: string) => files[relPath] ?? null
 }
+
+describe('appendixSection', () => {
+  test('finds \\appendix and the \\input files after it', () => {
+    const src = '\\begin{document}\n\\input{body}\n\\appendix\n\\input{app_a}\n\\input{app_b}\n\\end{document}'
+    const r = appendixSection(src)
+    expect(r?.line).toBe(3)
+    expect([...(r?.files ?? [])]).toEqual(['app_a.tex', 'app_b.tex']) // body.tex (before) excluded
+  })
+
+  test('handles \\appendices (IEEEtran plural, appendi-ces not appendix-es)', () => {
+    const src = '\\appendices\n\\input{sections/app}'
+    expect([...(appendixSection(src)?.files ?? [])]).toEqual(['sections/app.tex'])
+  })
+
+  test('null when there is no appendix', () => {
+    expect(appendixSection('\\section{Body}\n\\input{a}')).toBeNull()
+  })
+
+  test('ignores a commented-out \\appendix', () => {
+    expect(appendixSection('% \\appendix\n\\input{a}')).toBeNull()
+  })
+})
 
 describe('resolveProjectFiles', () => {
   test('single file with no inputs', () => {

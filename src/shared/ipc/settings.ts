@@ -44,6 +44,11 @@ export interface GlobalSettings {
    *  → omit → CLI default. (Fast mode isn't headless-controllable; effort is the
    *  speed lever instead.) */
   claudeEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  /** Let the Claude bridge use the web — pre-approves the CLI's WebFetch + WebSearch
+   *  tools (`--allowedTools`) so a session can read a referenced URL or look up a
+   *  citation while editing. Default-on: `undefined`/`true` = on, `false` = off.
+   *  Edits still surface as a reviewable diff, so fetched content can't commit silently. */
+  allowWebAccess?: boolean
   /** How many recent document commits the session-bus digest injects into each op
    *  prompt — caps token spend on old history. Unset → 20. Raise it to have the
    *  model consider more history. */

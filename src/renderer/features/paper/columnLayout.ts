@@ -175,6 +175,14 @@ function bandAt(layout: ColumnLayout, cy: number): ColumnBand | null {
   return near
 }
 
+/** The kind of the band at a given y (`single` full-width vs `two` columns), or
+ *  null when the page has no bands. Lets the binner tell genuine full-width content
+ *  (a `single` band — abstract, keywords, title block) from a two-column body line,
+ *  so it never splits or column-snaps the former. */
+export function bandKindAt(layout: ColumnLayout, cy: number): 'single' | 'two' | null {
+  return bandAt(layout, cy)?.kind ?? null
+}
+
 /** The page's two-column gutter stripe (median of its two-column bands' edges), or
  *  null if the page has no two-column band. Lets `columnOf` classify an item that
  *  falls in a SINGLE band — a figure-internal thin band, or a graphic between
