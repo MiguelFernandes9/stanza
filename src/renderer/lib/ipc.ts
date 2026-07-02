@@ -1,6 +1,8 @@
 import { IpcChannels } from '@shared/ipc'
 import type {
   BlockSpan,
+  BugReportInput,
+  BugReportResult,
   ClaudeAvailability,
   ClaudeRequest,
   ClaudeResult,
@@ -145,6 +147,12 @@ export const api = {
   settingsGetDocument: () => invoke<DocumentSettings>(IpcChannels.settingsGetDocument),
   settingsSetDocument: (patch: DocumentSettings) =>
     invoke<DocumentSettingsResult>(IpcChannels.settingsSetDocument, patch),
+  /** File an in-app bug report (text + images + block-geometry snapshot). Main
+   *  writes it under userData and returns the folder it created. */
+  submitBugReport: (input: BugReportInput) =>
+    invoke<BugReportResult>(IpcChannels.bugSubmit, input),
+  /** Reveal a written report's folder in the OS file manager. */
+  revealBugReport: (dir: string) => invoke<void>(IpcChannels.bugReveal, dir),
   onCompileStatus: on<CompileStatus>(IpcChannels.compileStatus),
   onSummaryStatus: on<SummaryStatus>(IpcChannels.summaryStatus),
   onSettingsChanged: on<SettingsChanged>(IpcChannels.settingsChanged),

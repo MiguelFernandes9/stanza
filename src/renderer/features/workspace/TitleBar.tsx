@@ -1,5 +1,5 @@
 import type { CSSProperties, JSX } from 'react'
-import { Code, RefreshCw, Settings, Sparkles } from 'lucide-react'
+import { Bug, Code, RefreshCw, Settings, Sparkles } from 'lucide-react'
 import { CompilePill, IconButton, StatusDot, Tooltip } from '@renderer/components'
 import type { CompileState } from '@renderer/components'
 import { StanzaMark } from '@renderer/features/project/StanzaMark'
@@ -24,6 +24,8 @@ interface Props {
   onToggleChat: () => void
   /** Open the Settings panel (App owns the state; Lane S mounts the modal). */
   onOpenSettings: () => void
+  /** Open the in-app bug reporter (alpha dogfood). */
+  onReportBug: () => void
   /** Claude availability — shows an "offline" indicator (→ Settings) when not usable. */
   aiStatus?: AiStatus
 }
@@ -41,6 +43,7 @@ export function TitleBar({
   chatUnread,
   onToggleChat,
   onOpenSettings,
+  onReportBug,
   aiStatus
 }: Props): JSX.Element {
   return (
@@ -154,6 +157,11 @@ export function TitleBar({
               />
             )}
           </span>
+        </Tooltip>
+        <Tooltip label="Report a bug" side="bottom">
+          <IconButton label="Report a bug" onClick={onReportBug}>
+            <Bug size={17} />
+          </IconButton>
         </Tooltip>
         <Tooltip label="Settings" hint="⌘," side="bottom">
           <IconButton label="Settings" onClick={onOpenSettings}>

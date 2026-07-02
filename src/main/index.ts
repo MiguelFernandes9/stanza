@@ -9,10 +9,18 @@ import {
   setRecentsListener,
   setWindowSpawner,
 } from './ipc-registry'
+import { errorLog } from './infra/errorLog'
+import { applyUserPath } from './infra/resolveUserPath'
 import { buildAppMenu } from './menu'
 import { handleDocProtocol, registerDocScheme } from './protocol'
 import { quitDialogOptions, shouldPromptQuit } from './quitGuard'
 import { installSpellcheckMenu, setSpellcheckEnabled } from './spellcheck'
+
+// Reconstruct the user's real PATH before ANYTHING spawns a child. A packaged,
+// Finder-launched .app inherits only launchd's bare PATH, so bare-name spawns
+// (claude, tectonic, synctex, latexdiff, git) would ENOENT; this restores the
+// interactive-shell PATH the app gets under `npm run dev`. Must stay first.
+applyUserPath()
 
 registerDocScheme() // must precede app ready
 
@@ -42,6 +50,7 @@ if (process.env.STANZA_USER_DATA) {
 // swallow silently — the console.error keeps real bugs visible.
 function reportMainError(label: string, err: unknown): void {
   console.error(`[stanza] ${label}:`, err)
+  errorLog.record(label, err) // retain for the in-app bug reporter's context
   if (!app.isReady()) return
   try {
     void dialog.showMessageBox({

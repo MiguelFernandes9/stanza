@@ -28,6 +28,8 @@ import { pageTextRows } from './pdfTextRows'
 import type { TextRow } from './pdfTextRows'
 import { pageGraphics } from './pdfGraphics'
 import type { GraphicBox } from './pdfGraphics'
+import { buildGeometrySnapshot } from './overlapReport'
+import { setGeometry } from './geometryBus'
 import { BADGE, PAD, RAIL, RAIL_GUTTER, connectorPath, paneLayout, pdfScrollTop, phaseTone, railBubbleTop, stackTops } from './paperPaneLayout'
 
 const FALLBACK_PAGE_WIDTH = 564
@@ -379,6 +381,8 @@ export function PaperPane(props: Props): JSX.Element {
       setBlockRects(result.boxesById)
       setContentTops(result.contentTopByPage)
       columnsByPage.current = result.columnsByPage // Phase 2 (two-rail bubbles) will consume this
+      // Publish the boxes + detected overlaps for the bug reporter to snapshot.
+      setGeometry(buildGeometrySnapshot(result.boxesById, pageBlocks, mainFile))
       // Mark the geometry now on screen as fresh for this pdf + these spans (set
       // before React re-renders, so geometryFresh reads true without a flicker).
       geomForPdf.current = pdf
@@ -395,6 +399,7 @@ export function PaperPane(props: Props): JSX.Element {
       if (!alive) return
       setBlockRects(new Map())
       setContentTops(new Map())
+      setGeometry(null) // boxes dropped — no geometry to report until next compile
       geomForPdf.current = pdf
       geomForSig.current = blocksSig
       reveal(pdf)

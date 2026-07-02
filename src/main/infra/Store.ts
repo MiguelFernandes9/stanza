@@ -37,7 +37,7 @@ export interface ProjectRecord {
 }
 
 /** Atomic temp+rename write so a crash never leaves a half-written file. */
-function atomicWriteJson(filePath: string, data: unknown): void {
+export function atomicWriteJson(filePath: string, data: unknown): void {
   mkdirSync(dirname(filePath), { recursive: true })
   const tempPath = `${filePath}.tmp`
   writeFileSync(tempPath, JSON.stringify(data, null, 2))
@@ -45,7 +45,7 @@ function atomicWriteJson(filePath: string, data: unknown): void {
 }
 
 /** Read JSON, tolerating a missing or corrupt file (reads as `fallback`). */
-function loadJson<T>(filePath: string, fallback: T): T {
+export function loadJson<T>(filePath: string, fallback: T): T {
   try {
     return JSON.parse(readFileSync(filePath, 'utf8')) as T
   } catch {

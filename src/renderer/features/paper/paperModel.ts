@@ -127,7 +127,7 @@ export function parentOf(roots: BlockNode[], blockId: string): string | null {
 }
 
 /** Do two boxes overlap as rectangles? (Page-agnostic — callers gate on page.) */
-function boxesOverlap(a: PdfRect, b: PdfRect): boolean {
+export function boxesOverlap(a: PdfRect, b: PdfRect): boolean {
   return (
     a.x < b.x + b.width &&
     b.x < a.x + a.width &&
