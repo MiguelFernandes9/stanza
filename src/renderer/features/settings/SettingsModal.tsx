@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { JSX } from 'react'
+import type { JSX, ReactNode } from 'react'
 import { Badge, Button, Input, Modal, SegmentedControl, Select, StatusDot, Toggle } from '@renderer/components'
 import { client } from '@renderer/lib/client'
 import { DEFAULT_SPELL_LANGUAGE, SPELL_LANGUAGES } from '@shared/spell/languages'
@@ -26,18 +26,24 @@ const FONT_FAMILIES = [
   { label: 'Courier New', value: '"Courier New", monospace' }
 ]
 const PAPER_SIZES = ['a4', 'letter', 'a5', 'b5', 'legal']
-// Claude models (claude --model). Region-safe ALIASES: each resolves to the latest
-// model available to the account/region (versions auto-track; no pinned ids). '' =
-// omit the flag → the account's default (Opus 4.8 on Max/API tiers), so name it
-// rather than show a bare "Default". Fable is NOT offered — region-restricted (no
-// Europe); a live per-region list isn't reachable from the CLI/OAuth (see plan).
-const CLAUDE_MODELS: { label: string; value: NonNullable<GlobalSettings['claudeModel']> | '' }[] = [
-  { label: 'Opus 4.8 (default)', value: '' },
-  { label: 'Sonnet 4.6', value: 'sonnet' },
-  { label: 'Haiku 4.5', value: 'haiku' }
+// Claude models (claude --model). Region-safe ALIASES: each resolves to the newest
+// model the account/region offers, so versions auto-track — which is why labels
+// carry NO version numbers (pinned labels rotted: the UI said "Sonnet 4.6" while
+// the alias already ran Sonnet 5). '' = omit the flag → the account's default.
+// The CLI has no list-models command, so the set can't be discovered live;
+// "Custom…" accepts any full model id so a brand-new family works without an app
+// update. (Fable: the old Europe region gate is gone — verified live 2026-07-02.)
+const CUSTOM_MODEL = '__custom__'
+const CLAUDE_MODELS: { label: string; value: string }[] = [
+  { label: 'Default — account’s best', value: '' },
+  { label: 'Fable — frontier', value: 'fable' },
+  { label: 'Opus — deep reasoning', value: 'opus' },
+  { label: 'Sonnet — fast + capable', value: 'sonnet' },
+  { label: 'Haiku — fastest', value: 'haiku' },
+  { label: 'Custom…', value: CUSTOM_MODEL }
 ]
 // Reasoning effort (claude --effort) — lower is faster/cheaper. '' = omit the flag →
-// the model's default effort (High on Opus 4.8 / Sonnet 4.6), so name it.
+// the model's own default effort (High on current models), so name it.
 const CLAUDE_EFFORTS: { label: string; value: NonNullable<GlobalSettings['claudeEffort']> | '' }[] = [
   { label: 'High (default)', value: '' },
   { label: 'Low (fastest)', value: 'low' },
@@ -55,6 +61,10 @@ export function SettingsModal({ open, doc, onClose, onDocChanged, aiStatus, onRe
   const [docSettings, setDocSettings] = useState<DocumentSettings>({})
   // Transient "Reset — next edit starts fresh" ack after the reset button.
   const [resetAck, setResetAck] = useState(false)
+  // "Custom…" picked in the model dropdown. Only sticky UI state — the persisted
+  // value is claudeModel itself; a saved id that isn't a known alias re-derives
+  // custom mode on open without this flag.
+  const [customModel, setCustomModel] = useState(false)
 
   useEffect(() => {
     if (!open) return
@@ -80,6 +90,9 @@ export function SettingsModal({ open, doc, onClose, onDocChanged, aiStatus, onRe
   const compile = docSettings.compile ?? {}
   const mainFile = docSettings.mainFile ?? doc?.mainFile ?? ''
   const command = `tectonic ${effectiveFlags(mainFile || '<main>.tex', compile)}`
+  // A stored value that isn't one of the offered aliases is a custom id.
+  const knownModel = CLAUDE_MODELS.some((m) => m.value === (global.claudeModel ?? '') && m.value !== CUSTOM_MODEL)
+  const showCustomModel = customModel || !knownModel
 
   return (
     <Modal title="Settings" onClose={onClose} testid="settings-modal" width="min(960px, 94vw)">
@@ -190,16 +203,31 @@ export function SettingsModal({ open, doc, onClose, onDocChanged, aiStatus, onRe
           <Field label="Status">
             <AiStatusControl status={aiStatus ?? { status: 'checking' }} onRecheck={onRecheckAi} />
           </Field>
-          <Field label="Model">
+          <Field label="Model" hint="Named options always run the newest version available to your account.">
             <Select
               aria-label="Assistant model"
               size="md"
-              value={global.claudeModel ?? ''}
+              value={showCustomModel ? CUSTOM_MODEL : (global.claudeModel ?? '')}
               options={CLAUDE_MODELS}
-              onChange={(v) => patchGlobal({ claudeModel: (v || undefined) as GlobalSettings['claudeModel'] })}
+              onChange={(v) => {
+                setCustomModel(v === CUSTOM_MODEL)
+                if (v !== CUSTOM_MODEL) patchGlobal({ claudeModel: v || undefined })
+              }}
               wrapStyle={{ width: '100%' }}
             />
           </Field>
+          {showCustomModel && (
+            <Field label="Model id" hint="Full id passed to claude --model, e.g. claude-fable-5.">
+              <Input
+                aria-label="Custom model id"
+                size="md"
+                value={knownModel ? '' : (global.claudeModel ?? '')}
+                placeholder="claude-fable-5"
+                onChange={(e) => patchGlobal({ claudeModel: e.target.value || undefined })}
+                wrapStyle={{ width: '100%' }}
+              />
+            </Field>
+          )}
           <Field label="Effort">
             <Select
               aria-label="Assistant effort"
@@ -318,7 +346,7 @@ function Section({
   note?: string
   /** Drop the bottom rule on the final section. */
   last?: boolean
-  children: JSX.Element | JSX.Element[]
+  children: ReactNode
 }): JSX.Element {
   return (
     <section

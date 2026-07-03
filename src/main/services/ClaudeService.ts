@@ -177,8 +177,9 @@ export class ClaudeService {
   private modelFlags(): string[] {
     const g = this.globalSettings.get()
     const flags: string[] = []
-    // claudeModel is a region-safe alias (opus/sonnet/haiku) passed straight to
-    // --model — the CLI resolves it to the latest model available to this account.
+    // claudeModel is a CLI alias (fable/opus/sonnet/haiku — resolved to the latest
+    // model available to this account) or a user-entered full model id; either way
+    // it's passed straight to --model, so new models need no app change.
     if (g.claudeModel) flags.push('--model', g.claudeModel)
     if (g.claudeEffort) flags.push('--effort', g.claudeEffort)
     return flags

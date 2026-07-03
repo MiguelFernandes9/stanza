@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type { DocumentInfo } from '@shared/ipc'
+import { client } from '@renderer/lib/client'
 import { SettingsModal } from './SettingsModal'
 
 vi.mock('@renderer/lib/client', () => ({
@@ -89,5 +90,42 @@ describe('SettingsModal', () => {
     await mount({ aiStatus: { status: 'unavailable', reason: 'not-installed' }, onRecheckAi })
     act(() => sec('ai-recheck')!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
     expect(onRecheckAi).toHaveBeenCalledOnce()
+  })
+
+  // React tracks controlled values, so tests must set via the native prototype
+  // setter and dispatch the event React listens for (select: change, input: input).
+  const setSelect = (el: HTMLSelectElement, value: string): void => {
+    Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')!.set!.call(el, value)
+    el.dispatchEvent(new Event('change', { bubbles: true }))
+  }
+  const setInput = (el: HTMLInputElement, value: string): void => {
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!.call(el, value)
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+  }
+  const modelSelect = (): HTMLSelectElement =>
+    container.querySelector('[aria-label="Assistant model"]') as HTMLSelectElement
+  const customIdInput = (): HTMLInputElement | null =>
+    container.querySelector('[aria-label="Custom model id"]')
+
+  it('offers version-less model aliases plus a Custom option', async () => {
+    await mount()
+    expect([...modelSelect().options].map((o) => o.value)).toEqual(['', 'fable', 'opus', 'sonnet', 'haiku', '__custom__'])
+    expect(customIdInput()).toBeNull() // no custom input until picked
+  })
+
+  it('Custom… reveals the id input and persists the typed id', async () => {
+    await mount()
+    act(() => setSelect(modelSelect(), '__custom__'))
+    const input = customIdInput()
+    expect(input).not.toBeNull()
+    act(() => setInput(input!, 'claude-fable-5'))
+    expect(client.settingsSetGlobal).toHaveBeenCalledWith({ claudeModel: 'claude-fable-5' })
+  })
+
+  it('a persisted custom id re-opens in custom mode with the id shown', async () => {
+    vi.mocked(client.settingsGetGlobal).mockResolvedValueOnce({ claudeModel: 'my-model-x' })
+    await mount()
+    expect(modelSelect().value).toBe('__custom__')
+    expect(customIdInput()?.value).toBe('my-model-x')
   })
 })
