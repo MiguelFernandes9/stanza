@@ -13,6 +13,7 @@ import {
   Link,
   List,
   PenLine,
+  Play,
   Plus,
   Trash2,
   Upload
@@ -53,6 +54,12 @@ interface Props {
   /** Drag-drop move: relocate `from` into folder `toDir` ('' = root) — a
    *  cross-dir rename (git mv). Workspace guards + applies it (v0.4). */
   onMove: (from: string, toDir: string) => void
+  /** OS drag-drop (Finder etc.) onto a dir ('' = root): import the dropped
+   *  files — the drop sibling of onUpload. */
+  onImportFiles: (dir: string, files: File[]) => void
+  /** Right-click "Set as compile target" on a .tex file: switch the document's
+   *  main file (the Settings switch, one click closer) and recompile. */
+  onSetMainFile: (relPath: string) => void
   /** Files whose Rename/Delete must be blocked — a busy/review task owns a
    *  block in them (UI mirror of the backend span lock). */
   lockedFiles: Set<string>
@@ -72,6 +79,7 @@ function dirLocked(locked: Set<string>, dir: string): boolean {
 
 const MENU_ICON: Record<FileMenuId, ReactNode> = {
   open: <CornerUpRight size={15} />,
+  setMain: <Play size={15} />,
   rename: <PenLine size={15} />,
   duplicate: <Copy size={15} />,
   copyPath: <Link size={15} />,
@@ -411,13 +419,15 @@ export function Sidebar({
   onCreateFolder,
   onUpload,
   onMove,
+  onImportFiles,
+  onSetMainFile,
   lockedFiles,
   renameOnAppear,
   onRenameHandled
 }: Props): JSX.Element {
   const tree = buildFileTree(files)
   const projectName = doc.root.split('/').pop() ?? doc.root
-  const drag = useFileDrag(onMove)
+  const drag = useFileDrag(onMove, onImportFiles)
 
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
@@ -453,6 +463,9 @@ export function Sidebar({
       case 'open':
         onOpenFile(path)
         break
+      case 'setMain':
+        onSetMainFile(path)
+        break
       case 'rename':
         setRenaming(path)
         break
@@ -481,7 +494,11 @@ export function Sidebar({
   }
 
   const buildMenuItems = (path: string, kind: FileMenuKind, locked: boolean): ContextMenuEntry[] =>
-    menuItemsForKind(kind, { locked }).map((e): ContextMenuEntry =>
+    menuItemsForKind(kind, {
+      locked,
+      tex: kind === 'file' && path.toLowerCase().endsWith('.tex'),
+      isMain: path === doc.mainFile
+    }).map((e): ContextMenuEntry =>
       'sep' in e
         ? e
         : {

@@ -91,6 +91,11 @@ export const api = {
    *  the bytes — nothing ships over IPC. Cancel → no-op (current listing). */
   documentUpload: (req: { dir: string }) =>
     invoke<FileMutationResult>(IpcChannels.documentUpload, req),
+  /** Import OS-dropped files (absolute paths from webUtils.getPathForFile) into
+   *  `dir` ('' = root) — the drag-drop sibling of documentUpload; main copies
+   *  the bytes, so only paths cross IPC. */
+  documentImportPaths: (req: { dir: string; paths: string[] }) =>
+    invoke<FileMutationResult>(IpcChannels.documentImportPaths, req),
   /** Every project file's blocks merged into one tree (multi-file overlays).
    *  Each span carries its own file. Contract addition, flagged at gate. */
   documentProjectBlocks: () => invoke<BlockNode[]>(IpcChannels.documentProjectBlocks),
@@ -174,6 +179,12 @@ export const api = {
   onMenuOpenRecent: on<string>(IpcChannels.menuOpenRecent),
   /** File ▸ Settings (⌘,) — App opens the Settings panel. */
   onMenuOpenSettings: on<void>(IpcChannels.menuOpenSettings)
+}
+
+/** Absolute fs paths of OS-dropped Files, via the preload's webUtils bridge
+ *  (File.path is gone from Electron). Non-fs entries resolve to '' — dropped. */
+export function droppedFilePaths(files: File[]): string[] {
+  return files.map((f) => window.stanza.pathForFile(f)).filter((p) => p.length > 0)
 }
 
 export type StanzaClient = typeof api

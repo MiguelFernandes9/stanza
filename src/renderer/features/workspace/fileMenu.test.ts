@@ -63,6 +63,28 @@ describe('menuItemsForKind', () => {
     const items = menuItemsForKind('dir').filter((e) => !('sep' in e))
     expect(items.some((i) => 'disabled' in i && i.disabled)).toBe(false)
   })
+
+  it('offers Set as compile target only for .tex files, right after Open', () => {
+    expect(tokens(menuItemsForKind('file', { tex: true }))).toEqual([
+      'open',
+      'setMain',
+      '—',
+      'rename',
+      'duplicate',
+      'copyPath',
+      '—',
+      'delete'
+    ])
+    expect(tokens(menuItemsForKind('file'))).not.toContain('setMain')
+    expect(tokens(menuItemsForKind('dir', { tex: true }))).not.toContain('setMain')
+  })
+
+  it('disables Set as compile target when the file already is the target', () => {
+    const item = menuItemsForKind('file', { tex: true, isMain: true }).find(
+      (e) => 'id' in e && e.id === 'setMain'
+    )
+    expect(item && 'disabled' in item && item.disabled).toBe(true)
+  })
 })
 
 describe('uniqueName', () => {

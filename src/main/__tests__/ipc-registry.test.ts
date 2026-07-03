@@ -604,6 +604,41 @@ describe('document:upload (v0.4)', () => {
   })
 })
 
+describe('document:importPaths (OS drag-drop into the sidebar)', () => {
+  const openProject = async (): Promise<string> => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', makeClaudeStub(`echo '{"result":"primed"}'`))
+    const root = makeProject()
+    await invoke('document:open', root)
+    return root
+  }
+
+  test('imports dropped absolute paths like an upload and returns newRelPath', async () => {
+    const root = await openProject()
+    const srcDir = makeDir('stanza-drop-src-')
+    const fig = join(srcDir, 'fig.png')
+    writeFileSync(fig, 'PNG')
+
+    const res = (await invoke('document:importPaths', { dir: '', paths: [fig] })) as FileMutationResult
+
+    expect(res.newRelPath).toBe('fig.png')
+    expect(res.files.map((f) => f.relPath)).toContain('fig.png')
+    expect(existsSync(join(root, 'fig.png'))).toBe(true)
+  })
+
+  test('skips directories and missing paths; an empty import returns the plain listing', async () => {
+    await openProject()
+    const droppedDir = makeDir('stanza-drop-dir-')
+
+    const res = (await invoke('document:importPaths', {
+      dir: '',
+      paths: [droppedDir, '/definitely/missing.png'],
+    })) as FileMutationResult
+
+    expect(res.newRelPath).toBeUndefined()
+    expect(Array.isArray(res.files)).toBe(true)
+  })
+})
+
 describe('document:diffAt (history diff viewer)', () => {
   const openProject = async (): Promise<string> => {
     vi.stubEnv('STANZA_CLAUDE_BIN', makeClaudeStub(`echo '{"result":"primed"}'`))

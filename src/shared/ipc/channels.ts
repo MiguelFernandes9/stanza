@@ -40,6 +40,7 @@ export const IpcChannels = {
   documentCreateFile: 'document:createFile',     // invoke {dir: string; name: string} → FileMutationResult
   documentCreateFolder: 'document:createFolder', // invoke {dir: string; name: string} → FileMutationResult
   documentUpload: 'document:upload',             // invoke {dir: string} → FileMutationResult (main shows OS picker)
+  documentImportPaths: 'document:importPaths',   // invoke {dir: string; paths: string[]} → FileMutationResult (OS drag-drop into the sidebar)
   editorCloseActiveTab: 'editor:closeActiveTab', // main→renderer event: ⌘W from the menu (renderer closes the active tab)
   windowClose: 'window:close',                   // invoke → void — close the focused window (⌘W with no tabs open)
   menuNewDocument: 'menu:newDocument',   // main→renderer event: File ▸ New document (⌘N)

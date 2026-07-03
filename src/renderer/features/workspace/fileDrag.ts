@@ -34,6 +34,13 @@ export function isValidDropTarget(
   return dragging !== null && overDir === dir && planMove(dragging, dir).ok
 }
 
+/** An OS-level file drag (Finder, another app) — the dataTransfer carries the
+ *  'Files' type and no internal row is dragging. Any dir is a valid target
+ *  (imports copy, so no noop/descendant rules apply). JSX-free for unit tests. */
+export function isExternalFileDrag(dragging: string | null, types: readonly string[]): boolean {
+  return dragging === null && types.includes('Files')
+}
+
 export interface FileDrag {
   dragging: string | null
   overDir: string | null
@@ -54,17 +61,23 @@ export interface FileDrag {
   }
 }
 
-/** Drag state + DOM wiring for tree file-moves. The rules live in planMove;
- *  this hook tracks which row is dragging / hovered and hands (from, dir) to
- *  onMove on drop (Workspace applies planMove + documentRename). Interaction
- *  is the live gate. */
-export function useFileDrag(onMove: (from: string, toDir: string) => void): FileDrag {
+/** Drag state + DOM wiring for tree file-moves AND external OS-file drops. The
+ *  move rules live in planMove; this hook tracks which row is dragging / hovered
+ *  and hands (from, dir) to onMove on drop (Workspace applies planMove +
+ *  documentRename). An OS drag (no internal row dragging, dataTransfer carries
+ *  Files) reuses the same targets: highlight via the same canDrop, and the drop
+ *  hands the dropped Files to onDropFiles (Workspace imports them). */
+export function useFileDrag(
+  onMove: (from: string, toDir: string) => void,
+  onDropFiles?: (dir: string, files: File[]) => void,
+): FileDrag {
   const [dragging, setDragging] = useState<string | null>(null)
   const [overDir, setOverDir] = useState<string | null>(null)
   return {
     dragging,
     overDir,
-    canDrop: (dir) => isValidDropTarget(dragging, overDir, dir),
+    canDrop: (dir) =>
+      isValidDropTarget(dragging, overDir, dir) || (dragging === null && overDir === dir),
     sourceProps: (path) => ({
       draggable: true,
       onDragStart: (e) => {
@@ -79,7 +92,8 @@ export function useFileDrag(onMove: (from: string, toDir: string) => void): File
     }),
     targetProps: (dir) => ({
       onDragOver: (e) => {
-        if (dragging === null) return
+        if (dragging === null && !isExternalFileDrag(dragging, e.dataTransfer.types)) return
+        // preventDefault is what makes the element a drop target for the OS too.
         e.preventDefault()
         // The innermost target wins: without this, a dragOver on a folder row
         // bubbles to the enclosing root drop zone, whose handler runs last and
@@ -92,13 +106,19 @@ export function useFileDrag(onMove: (from: string, toDir: string) => void): File
         setOverDir((d) => (d === dir ? null : d))
       },
       onDrop: (e) => {
-        if (dragging === null) return
+        const external = isExternalFileDrag(dragging, e.dataTransfer.types)
+        if (dragging === null && !external) return
         e.preventDefault()
         e.stopPropagation()
         const from = dragging
         setDragging(null)
         setOverDir(null)
-        onMove(from, dir)
+        if (external) {
+          const files = [...e.dataTransfer.files]
+          if (files.length > 0) onDropFiles?.(dir, files)
+          return
+        }
+        if (from !== null) onMove(from, dir)
       }
     })
   }

@@ -6,6 +6,7 @@ export type FileMenuKind = 'file' | 'dir'
 
 export type FileMenuId =
   | 'open'
+  | 'setMain'
   | 'rename'
   | 'duplicate'
   | 'copyPath'
@@ -34,8 +35,13 @@ export function composeSiblingPath(currentPath: string, newName: string): string
 
 /** The context-menu entries for a file or folder row (design v0.2). When the
  *  row is locked (a busy/review task owns one of its blocks) Rename and Delete
- *  are disabled — the structural op would strand an in-flight edit. */
-export function menuItemsForKind(kind: FileMenuKind, opts: { locked?: boolean } = {}): MenuEntry[] {
+ *  are disabled — the structural op would strand an in-flight edit. A .tex file
+ *  (`tex`) offers "Set as compile target" — the right-click route to the
+ *  Settings main-file switch — disabled when it already IS the target. */
+export function menuItemsForKind(
+  kind: FileMenuKind,
+  opts: { locked?: boolean; tex?: boolean; isMain?: boolean } = {},
+): MenuEntry[] {
   const locked = opts.locked ?? false
   const rename: MenuItemSpec = { id: 'rename', label: 'Rename', kbd: '⏎', disabled: locked }
   const del: MenuItemSpec = { id: 'delete', label: 'Delete', danger: true, disabled: locked }
@@ -44,6 +50,9 @@ export function menuItemsForKind(kind: FileMenuKind, opts: { locked?: boolean } 
   if (kind === 'file') {
     return [
       { id: 'open', label: 'Open' },
+      ...(opts.tex
+        ? [{ id: 'setMain', label: 'Set as compile target', disabled: opts.isMain ?? false } satisfies MenuItemSpec]
+        : []),
       { sep: true },
       rename,
       { id: 'duplicate', label: 'Duplicate' },

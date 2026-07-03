@@ -46,6 +46,8 @@ const baseProps = {
   onCreateFolder: noop,
   onUpload: noop,
   onMove: noop,
+  onImportFiles: noop,
+  onSetMainFile: noop,
   onPickHistory: noop,
   lockedFiles: new Set<string>()
 }
