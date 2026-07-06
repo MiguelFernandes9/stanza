@@ -35,11 +35,13 @@ export interface GlobalSettings {
   /** Active editor spellcheck language code (see shared/spell/languages). Default
    *  'en' (American). The dictionary is downloaded on demand, never bundled. */
   spellLanguage?: string
-  /** Model the Claude bridge runs ops with (`claude --model`). A region-safe CLI
-   *  alias — each resolves to the latest model available to the account/region, so
-   *  it auto-tracks versions and never pins an unavailable id (e.g. fable, which is
-   *  unavailable in Europe, is deliberately not offered). Unset → omit → CLI default. */
-  claudeModel?: 'opus' | 'sonnet' | 'haiku'
+  /** Model the Claude bridge runs ops with (`claude --model`). Either a CLI ALIAS
+   *  (fable / opus / sonnet / haiku) — each resolves to the newest model the
+   *  account/region offers, so versions auto-track with no app update — or any
+   *  full model id entered as a custom value. Kept an open string because the CLI
+   *  has no list-models command: new families stay usable day-0 via the custom
+   *  field instead of waiting for a hardcoded union. Unset → omit → CLI default. */
+  claudeModel?: string
   /** Reasoning effort for ops (`claude --effort`). Lower = faster/cheaper. Unset
    *  → omit → CLI default. (Fast mode isn't headless-controllable; effort is the
    *  speed lever instead.) */

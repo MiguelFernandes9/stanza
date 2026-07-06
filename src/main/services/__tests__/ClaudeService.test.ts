@@ -202,6 +202,16 @@ describe('ClaudeService.runForkTurn', () => {
     expect(runner.calls[0]!.args.slice(0, 2)).toEqual(['--model', 'haiku'])
   })
 
+  test('passes a custom full model id through unchanged (no hardcoded union)', async () => {
+    globalSettings.set({ claudeModel: 'claude-fable-5' })
+    const runner = new MockRunner(() => claudeJson('done'))
+    const service = new ClaudeService(runner, globalSettings, doc)
+
+    await service.runForkTurn(WD, 'fork-1', null, { instruction: 'x', spans: [] }, () => {})
+
+    expect(runner.calls[0]!.args.slice(0, 2)).toEqual(['--model', 'claude-fable-5'])
+  })
+
   test('injects no model/effort flags when unset (the CLI default)', async () => {
     const runner = new MockRunner(() => claudeJson('done'))
     const service = new ClaudeService(runner, globalSettings, doc)
