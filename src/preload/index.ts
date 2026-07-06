@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { IpcChannels } from '@shared/ipc'
 
 const channels = new Set<string>(Object.values(IpcChannels))
@@ -20,6 +20,11 @@ const bridge = {
     const listener = (_event: Electron.IpcRendererEvent, payload: unknown): void => cb(payload)
     ipcRenderer.on(channel, listener)
     return () => ipcRenderer.removeListener(channel, listener)
+  },
+  // Absolute path of a dropped File — File.path is gone from Electron; only the
+  // preload can ask webUtils. The renderer sends the path over document:importPaths.
+  pathForFile(file: File): string {
+    return webUtils.getPathForFile(file)
   }
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isValidDropTarget, planMove } from './fileDrag'
+import { isExternalFileDrag, isValidDropTarget, planMove } from './fileDrag'
 
 describe('planMove — drag-drop move target + guards', () => {
   it('composes the dest path under the target dir', () => {
@@ -44,5 +44,19 @@ describe('isValidDropTarget — truthful drop-highlight gate', () => {
 
   it('is false for a descendant target (folder into itself/below)', () => {
     expect(isValidDropTarget('chapters', 'chapters/sub', 'chapters/sub')).toBe(false)
+  })
+})
+
+describe('isExternalFileDrag', () => {
+  it('is true when no row drags and the dataTransfer carries Files (Finder drop)', () => {
+    expect(isExternalFileDrag(null, ['Files'])).toBe(true)
+  })
+
+  it('is false during an internal row drag, even with Files present', () => {
+    expect(isExternalFileDrag('intro.tex', ['text/plain', 'Files'])).toBe(false)
+  })
+
+  it('is false for a non-file drag (e.g. dragged text)', () => {
+    expect(isExternalFileDrag(null, ['text/plain'])).toBe(false)
   })
 })

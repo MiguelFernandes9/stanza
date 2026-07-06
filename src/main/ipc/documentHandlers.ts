@@ -1,5 +1,5 @@
 import { dialog, ipcMain } from 'electron'
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { IpcChannels } from '@shared/ipc'
 import type { DocumentInfo, FileEntry, FileMutationResult, RecentProject } from '@shared/ipc'
@@ -149,6 +149,26 @@ export function registerDocumentHandlers(): void {
       return { files: listFiles(doc.info.root, outputPdfRel(doc.info)) } satisfies FileMutationResult
     }
     const rels = await doc.files.importFiles(a.dir, result.filePaths)
+    return fileMutationResult(doc, rels[0])
+  })
+
+  // OS drag-drop import: same copy-bytes pipeline as documentUpload, but the
+  // paths come from the renderer's drop event (webUtils.getPathForFile) instead
+  // of a picker. Plain files only — a dropped folder is skipped, not recursed
+  // (matching what the upload picker can return).
+  ipcMain.handle(IpcChannels.documentImportPaths, async (event, a: { dir: string; paths: string[] }) => {
+    const doc = sessionFor(event)
+    const filePaths = a.paths.filter((p) => {
+      try {
+        return statSync(p).isFile()
+      } catch {
+        return false
+      }
+    })
+    if (filePaths.length === 0) {
+      return { files: listFiles(doc.info.root, outputPdfRel(doc.info)) } satisfies FileMutationResult
+    }
+    const rels = await doc.files.importFiles(a.dir, filePaths)
     return fileMutationResult(doc, rels[0])
   })
 }

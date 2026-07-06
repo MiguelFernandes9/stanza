@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import type { JSX } from 'react'
 import { ConfirmDialog, Toast } from '@renderer/components'
 import { client } from '@renderer/lib/client'
+import { droppedFilePaths } from '@renderer/lib/ipc'
 import type { BlockNode } from '@shared/blocks/types'
 import type {
   Attachment,
@@ -682,6 +683,24 @@ export function Workspace({ doc, onDocChanged, onOpenSettings, aiEnabled = true,
   // applyMutation like any other file op.
   const onUploadFiles = (dir: string): void => runFileOp(() => client.documentUpload({ dir }))
 
+  // OS drag-drop import (Finder → sidebar): resolve the dropped Files to absolute
+  // paths in the preload (File.path is gone from Electron), then copy-import the
+  // same way Upload does.
+  const onImportFiles = (dir: string, dropped: File[]): void => {
+    const paths = droppedFilePaths(dropped)
+    if (paths.length > 0) runFileOp(() => client.documentImportPaths({ dir, paths }))
+  }
+
+  // Right-click "Set as compile target" on a .tex: persist the main-file switch
+  // (main rebuilds this window's session/compiler), propagate the fresh
+  // DocumentInfo, then compile the new target so the PDF follows immediately.
+  const onSetMainFile = (relPath: string): void => {
+    void client.settingsSetDocument({ mainFile: relPath }).then((res) => {
+      if (res.doc) onDocChanged?.(res.doc)
+      runCompile()
+    }, showErrToast)
+  }
+
   // Drag-drop move = a cross-dir rename (git mv). planMove guards no-op /
   // folder-into-descendant; onRenameFile carries the tab remap + NAME_EXISTS
   // toast for collisions.
@@ -968,6 +987,8 @@ export function Workspace({ doc, onDocChanged, onOpenSettings, aiEnabled = true,
           onCreateFolder={onCreateFolder}
           onUpload={onUploadFiles}
           onMove={onMoveFile}
+          onImportFiles={onImportFiles}
+          onSetMainFile={onSetMainFile}
           lockedFiles={lockedFiles}
           renameOnAppear={renameOnAppear}
           onRenameHandled={clearRenameOnAppear}
