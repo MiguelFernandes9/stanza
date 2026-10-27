@@ -7,7 +7,7 @@ import type { Attachment, StagedAttachment } from '../../shared/ipc/attachments'
 import type { CommitInfo, DocumentInfo } from '../../shared/ipc/document'
 import type { ProcessRunner, ProcResult } from '../infra/ProcessRunner'
 import type { GlobalSettingsStore } from '../infra/Store'
-import { claudeBin, claudeEnv } from './claudeCli'
+import { CLAUDE_ISOLATION_FLAGS, claudeBin, claudeEnv } from './claudeCli'
 import { extractStreamNote, interpretStreamLine } from './claudeStream'
 import type { OutlineSection } from './paperOutline'
 import { opPrompt, primePrompt } from './prompts'
@@ -162,7 +162,7 @@ export class ClaudeService {
   ): Promise<ProcResult> {
     return this.runner.run({
       cmd: claudeBin(),
-      args: [...this.modelFlags(), ...this.webFlags(), ...args],
+      args: [...this.modelFlags(), ...this.webFlags(), ...CLAUDE_ISOLATION_FLAGS, ...args],
       cwd: workDir,
       timeoutMs: this.timeoutMs,
       env: claudeEnv(),

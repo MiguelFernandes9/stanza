@@ -4,6 +4,22 @@
 // — so a change here (or a drift in either) can never make the availability
 // flag disagree with what a real op would actually do.
 
+/** Flags every `claude` spawn carries so an UNTRUSTED project folder can't
+ *  reconfigure the CLI: only the user's own settings load (never a project's
+ *  `.claude/settings*.json`, whose hooks/permissions would run as the user), MCP
+ *  servers come only from an explicit `--mcp-config` (never a planted
+ *  `.mcp.json`), and the Bash tool is denied outright — Stanza's prompts only
+ *  read/edit files ("Never run git. Never compile."), so a shell is pure attack
+ *  surface for prompt injection in a hostile .tex. `--disallowedTools` is
+ *  variadic: callers must place these BEFORE the prompt (never last). */
+export const CLAUDE_ISOLATION_FLAGS: readonly string[] = [
+  '--setting-sources',
+  'user',
+  '--strict-mcp-config',
+  '--disallowedTools',
+  'Bash',
+]
+
 /** The claude binary: an env override for the test harness (T6), else `claude`
  *  on PATH. */
 export function claudeBin(): string {

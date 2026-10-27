@@ -423,6 +423,8 @@ esac`)
     })) as ClaudeTurnResult
 
     expect(readFileSync(argvLog, 'utf8')).toContain('--resume good-session-id') // resumed, no re-prime
+    // End-to-end through the IPC: the spawned CLI ignores project config + denies Bash.
+    expect(readFileSync(argvLog, 'utf8')).toContain('--setting-sources user --strict-mcp-config --disallowedTools Bash')
     expect(res.sessionId).toBe('good-session-id') // unchanged
   }, 20_000)
 
