@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
@@ -29,9 +29,14 @@ const read =
  *  test can assert WHICH sections were summarized. */
 class StubRunner implements ProcessRunner {
   prompts: string[] = []
+  specs: RunSpec[] = []
+  /** Whether the spawn's cwd existed WHILE the call ran (it's removed after). */
+  cwdExisted: boolean[] = []
   run(spec: RunSpec): Promise<ProcResult> {
     const prompt = spec.args.at(-1)!
     this.prompts.push(prompt)
+    this.specs.push(spec)
+    this.cwdExisted.push(existsSync(spec.cwd))
     const keys = [...prompt.matchAll(/\[([^\]]+)\]/g)].map((m) => m[1]!)
     const map = Object.fromEntries(keys.map((k) => [k, `gist of ${k}`]))
     return Promise.resolve({
@@ -53,6 +58,25 @@ beforeEach(() => {
   store = new Store(join(dir, 'projects.json'))
 })
 afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+describe('SummaryService summarizer spawn', () => {
+  test('ignores project config, denies Bash, and runs in a private temp cwd', async () => {
+    const runner = new StubRunner()
+    await new SummaryService(runner, store).refresh(root, ['main.tex'], read(TEX))
+
+    const spec = runner.specs[0]!
+    const flag = (f: string) => spec.args.indexOf(f)
+    expect(spec.args[flag('--setting-sources') + 1]).toBe('user')
+    expect(flag('--strict-mcp-config')).toBeGreaterThanOrEqual(0)
+    expect(spec.args[flag('--disallowedTools') + 1]).toBe('Bash')
+    expect(flag('--disallowedTools')).toBeLessThan(spec.args.length - 1) // prompt stays last
+    // Never the shared tmpdir() (any .claude/ or .mcp.json planted there would load).
+    expect(spec.cwd).not.toBe(tmpdir())
+    expect(spec.cwd.startsWith(join(tmpdir(), 'stanza-summary-cwd-'))).toBe(true)
+    expect(runner.cwdExisted[0]).toBe(true)
+    expect(existsSync(spec.cwd)).toBe(false) // cleaned up after the call
+  })
+})
 
 describe('SummaryService.refresh', () => {
   test('first refresh summarizes every section + subsection and persists gist+hash', async () => {

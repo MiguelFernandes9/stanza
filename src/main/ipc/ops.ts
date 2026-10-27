@@ -13,6 +13,7 @@ import type {
   ReviewProposal,
 } from '@shared/ipc'
 import { armSettleWatcher } from '../infra/FileWatcher'
+import { assertSha } from '../infra/gitSafety'
 import { buildOutline } from '../services/paperOutline'
 import { describeScope } from '../services/sessionBus'
 import type { Fork, ForkScope } from '../fork/Fork'
@@ -164,6 +165,7 @@ export async function runRestoreOp(
   wc: WebContents,
   sha: string,
 ): Promise<ReviewProposal | null> {
+  assertSha(sha) // renderer-supplied: validate before it reaches any git argv
   doc.review.assertSpansFree([]) // a restore owns the whole tree (interim guard)
   const fork = doc.forks.create({ kind: 'doc' }, 'ephemeral')
   doc.beginOp()

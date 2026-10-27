@@ -1,15 +1,18 @@
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { BrowserWindow } from 'electron'
 import { IpcChannels } from '../../shared/ipc'
@@ -38,6 +41,9 @@ const h = vi.hoisted(() => ({
   nextId: 1,
   userData: '',
   openDialog: { canceled: true, filePaths: [] as string[] },
+  /** The button index showMessageBox answers with (the repo-trust warning). */
+  messageBoxResponse: 0,
+  messageBoxes: [] as { message?: string; detail?: string; buttons?: string[] }[],
   closed: false,
   makeWindow(): FakeWindow {
     const id = h.nextId++
@@ -69,10 +75,23 @@ vi.mock('electron', () => ({
     getAllWindows: () => h.windows,
     getFocusedWindow: () => h.windows[h.windows.length - 1] ?? null,
   },
-  dialog: { showOpenDialog: async () => h.openDialog },
+  dialog: {
+    showOpenDialog: async () => h.openDialog,
+    // (options) or (parentWindow, options) — record the options either way.
+    showMessageBox: async (a: unknown, b?: unknown) => {
+      h.messageBoxes.push((b ?? a) as { message?: string; detail?: string; buttons?: string[] })
+      return { response: h.messageBoxResponse, checkboxChecked: false }
+    },
+  },
 }))
 
 import { dropSession, registerIpcHandlers, setWindowSpawner } from '../ipc-registry'
+import { configureRendererOrigin } from '../rendererOrigin'
+
+// Every invoke is sender-checked (ipc/trustedIpc): calls come from this frame
+// URL, the app's own renderer, unless a test overrides it.
+const RENDERER_INDEX = '/stanza-test/out/renderer/index.html'
+const RENDERER_URL = pathToFileURL(RENDERER_INDEX).href
 
 const runner = new DefaultProcessRunner()
 const ARTICLE = '\\documentclass{article}\n\\begin{document}\nhi\n\\end{document}\n'
@@ -106,7 +125,7 @@ let launcher: FakeWindow
 const invokeFrom = (win: FakeWindow, channel: string, ...args: unknown[]) => {
   const handler = h.handlers.get(channel)
   if (!handler) throw new Error(`no handler for ${channel}`)
-  return handler({ sender: win.webContents }, ...args)
+  return handler({ sender: win.webContents, senderFrame: { url: RENDERER_URL } }, ...args)
 }
 const invoke = (channel: string, ...args: unknown[]) => invokeFrom(launcher, channel, ...args)
 
@@ -119,7 +138,10 @@ beforeEach(() => {
   h.sent = []
   h.windows = []
   h.openDialog = { canceled: true, filePaths: [] }
+  h.messageBoxResponse = 0
+  h.messageBoxes = []
   h.closed = false
+  configureRendererOrigin({ indexFile: RENDERER_INDEX })
   registerIpcHandlers()
   // The fake window stands in for a real BrowserWindow (only the bits the
   // registry touches: webContents.id/send, focus, on).
@@ -342,6 +364,99 @@ esac`),
   }, 20_000)
 })
 
+describe('IPC sender validation', () => {
+  test('every registered channel rejects a frame that is not the app renderer', async () => {
+    expect(h.handlers.size).toBeGreaterThan(40)
+    for (const [channel, handler] of h.handlers) {
+      const foreign = { sender: launcher.webContents, senderFrame: { url: 'file:///Users/me/Downloads/evil.html' } }
+      await expect(Promise.resolve().then(() => handler(foreign, {})), channel).rejects.toThrow('IPC_UNTRUSTED_SENDER')
+    }
+  })
+
+  test('a call with no sender frame (destroyed / navigated away) is rejected', async () => {
+    const handler = h.handlers.get('document:recents')!
+    await expect(handler({ sender: launcher.webContents, senderFrame: null })).rejects.toThrow('IPC_UNTRUSTED_SENDER')
+  })
+
+  test('the app renderer is served normally', async () => {
+    expect(Array.isArray(await invoke('document:recents'))).toBe(true)
+  })
+})
+
+describe('history channels validate renderer-supplied shas', () => {
+  test.each([['document:diffAt'], ['document:revertTo']])('%s rejects a non-sha', async (channel) => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', makeClaudeStub(`echo '{"result":"primed"}'`))
+    const root = makeProject()
+    await invoke('document:open', root)
+    const out = join(makeDir('stanza-reg-out-'), 'written')
+    await expect(invoke(channel, `--output=${out}`)).rejects.toThrow('INVALID_SHA')
+    await expect(invoke(channel, 'HEAD')).rejects.toThrow('INVALID_SHA')
+    expect(existsSync(out)).toBe(false)
+  })
+})
+
+describe('document:open on a repo with a hostile .git/config', () => {
+  // A pre-existing repo whose local config makes git run a planted program.
+  const makeHostileRepo = async (): Promise<{ root: string; marker: string }> => {
+    const root = makeProject()
+    const marker = join(makeDir('stanza-reg-evil-'), 'pwned')
+    const evil = makeClaudeStub(`touch '${marker}'; cat`)
+    const g = (...args: string[]) => runner.run({ cmd: 'git', args, cwd: root })
+    await g('init', '-q')
+    writeFileSync(join(root, '.gitattributes'), '*.tex filter=evil\n')
+    await g('config', 'filter.evil.clean', evil)
+    await g('config', 'filter.evil.smudge', evil)
+    return { root, marker }
+  }
+
+  test('warns before any git op; Cancel opens nothing and runs nothing', async () => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', makeClaudeStub(`echo '{"result":"primed"}'`))
+    const { root, marker } = await makeHostileRepo()
+    h.messageBoxResponse = 0 // Cancel
+
+    expect(await invoke('document:open', root)).toBeNull()
+
+    expect(h.messageBoxes).toHaveLength(1)
+    expect(h.messageBoxes[0]!.buttons).toEqual(['Cancel', 'Open anyway'])
+    expect(h.messageBoxes[0]!.detail).toContain('filter.evil.clean')
+    expect(h.messageBoxes[0]!.detail).toContain('filter.evil.smudge')
+    expect(await invoke('document:current')).toBeNull() // no session bound
+    expect(existsSync(marker)).toBe(false) // the filter never ran
+  })
+
+  test('a .git with no HEAD (not "a repo" to rev-parse) still warns; Cancel runs nothing', async () => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', makeClaudeStub(`echo '{"result":"primed"}'`))
+    const { root, marker } = await makeHostileRepo()
+    writeFileSync(join(root, '.gitattributes'), '* filter=evil\n')
+    rmSync(join(root, '.git/HEAD')) // rev-parse fails → the old isRepo() gate skipped the check
+    h.messageBoxResponse = 0 // Cancel
+
+    expect(await invoke('document:open', root)).toBeNull()
+    expect(h.messageBoxes).toHaveLength(1)
+    expect(h.messageBoxes[0]!.detail).toContain('filter.evil.clean')
+    expect(existsSync(marker)).toBe(false) // prime's git init + add -A never ran
+  })
+
+  test('"Open anyway" proceeds with the open', async () => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', makeClaudeStub(`echo '{"result":"primed"}'`))
+    const { root } = await makeHostileRepo()
+    h.messageBoxResponse = 1 // Open anyway
+
+    const info = (await invoke('document:open', root)) as { root: string } | null
+    expect(info?.root).toBe(root)
+    expect(h.messageBoxes).toHaveLength(1)
+  }, 20_000)
+
+  test('a clean pre-existing repo opens with no warning', async () => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', makeClaudeStub(`echo '{"result":"primed"}'`))
+    const root = makeProject()
+    await runner.run({ cmd: 'git', args: ['init', '-q'], cwd: root })
+
+    expect(((await invoke('document:open', root)) as { root: string }).root).toBe(root)
+    expect(h.messageBoxes).toHaveLength(0)
+  }, 20_000)
+})
+
 describe('claude:runTurn persistent thread (worktree self-heal)', () => {
   // Logs every claude argv so a test can assert which session id (if any) was
   // resumed. On --resume it edits main.tex so the turn yields a proposal.
@@ -375,7 +490,7 @@ esac`)
     // Pre-fix / relocated thread: its session was primed at the user checkout,
     // which the op worktree doesn't grant — resuming it fails "Permission denied".
     seedThread(root, {
-      threadId: 'T1',
+      threadId: '11111111-1111-4111-8111-111111111111',
       sessionId: 'poison-session-id',
       primedWorkdir: root, // ≠ the op worktree
       blockIds: ['main.tex#h'],
@@ -385,7 +500,7 @@ esac`)
     await invoke('document:open', root)
 
     const res = (await invoke('claude:runTurn', {
-      threadId: 'T1',
+      threadId: '11111111-1111-4111-8111-111111111111',
       sessionId: 'poison-session-id', // renderer's stale hint — must be ignored
       instruction: 'elaborate more',
       spans: [{ file: 'main.tex', startLine: 3, endLine: 3 }],
@@ -395,8 +510,8 @@ esac`)
     expect(readFileSync(argvLog, 'utf8')).not.toContain('poison-session-id') // never resumed
     expect(res.proposal).not.toBeNull() // the fresh session did the edit
     expect(res.sessionId).not.toBe('poison-session-id') // a new id took over
-    const rec = readThread(root, 'T1')
-    expect(rec.primedWorkdir).toBe(worktreeFor(root, 'T1')) // re-primed in the fork worktree
+    const rec = readThread(root, '11111111-1111-4111-8111-111111111111')
+    expect(rec.primedWorkdir).toBe(worktreeFor(root, '11111111-1111-4111-8111-111111111111')) // re-primed in the fork worktree
     expect(rec.sessionId).toBe(res.sessionId)
   }, 20_000)
 
@@ -405,9 +520,9 @@ esac`)
     const argvLog = join(makeDir('stanza-thread-argv-'), 'argv.log')
     vi.stubEnv('STANZA_CLAUDE_BIN', threadStub(argvLog))
     seedThread(root, {
-      threadId: 'T2',
+      threadId: '22222222-2222-4222-8222-222222222222',
       sessionId: 'good-session-id',
-      primedWorkdir: worktreeFor(root, 'T2'), // already primed in THIS fork worktree
+      primedWorkdir: worktreeFor(root, '22222222-2222-4222-8222-222222222222'), // already primed in THIS fork worktree
       blockIds: ['main.tex#h'],
       turns: [],
       ts: '2026-01-01',
@@ -415,7 +530,7 @@ esac`)
     await invoke('document:open', root)
 
     const res = (await invoke('claude:runTurn', {
-      threadId: 'T2',
+      threadId: '22222222-2222-4222-8222-222222222222',
       sessionId: 'good-session-id',
       instruction: 'continue',
       spans: [{ file: 'main.tex', startLine: 3, endLine: 3 }],
@@ -423,6 +538,8 @@ esac`)
     })) as ClaudeTurnResult
 
     expect(readFileSync(argvLog, 'utf8')).toContain('--resume good-session-id') // resumed, no re-prime
+    // End-to-end through the IPC: the spawned CLI ignores project config + denies Bash.
+    expect(readFileSync(argvLog, 'utf8')).toContain('--setting-sources user --strict-mcp-config --disallowedTools Bash')
     expect(res.sessionId).toBe('good-session-id') // unchanged
   }, 20_000)
 
@@ -431,9 +548,9 @@ esac`)
     const argvLog = join(makeDir('stanza-thread-argv-'), 'argv.log')
     vi.stubEnv('STANZA_CLAUDE_BIN', threadStub(argvLog))
     seedThread(root, {
-      threadId: 'T3',
+      threadId: '33333333-3333-4333-8333-333333333333',
       sessionId: 'shot-session-id',
-      primedWorkdir: worktreeFor(root, 'T3'),
+      primedWorkdir: worktreeFor(root, '33333333-3333-4333-8333-333333333333'),
       blockIds: ['main.tex#h'],
       turns: [],
       ts: '2026-01-01',
@@ -441,7 +558,7 @@ esac`)
     await invoke('document:open', root)
 
     await invoke('claude:runTurn', {
-      threadId: 'T3',
+      threadId: '33333333-3333-4333-8333-333333333333',
       sessionId: 'shot-session-id',
       instruction: 'explain this rendering',
       spans: [{ file: 'main.tex', startLine: 3, endLine: 3 }],
@@ -452,6 +569,61 @@ esac`)
     // The PNG was written + granted as a second --add-dir, end-to-end via the IPC.
     expect(readFileSync(argvLog, 'utf8')).toContain('stanza-shots')
   }, 20_000)
+})
+
+describe('document:save / document:read stay inside the project root', () => {
+  const openProject = async (): Promise<string> => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', makeClaudeStub(`echo '{"result":"primed"}'`))
+    const root = makeProject()
+    await invoke('document:open', root)
+    return root
+  }
+  // ipcMain.handle turns a synchronous throw into a rejection — mirror that.
+  const call = (channel: string, ...args: unknown[]) => Promise.resolve().then(() => invoke(channel, ...args))
+
+  test.each(['../NAME', 'chapters/../../NAME'])('save rejects traversal %s', async (pattern) => {
+    const root = await openProject()
+    const name = `escape-${randomUUID()}.tex` // unique: the target sits in the shared tmpdir
+    await expect(call('document:save', pattern.replace('NAME', name), 'pwn')).rejects.toThrow('PATH_ESCAPE')
+    expect(existsSync(join(root, '..', name))).toBe(false)
+  })
+
+  test('save rejects an absolute path', async () => {
+    await openProject()
+    const target = join(makeDir('stanza-reg-outside-'), 'abs.tex')
+    await expect(call('document:save', target, 'pwn')).rejects.toThrow('PATH_ESCAPE')
+    expect(existsSync(target)).toBe(false)
+  })
+
+  test('read rejects traversal and absolute paths', async () => {
+    const root = await openProject()
+    const outside = makeDir('stanza-reg-outside-')
+    writeFileSync(join(outside, 'secret.txt'), 'secret')
+    const rel = join('..', outside.slice(outside.lastIndexOf('/') + 1), 'secret.txt')
+    expect(existsSync(join(root, rel))).toBe(true) // the traversal would resolve
+    await expect(call('document:read', rel)).rejects.toThrow('PATH_ESCAPE')
+    await expect(call('document:read', join(outside, 'secret.txt'))).rejects.toThrow('PATH_ESCAPE')
+  })
+
+  test('in-root save + read still work, including subdirectories', async () => {
+    const root = await openProject()
+    await invoke('document:save', 'chapters/one.tex', 'one\n')
+    expect(readFileSync(join(root, 'chapters/one.tex'), 'utf8')).toBe('one\n')
+    expect(await invoke('document:read', 'chapters/one.tex')).toBe('one\n')
+  })
+
+  test('a planted symlink at the temp-file path is never written through', async () => {
+    const root = await openProject()
+    const victim = join(makeDir('stanza-reg-victim-'), 'victim.txt')
+    writeFileSync(victim, 'original')
+    symlinkSync(victim, join(root, 'main.tex.stanza-tmp'))
+
+    await invoke('document:save', 'main.tex', 'saved\n')
+
+    expect(readFileSync(victim, 'utf8')).toBe('original') // the link target is untouched
+    expect(lstatSync(join(root, 'main.tex')).isSymbolicLink()).toBe(false)
+    expect(readFileSync(join(root, 'main.tex'), 'utf8')).toBe('saved\n')
+  })
 })
 
 describe('file management channels (v0.2)', () => {
@@ -670,7 +842,7 @@ describe('multi-window sessions', () => {
   test('sessionFor resolves by the calling window; a window with no session is NO_DOCUMENT', async () => {
     primedStub()
     // The launcher has no session until a document opens in it.
-    expect(() => invoke('document:files')).toThrow('NO_DOCUMENT')
+    await expect(invoke('document:files')).rejects.toThrow('NO_DOCUMENT') // handlers reject, like Electron's
     const root = makeProject()
     const info = await invoke('document:open', root) // launcher reuse → DocumentInfo
     expect(info).toMatchObject({ root, mainFile: 'main.tex' })
@@ -719,7 +891,7 @@ describe('multi-window sessions', () => {
     expect(rels((await invoke('document:files')) as FileEntry[]).length).toBeGreaterThan(0)
 
     dropSession(launcher.webContents.id) // simulate win.on('closed')
-    expect(() => invoke('document:files')).toThrow('NO_DOCUMENT')
+    await expect(invoke('document:files')).rejects.toThrow('NO_DOCUMENT') // handlers reject, like Electron's
   })
 
   test('a per-document event targets only its window; settings:changed broadcasts to all', async () => {

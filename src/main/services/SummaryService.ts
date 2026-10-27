@@ -1,8 +1,10 @@
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { ProcessRunner } from '../infra/ProcessRunner'
 import type { Store } from '../infra/Store'
 import { extractNote } from './ClaudeService'
-import { claudeBin, claudeEnv } from './claudeCli'
+import { CLAUDE_ISOLATION_FLAGS, claudeBin, claudeEnv } from './claudeCli'
 import { buildOutline, type OutlineSection } from './paperOutline'
 
 type Read = (relPath: string) => string | null
@@ -131,15 +133,26 @@ async function summarize(
   runner: ProcessRunner,
   sections: OutlineSection[],
 ): Promise<Record<string, string>> {
-  const proc = await runner.run({
-    cmd: claudeBin(),
-    // Force the cheap model regardless of the user's op model; no --add-dir — the
-    // text is in the prompt, the summarizer edits nothing.
-    args: ['-p', '--model', 'haiku', '--output-format', 'json', summarizePrompt(sections)],
-    cwd: tmpdir(),
-    env: claudeEnv(),
-    timeoutMs: SUMMARIZE_TIMEOUT_MS,
-  })
+  // A private, empty cwd — never the shared tmpdir(), where anything another
+  // process planted (.claude/, .mcp.json, CLAUDE.md) would be picked up.
+  const cwd = mkdtempSync(join(tmpdir(), 'stanza-summary-cwd-'))
+  let proc
+  try {
+    proc = await runner.run({
+      cmd: claudeBin(),
+      // Force the cheap model regardless of the user's op model; no --add-dir — the
+      // text is in the prompt, the summarizer edits nothing.
+      args: [
+        ...CLAUDE_ISOLATION_FLAGS,
+        '-p', '--model', 'haiku', '--output-format', 'json', summarizePrompt(sections),
+      ],
+      cwd,
+      env: claudeEnv(),
+      timeoutMs: SUMMARIZE_TIMEOUT_MS,
+    })
+  } finally {
+    rmSync(cwd, { recursive: true, force: true })
+  }
   if (proc.code !== 0 || proc.timedOut || proc.truncated) return {}
   return parseGists(extractNote(proc.stdout))
 }

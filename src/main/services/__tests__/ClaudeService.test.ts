@@ -60,6 +60,45 @@ afterEach(() => {
  *  current settings inject (web access is on by default). */
 const coreArgs = (args: string[]): string[] => args.slice(args.indexOf('-p'))
 
+/** Assert `args` carries `flag` immediately followed by `value`. */
+const expectFlag = (args: string[], flag: string, value?: string): void => {
+  const i = args.indexOf(flag)
+  expect(i, `${flag} missing from ${JSON.stringify(args)}`).toBeGreaterThanOrEqual(0)
+  if (value !== undefined) expect(args[i + 1]).toBe(value)
+}
+
+describe('ClaudeService project-config isolation', () => {
+  test('every claude call ignores project/local settings + MCP and denies Bash', async () => {
+    const runner = new MockRunner(() => claudeJson('done'))
+    const service = new ClaudeService(runner, globalSettings, doc)
+
+    await service.runForkTurn(WD, 'fork-1', null, { instruction: 'x', spans: [] }, () => {})
+
+    expect(runner.calls).toHaveLength(2) // prime + resume
+    for (const call of runner.calls) {
+      // A hostile project's .claude/settings.json / .mcp.json must never load.
+      expectFlag(call.args, '--setting-sources', 'user')
+      expectFlag(call.args, '--strict-mcp-config')
+      expectFlag(call.args, '--disallowedTools', 'Bash')
+      // The variadic tool lists must never swallow the prompt (the last arg).
+      expect(call.args.indexOf('--disallowedTools')).toBeLessThan(call.args.indexOf('-p'))
+    }
+  })
+
+  test('the isolation flags hold with web access off and model flags on', async () => {
+    globalSettings.set({ allowWebAccess: false, claudeModel: 'sonnet' })
+    const runner = new MockRunner(() => claudeJson('done'))
+    const service = new ClaudeService(runner, globalSettings, doc)
+
+    await service.runForkTurn(WD, 'fork-1', 'sess', { instruction: 'x', spans: [] }, () => {})
+
+    const args = runner.calls[0]!.args
+    expectFlag(args, '--setting-sources', 'user')
+    expectFlag(args, '--strict-mcp-config')
+    expectFlag(args, '--disallowedTools', 'Bash')
+  })
+})
+
 describe('ClaudeService.runForkTurn', () => {
   test('primes a fresh session in the given workDir, resumes there, returns its id', async () => {
     const runner = new MockRunner(() => claudeJson('done'))

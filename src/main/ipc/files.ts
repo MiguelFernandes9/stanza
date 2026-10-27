@@ -1,5 +1,5 @@
 import { dialog } from 'electron'
-import { mkdirSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { DocumentInfo, FileEntry, FileMutationResult } from '@shared/ipc'
 import { isHiddenInSidebar } from '../../shared/files/artifacts'
@@ -96,10 +96,15 @@ export async function pickFolder(): Promise<string | null> {
   return result.canceled ? null : (result.filePaths[0] ?? null)
 }
 
-/** Write via temp file + rename so a crash never truncates the target. */
+/** Write via temp file + rename so a crash never truncates the target. The
+ *  temp file is created exclusively (`wx`, O_CREAT|O_EXCL) after clearing any
+ *  leftover: a hostile project could plant `<file>.stanza-tmp` as a symlink to
+ *  e.g. ~/.zshrc, and a plain write would follow it (then rename the link over
+ *  the target). rmSync removes the link itself, never its target. */
 export function atomicWrite(absPath: string, content: string): void {
   mkdirSync(dirname(absPath), { recursive: true })
   const tempPath = `${absPath}.stanza-tmp`
-  writeFileSync(tempPath, content)
+  rmSync(tempPath, { force: true })
+  writeFileSync(tempPath, content, { flag: 'wx' })
   renameSync(tempPath, absPath)
 }

@@ -1,6 +1,11 @@
 import { realpathSync } from 'node:fs'
 import type { CommitInfo } from '../../shared/ipc/document'
+import { assertSha, GIT_HARDENING_ARGS, IGNORE_SUBMODULES, NO_EXTERNAL_DIFF } from './gitSafety'
 import type { ProcessRunner, ProcResult } from './ProcessRunner'
+
+/** Marks the end of options before a ref operand, so a ref can never be parsed
+ *  as an option (`--output=…`) even if one slips past validation. */
+const EOO = '--end-of-options'
 
 /** Git's canonical empty tree — the diff base for a root commit (no parent). */
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
@@ -40,13 +45,13 @@ export class GitClient {
   }
 
   async isClean(): Promise<boolean> {
-    const res = await this.must(['status', '--porcelain', ...SCRATCH_EXCLUDE])
+    const res = await this.must(['status', '--porcelain', IGNORE_SUBMODULES, ...SCRATCH_EXCLUDE])
     return res.stdout.trim() === ''
   }
 
   /** Modified + staged + untracked, relative paths. */
   async changedFiles(): Promise<string[]> {
-    const res = await this.must(['status', '--porcelain', ...SCRATCH_EXCLUDE])
+    const res = await this.must(['status', '--porcelain', IGNORE_SUBMODULES, ...SCRATCH_EXCLUDE])
     return res.stdout
       .split('\n')
       .filter((line) => line.trim() !== '')
@@ -61,11 +66,11 @@ export class GitClient {
   async diff(): Promise<string> {
     const parts: string[] = []
     if (await this.hasHead()) {
-      parts.push((await this.must(['diff', 'HEAD'])).stdout)
+      parts.push((await this.must(['diff', ...NO_EXTERNAL_DIFF, IGNORE_SUBMODULES, 'HEAD'])).stdout)
     }
     for (const file of await this.untrackedFiles()) {
       // --no-index exits 1 when the files differ — that's the normal case
-      const res = await this.run(['diff', '--no-index', '--', '/dev/null', file])
+      const res = await this.run(['diff', ...NO_EXTERNAL_DIFF, '--no-index', '--', '/dev/null', file])
       parts.push(res.stdout)
     }
     return parts.join('')
@@ -90,7 +95,7 @@ export class GitClient {
 
   /** Move/rename a tracked path (file or directory) in tree + index. */
   async mv(from: string, to: string): Promise<void> {
-    await this.must(['mv', from, to])
+    await this.must(['mv', '--', from, to])
   }
 
   /** Remove a tracked path (recursive for directories) from tree + index. */
@@ -161,13 +166,13 @@ export class GitClient {
   /** Hard-reset this (worktree) tree to `ref` — syncs the op worktree to the
    *  doc's latest HEAD and discards any leftover edits before the next op. */
   async resetHard(ref: string): Promise<void> {
-    await this.must(['reset', '--hard', ref])
+    await this.must(['reset', '--hard', EOO, ref])
   }
 
   /** Detach this worktree at `ref`, discarding local changes — frees the op
    *  branch (so Accept can merge it) and readies the worktree for reuse. */
   async checkoutDetach(ref: string): Promise<void> {
-    await this.must(['checkout', '--force', '--detach', ref])
+    await this.must(['checkout', '--force', '--detach', EOO, ref])
   }
 
   /** Set this (worktree) tree + index to `sha`'s content WITHOUT moving HEAD —
@@ -176,15 +181,15 @@ export class GitClient {
    *  every change since `sha`, including files added after it (the Restore-to-
    *  this-version flow). */
   async readTreeReset(sha: string): Promise<void> {
-    await this.must(['read-tree', '-u', '--reset', sha])
+    await this.must(['read-tree', '-u', '--reset', EOO, assertSha(sha)])
   }
 
   /** Merge a proposal branch. On conflict: collect the conflicted
    *  files, abort the merge, leave the tree as it was. */
   async mergeNoFF(branch: string): Promise<{ ok: boolean; conflicts: string[] }> {
-    const res = await this.run(['merge', '--no-ff', '--no-edit', branch])
+    const res = await this.run(['merge', '--no-ff', '--no-edit', EOO, branch])
     if (res.code === 0) return { ok: true, conflicts: [] }
-    const conflicts = (await this.must(['diff', '--name-only', '--diff-filter=U'])).stdout
+    const conflicts = (await this.must(['diff', IGNORE_SUBMODULES, '--name-only', '--diff-filter=U'])).stdout
       .split('\n')
       .filter((line) => line.trim() !== '')
     await this.run(['merge', '--abort'])
@@ -204,23 +209,23 @@ export class GitClient {
    *  internal HEAD check) so a caller can treat an already merged-and-deleted
    *  op branch as gone instead of crashing on a dead ref (BUG-18). */
   async branchExists(branch: string): Promise<boolean> {
-    return (await this.run(['rev-parse', '--verify', '--quiet', branch])).code === 0
+    return (await this.run(['rev-parse', '--verify', '--quiet', EOO, branch])).code === 0
   }
 
   /** Changes introduced by `to` since it diverged from `from`
    *  (three-dot: merge-base diff), so later commits on `from` don't
    *  pollute a proposal's diff. */
   async diffRange(from: string, to: string): Promise<string> {
-    return (await this.must(['diff', `${from}...${to}`])).stdout
+    return (await this.must(['diff', ...NO_EXTERNAL_DIFF, IGNORE_SUBMODULES, EOO, `${from}...${to}`])).stdout
   }
 
   async subject(ref: string): Promise<string> {
-    return (await this.must(['log', '-1', '--format=%s', ref])).stdout.trim()
+    return (await this.must(['log', '-1', '--format=%s', EOO, ref])).stdout.trim()
   }
 
   /** File content at a ref; empty string when the file is absent there. */
   async show(ref: string, file: string): Promise<string> {
-    const res = await this.run(['show', `${ref}:${file}`])
+    const res = await this.run(['show', ...NO_EXTERNAL_DIFF, EOO, `${ref}:${file}`])
     return res.code === 0 ? res.stdout : ''
   }
 
@@ -253,13 +258,14 @@ export class GitClient {
    *  against the empty tree (everything it added). For a merge commit `^` is
    *  the first parent, yielding the change the merge brought into mainline. */
   async diffAt(sha: string): Promise<string> {
-    const hasParent = (await this.run(['rev-parse', '--verify', '--quiet', `${sha}^`])).code === 0
+    assertSha(sha) // renderer-supplied (HISTORY row)
+    const hasParent = (await this.run(['rev-parse', '--verify', '--quiet', EOO, `${sha}^`])).code === 0
     const base = hasParent ? `${sha}^` : EMPTY_TREE
-    return (await this.must(['diff', base, sha])).stdout
+    return (await this.must(['diff', ...NO_EXTERNAL_DIFF, IGNORE_SUBMODULES, EOO, base, sha])).stdout
   }
 
   private async untrackedFiles(): Promise<string[]> {
-    const res = await this.must(['status', '--porcelain', ...SCRATCH_EXCLUDE])
+    const res = await this.must(['status', '--porcelain', IGNORE_SUBMODULES, ...SCRATCH_EXCLUDE])
     return res.stdout
       .split('\n')
       .filter((line) => line.startsWith('?? '))
@@ -270,8 +276,10 @@ export class GitClient {
     return (await this.run(['rev-parse', '--verify', '--quiet', 'HEAD'])).code === 0
   }
 
+  /** Every git call goes through here, hardened against a hostile repo: no
+   *  fsmonitor hook, no repo hooks (see GIT_HARDENING_ARGS). */
   private run(args: string[]): Promise<ProcResult> {
-    return this.runner.run({ cmd: 'git', args, cwd: this.cwd })
+    return this.runner.run({ cmd: 'git', args: [...GIT_HARDENING_ARGS, ...args], cwd: this.cwd })
   }
 
   private async must(args: string[]): Promise<ProcResult> {

@@ -42,6 +42,28 @@ describe('DocumentService.create', () => {
     expect(tex).toContain('\\section{Introduction}')
   })
 
+  test.each([
+    ['a parent traversal', '../escaped'],
+    ['a nested traversal', 'a/../../escaped'],
+    ['a path separator', 'sub/dir'],
+    ['a backslash separator', 'sub\\dir'],
+    ['dot-dot itself', '..'],
+    ['dot itself', '.'],
+    ['an absolute path', '/tmp/escaped'],
+    ['an empty name', ''],
+    ['a whitespace-only name', '   '],
+    ['a NUL byte', 'bad\0name'],
+  ])('rejects %s as the document name', async (_label, name) => {
+    await expect(service.create({ name, dir })).rejects.toThrow('INVALID_NAME')
+    expect(existsSync(join(dir, '..', 'escaped'))).toBe(false)
+    expect(existsSync(join(dir, 'sub'))).toBe(false)
+  })
+
+  test('a name with dots that is still a plain basename is fine', async () => {
+    const info = await service.create({ name: 'Paper v1.2..final', dir })
+    expect(info.root).toBe(join(dir, 'Paper v1.2..final'))
+  })
+
   test('rejects a non-absolute dir instead of creating in the app CWD', async () => {
     await expect(service.create({ name: 'Stray', dir: 'untitled-papers' })).rejects.toThrow(
       /absolute/,

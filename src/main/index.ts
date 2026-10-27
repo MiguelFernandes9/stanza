@@ -12,8 +12,10 @@ import {
 import { errorLog } from './infra/errorLog'
 import { applyUserPath } from './infra/resolveUserPath'
 import { buildAppMenu } from './menu'
+import { installNavigationGuards } from './navigationGuard'
 import { handleDocProtocol, registerDocScheme } from './protocol'
 import { quitDialogOptions, shouldPromptQuit } from './quitGuard'
+import { configureRendererOrigin } from './rendererOrigin'
 import { installSpellcheckMenu, setSpellcheckEnabled } from './spellcheck'
 
 // Reconstruct the user's real PATH before ANYTHING spawns a child. A packaged,
@@ -34,6 +36,15 @@ app.setName('Stanza')
  *  Drives the dev Dock (mac) and the window icon (win/linux). Packaged builds
  *  take their icon from electron-builder's .icns/.ico instead. */
 const ICON_PATH = join(import.meta.dirname, '../../build/icon.png')
+
+/** The built renderer document (packaged/preview); dev loads the dev server. */
+const RENDERER_INDEX = join(import.meta.dirname, '../renderer/index.html')
+
+// The app's own renderer is the ONLY content allowed to navigate a window or
+// call IPC (ipc/trustedIpc checks every invoke's sender against it). Set before
+// any window or handler exists; the guards cover every WebContents ever made.
+configureRendererOrigin({ indexFile: RENDERER_INDEX, devUrl: process.env.ELECTRON_RENDERER_URL })
+installNavigationGuards(app, shell)
 
 // Test seam (T6 E2E): an isolated userData dir keeps Playwright runs
 // out of the real per-project store. No effect outside tests.
@@ -102,11 +113,8 @@ function createWindow(): BrowserWindow {
     if (!win.isDestroyed() && details.reason !== 'clean-exit') win.reload()
   })
 
-  // External links open in the system browser, never in-app.
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url)
-    return { action: 'deny' }
-  })
+  // External links: installNavigationGuards (web-contents-created) denies every
+  // window.open and passes only https:/mailto: to the system browser/mail app.
 
   // Right-click a misspelled word → native spelling suggestions. Fires only over
   // a flagged word, so it never touches the editor (spellcheck off there).
@@ -115,7 +123,7 @@ function createWindow(): BrowserWindow {
   if (process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
-    void win.loadFile(join(import.meta.dirname, '../renderer/index.html'))
+    void win.loadFile(RENDERER_INDEX)
   }
   return win
 }

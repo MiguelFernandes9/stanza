@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, realpathSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { Semaphore } from '../infra/Semaphore'
 import { Fork, type ForkLifetime, type ForkScope } from './Fork'
 
@@ -13,6 +13,11 @@ export interface ForkGit {
   pruneWorktrees(): Promise<void>
   listWorktrees(): Promise<string[]>
 }
+
+/** A fork id is a path segment under baseDir that is later rmSync'd, and a
+ *  persistent chat's id (the thread id) arrives from the renderer — so it must
+ *  be a UUID (crypto.randomUUID's shape), never a path. */
+const FORK_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /** Owns every live fork for one document: their worktrees (one each, under the
  *  doc's tmp namespace `baseDir/<forkId>`) and a bounded pool so up to
@@ -53,7 +58,8 @@ export class ForkManager {
   }
 
   private adopt(forkId: string, scope: ForkScope, lifetime: ForkLifetime): Fork {
-    const fork = new Fork(forkId, join(this.baseDir, forkId), scope, lifetime)
+    if (typeof forkId !== 'string' || !FORK_ID_RE.test(forkId)) throw new Error('INVALID_FORK_ID')
+    const fork = new Fork(forkId, this.inBase(join(this.baseDir, forkId)), scope, lifetime)
     this.forks.set(forkId, fork)
     return fork
   }
@@ -73,7 +79,7 @@ export class ForkManager {
     if (!(await this.git.isRepo())) return // not a repo yet — first prepare() inits it
     if (existsSync(join(fork.worktreeDir, '.git'))) return
     await this.git.removeWorktree(fork.worktreeDir) // tolerant if absent
-    rmSync(fork.worktreeDir, { recursive: true, force: true })
+    rmSync(this.inBase(fork.worktreeDir), { recursive: true, force: true })
     await this.git.pruneWorktrees() // drop stale admin so add doesn't collide
     await this.git.addWorktree(fork.worktreeDir)
   }
@@ -97,7 +103,7 @@ export class ForkManager {
     if (!fork) return
     this.forks.delete(forkId)
     await this.git.removeWorktree(fork.worktreeDir)
-    rmSync(fork.worktreeDir, { recursive: true, force: true })
+    rmSync(this.inBase(fork.worktreeDir), { recursive: true, force: true })
   }
 
   /** Window close: remove every fork worktree, prune admin, wipe the namespace. */
@@ -127,6 +133,14 @@ export class ForkManager {
       }
     }
     await this.git.pruneWorktrees()
+  }
+
+  /** Assert `dir` resolves strictly INSIDE baseDir (defence in depth before any
+   *  recursive rmSync — the id check already rules out separators). */
+  private inBase(dir: string): string {
+    const base = resolve(this.baseDir)
+    if (!resolve(dir).startsWith(base + sep)) throw new Error('INVALID_FORK_ID')
+    return dir
   }
 
   /** Resolve a path to its symlink-free form so it matches the canonical paths

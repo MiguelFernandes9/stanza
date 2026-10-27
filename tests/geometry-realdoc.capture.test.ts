@@ -19,11 +19,11 @@ import type { BlockSpan, PdfRect } from '../src/shared/ipc'
  *  globals borrowed from @napi-rs/canvas). The committed geometry-realdoc.fixture
  *  test then runs the pure binner against the JSON — no pdf.js/synctex in CI.
  *
- *    GEOM_CAPTURE=1 npx vitest run --project tests tests/geometry-realdoc.capture
+ *    GEOM_CAPTURE=1 GEOM_DOC=/abs/path npx vitest run --project tests tests/geometry-realdoc.capture
  */
 
-// The compiled demo project: override with GEOM_DOC=/abs/path when regenerating.
-const ROOT = process.env.GEOM_DOC ?? '/Users/miguelfernandes/Documents/Projects/test'
+// The compiled demo project: set GEOM_DOC=/abs/path when regenerating.
+const ROOT = process.env.GEOM_DOC ?? ''
 const PDF = join(ROOT, 'main.pdf')
 // Bug constructs, addressed by (file-suffix, startLine) so the fixture labels them
 // for the assertion test. The first six are the flat-model constructs; the rest are
@@ -45,7 +45,7 @@ const CONSTRUCTS: Record<string, [string, number]> = {
   paraBeforeGather: ['further-constructs.tex', 60],
 }
 
-describe.skipIf(!process.env.GEOM_CAPTURE)('capture real-doc geometry fixture', () => {
+describe.skipIf(!process.env.GEOM_CAPTURE || !process.env.GEOM_DOC)('capture real-doc geometry fixture', () => {
   it('writes tests/__fixtures__/geometry-realdoc.json', async () => {
     // pdf.js legacy build needs browser globals in Node — borrow from canvas.
     const canvas = (await import('@napi-rs/canvas')) as unknown as Record<string, unknown>

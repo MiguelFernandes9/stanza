@@ -13,6 +13,7 @@ const recordingsDir =
 const VALUED_FLAGS = new Set([
   '--session-id', '--resume', '--add-dir', '--output-format',
   '--permission-mode', '--settings', '--model',
+  '--setting-sources', '--effort', '--allowedTools', '--disallowedTools',
 ])
 let prompt = ''
 for (let i = 0; i < args.length; i++) {
