@@ -5,6 +5,7 @@ import { IpcChannels } from '@shared/ipc'
 import type { DocumentInfo, FileEntry, FileMutationResult, RecentProject } from '@shared/ipc'
 import { parseProjectBlocks } from '@shared/blocks/parse'
 import { changedFilesInDiff } from '../services/diffSpans'
+import { safeJoin } from '../services/FileService'
 import {
   assertNoPendingProposal,
   atomicWrite,
@@ -87,16 +88,18 @@ export function registerDocumentHandlers(): void {
     (event): DocumentInfo | null => sessions.get(event.sender.id)?.info ?? null,
   )
 
+  // relPath is renderer-supplied: safeJoin rejects absolute paths and `..`
+  // traversal (PATH_ESCAPE) so a save/read can never leave the project root.
   ipcMain.handle(IpcChannels.documentSave, (event, relPath: string, content: string) => {
     const doc = sessionFor(event)
-    atomicWrite(join(doc.info.root, relPath), content)
+    atomicWrite(safeJoin(doc.info.root, relPath), content)
     // A manual .tex save changes content → refresh paper summaries (cheap drift
     // check; no-op when the saved file holds no sectioning changes).
     if (relPath.endsWith('.tex')) doc.warmSummaries()
   })
 
   ipcMain.handle(IpcChannels.documentRead, (event, relPath: string) =>
-    readFileSync(join(sessionFor(event).info.root, relPath), 'utf8'),
+    readFileSync(safeJoin(sessionFor(event).info.root, relPath), 'utf8'),
   )
 
   // v0.2 sidebar file management — each op mutates the doc repo (commit-per-op

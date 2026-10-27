@@ -83,6 +83,7 @@ export class DocumentService {
     if (!isAbsolute(args.dir)) {
       throw new Error(`document:create dir must be absolute, got "${args.dir}"`)
     }
+    assertSafeBasename(args.name)
     const root = join(args.dir, args.name)
     mkdirSync(root, { recursive: true })
     writeFileSync(join(root, 'main.tex'), TEMPLATE(args.name))
@@ -153,6 +154,21 @@ export class DocumentService {
       }
       throw err
     }
+  }
+}
+
+/** The new document's folder name is renderer-supplied: it must be a single
+ *  path segment — no separators, no `.`/`..`, no NUL — so the project can only
+ *  land directly inside the chosen `dir`. Throws `INVALID_NAME`. */
+function assertSafeBasename(name: unknown): void {
+  if (
+    typeof name !== 'string' ||
+    name.trim() === '' ||
+    /[/\\\0]/.test(name) ||
+    name === '.' ||
+    name === '..'
+  ) {
+    throw new Error('INVALID_NAME')
   }
 }
 

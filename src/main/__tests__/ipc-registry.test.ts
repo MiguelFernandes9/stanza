@@ -1,13 +1,15 @@
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -515,6 +517,61 @@ esac`)
     // The PNG was written + granted as a second --add-dir, end-to-end via the IPC.
     expect(readFileSync(argvLog, 'utf8')).toContain('stanza-shots')
   }, 20_000)
+})
+
+describe('document:save / document:read stay inside the project root', () => {
+  const openProject = async (): Promise<string> => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', makeClaudeStub(`echo '{"result":"primed"}'`))
+    const root = makeProject()
+    await invoke('document:open', root)
+    return root
+  }
+  // ipcMain.handle turns a synchronous throw into a rejection — mirror that.
+  const call = (channel: string, ...args: unknown[]) => Promise.resolve().then(() => invoke(channel, ...args))
+
+  test.each(['../NAME', 'chapters/../../NAME'])('save rejects traversal %s', async (pattern) => {
+    const root = await openProject()
+    const name = `escape-${randomUUID()}.tex` // unique: the target sits in the shared tmpdir
+    await expect(call('document:save', pattern.replace('NAME', name), 'pwn')).rejects.toThrow('PATH_ESCAPE')
+    expect(existsSync(join(root, '..', name))).toBe(false)
+  })
+
+  test('save rejects an absolute path', async () => {
+    await openProject()
+    const target = join(makeDir('stanza-reg-outside-'), 'abs.tex')
+    await expect(call('document:save', target, 'pwn')).rejects.toThrow('PATH_ESCAPE')
+    expect(existsSync(target)).toBe(false)
+  })
+
+  test('read rejects traversal and absolute paths', async () => {
+    const root = await openProject()
+    const outside = makeDir('stanza-reg-outside-')
+    writeFileSync(join(outside, 'secret.txt'), 'secret')
+    const rel = join('..', outside.slice(outside.lastIndexOf('/') + 1), 'secret.txt')
+    expect(existsSync(join(root, rel))).toBe(true) // the traversal would resolve
+    await expect(call('document:read', rel)).rejects.toThrow('PATH_ESCAPE')
+    await expect(call('document:read', join(outside, 'secret.txt'))).rejects.toThrow('PATH_ESCAPE')
+  })
+
+  test('in-root save + read still work, including subdirectories', async () => {
+    const root = await openProject()
+    await invoke('document:save', 'chapters/one.tex', 'one\n')
+    expect(readFileSync(join(root, 'chapters/one.tex'), 'utf8')).toBe('one\n')
+    expect(await invoke('document:read', 'chapters/one.tex')).toBe('one\n')
+  })
+
+  test('a planted symlink at the temp-file path is never written through', async () => {
+    const root = await openProject()
+    const victim = join(makeDir('stanza-reg-victim-'), 'victim.txt')
+    writeFileSync(victim, 'original')
+    symlinkSync(victim, join(root, 'main.tex.stanza-tmp'))
+
+    await invoke('document:save', 'main.tex', 'saved\n')
+
+    expect(readFileSync(victim, 'utf8')).toBe('original') // the link target is untouched
+    expect(lstatSync(join(root, 'main.tex')).isSymbolicLink()).toBe(false)
+    expect(readFileSync(join(root, 'main.tex'), 'utf8')).toBe('saved\n')
+  })
 })
 
 describe('file management channels (v0.2)', () => {
