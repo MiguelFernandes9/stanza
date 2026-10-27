@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { ipcMain } from './trustedIpc'
 import { IpcChannels } from '@shared/ipc'
 import type {
   ClaudeAvailability,

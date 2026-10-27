@@ -12,6 +12,7 @@ import {
 import { createHash, randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import type { BrowserWindow } from 'electron'
 import { IpcChannels } from '../../shared/ipc'
@@ -85,6 +86,12 @@ vi.mock('electron', () => ({
 }))
 
 import { dropSession, registerIpcHandlers, setWindowSpawner } from '../ipc-registry'
+import { configureRendererOrigin } from '../rendererOrigin'
+
+// Every invoke is sender-checked (ipc/trustedIpc): calls come from this frame
+// URL, the app's own renderer, unless a test overrides it.
+const RENDERER_INDEX = '/stanza-test/out/renderer/index.html'
+const RENDERER_URL = pathToFileURL(RENDERER_INDEX).href
 
 const runner = new DefaultProcessRunner()
 const ARTICLE = '\\documentclass{article}\n\\begin{document}\nhi\n\\end{document}\n'
@@ -118,7 +125,7 @@ let launcher: FakeWindow
 const invokeFrom = (win: FakeWindow, channel: string, ...args: unknown[]) => {
   const handler = h.handlers.get(channel)
   if (!handler) throw new Error(`no handler for ${channel}`)
-  return handler({ sender: win.webContents }, ...args)
+  return handler({ sender: win.webContents, senderFrame: { url: RENDERER_URL } }, ...args)
 }
 const invoke = (channel: string, ...args: unknown[]) => invokeFrom(launcher, channel, ...args)
 
@@ -134,6 +141,7 @@ beforeEach(() => {
   h.messageBoxResponse = 0
   h.messageBoxes = []
   h.closed = false
+  configureRendererOrigin({ indexFile: RENDERER_INDEX })
   registerIpcHandlers()
   // The fake window stands in for a real BrowserWindow (only the bits the
   // registry touches: webContents.id/send, focus, on).
@@ -354,6 +362,25 @@ esac`),
     expect(readFileSync(join(root, 'main.tex'), 'utf8')).toContain('a') // A's edit merged in
     await bRunning.catch(() => {})
   }, 20_000)
+})
+
+describe('IPC sender validation', () => {
+  test('every registered channel rejects a frame that is not the app renderer', async () => {
+    expect(h.handlers.size).toBeGreaterThan(40)
+    for (const [channel, handler] of h.handlers) {
+      const foreign = { sender: launcher.webContents, senderFrame: { url: 'file:///Users/me/Downloads/evil.html' } }
+      await expect(Promise.resolve().then(() => handler(foreign, {})), channel).rejects.toThrow('IPC_UNTRUSTED_SENDER')
+    }
+  })
+
+  test('a call with no sender frame (destroyed / navigated away) is rejected', async () => {
+    const handler = h.handlers.get('document:recents')!
+    await expect(handler({ sender: launcher.webContents, senderFrame: null })).rejects.toThrow('IPC_UNTRUSTED_SENDER')
+  })
+
+  test('the app renderer is served normally', async () => {
+    expect(Array.isArray(await invoke('document:recents'))).toBe(true)
+  })
 })
 
 describe('document:open on a repo with a hostile .git/config', () => {
@@ -790,7 +817,7 @@ describe('multi-window sessions', () => {
   test('sessionFor resolves by the calling window; a window with no session is NO_DOCUMENT', async () => {
     primedStub()
     // The launcher has no session until a document opens in it.
-    expect(() => invoke('document:files')).toThrow('NO_DOCUMENT')
+    await expect(invoke('document:files')).rejects.toThrow('NO_DOCUMENT') // handlers reject, like Electron's
     const root = makeProject()
     const info = await invoke('document:open', root) // launcher reuse → DocumentInfo
     expect(info).toMatchObject({ root, mainFile: 'main.tex' })
@@ -839,7 +866,7 @@ describe('multi-window sessions', () => {
     expect(rels((await invoke('document:files')) as FileEntry[]).length).toBeGreaterThan(0)
 
     dropSession(launcher.webContents.id) // simulate win.on('closed')
-    expect(() => invoke('document:files')).toThrow('NO_DOCUMENT')
+    await expect(invoke('document:files')).rejects.toThrow('NO_DOCUMENT') // handlers reject, like Electron's
   })
 
   test('a per-document event targets only its window; settings:changed broadcasts to all', async () => {

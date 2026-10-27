@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
+import { app, BrowserWindow, dialog, nativeImage, shell } from 'electron'
 import { basename } from 'node:path'
 import { attachmentKind, IpcChannels } from '@shared/ipc'
 import type { BugReportInput, PickedAttachment } from '@shared/ipc'
@@ -6,6 +6,7 @@ import { errorLog } from '../infra/errorLog'
 import type { BugReportMeta } from '../services/BugReportService'
 import { bugReports } from './services'
 import { sessions } from './sessions'
+import { ipcMain } from './trustedIpc'
 
 /** App-shell odds and ends: window close, attachment picker, bug reporter. */
 export function registerAppHandlers(): void {

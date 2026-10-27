@@ -1,4 +1,4 @@
-import { dialog, ipcMain } from 'electron'
+import { dialog } from 'electron'
 import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { IpcChannels } from '@shared/ipc'
@@ -17,6 +17,7 @@ import {
 import { runRestoreOp } from './ops'
 import { documents, getRecentProjects, store } from './services'
 import { notifyRecentsChanged, openDocument, sessionFor, sessions } from './sessions'
+import { ipcMain } from './trustedIpc'
 
 /** document:* — open/create, recents, history, files, save/read, and the
  *  sidebar file-management ops. */
