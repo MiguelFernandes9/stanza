@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
@@ -140,26 +140,39 @@ describe('GitClient argv injection guards', () => {
   })
 })
 
-describe('GitClient.dangerousConfig', () => {
-  test('a fresh repo has none', async () => {
-    expect(await git.dangerousConfig()).toEqual([])
+describe('GitClient defence in depth (config Stanza runs despite the warning)', () => {
+  test('signing via gpg.ssh.defaultKeyCommand never runs on a Stanza commit', async () => {
+    await gitRaw('config', 'commit.gpgsign', 'true')
+    await gitRaw('config', 'gpg.format', 'ssh')
+    await gitRaw('config', 'gpg.ssh.defaultKeyCommand', evil)
+    await gitRaw('config', 'gpg.ssh.program', evil)
+    write('main.tex', 'edited\n')
+    await git.commitAll('wip: edit')
+    expect(existsSync(marker)).toBe(false)
+    expect((await git.log(1))[0]!.subject).toBe('wip: edit') // committed, unsigned
   })
 
-  test('reports command-executing keys from .git/config', async () => {
-    await gitRaw('config', 'filter.evil.clean', evil)
-    await gitRaw('config', 'core.hooksPath', 'hooks')
-    expect((await git.dangerousConfig()).map((r) => r.key)).toEqual(['core.hookspath', 'filter.evil.clean']) // file order: [core] precedes the new [filter]
-  })
+  test("a submodule's filter never runs from superproject status/diff", async () => {
+    // A sub-repo whose .gitattributes names a filter, committed with no filter set.
+    const subSrc = join(scratch, 'sub-src')
+    mkdirSync(subSrc)
+    const sub = (...args: string[]) => runner.run({ cmd: 'git', args, cwd: subSrc })
+    await sub('init', '-q')
+    writeFileSync(join(subSrc, '.gitattributes'), '* filter=x\n')
+    writeFileSync(join(subSrc, 'f.tex'), 'sub\n')
+    await sub('add', '-A')
+    await sub('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'sub')
+    await gitRaw('-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', subSrc, 'sub')
+    await git.commitAll('wip: add submodule')
+    // The hostile part: the submodule's own config defines the filter, and its
+    // index stat data is stale (as after copying/unzipping the folder).
+    await runner.run({ cmd: 'git', args: ['config', 'filter.x.clean', evil], cwd: join(root, 'sub') })
+    const later = new Date(Date.now() + 5_000)
+    utimesSync(join(root, 'sub/f.tex'), later, later)
 
-  test('sees keys hidden behind include.path', async () => {
-    writeFileSync(join(root, 'inc.cfg'), `[diff "x"]\n\ttextconv = ${evil}\n`)
-    await gitRaw('config', 'include.path', '../inc.cfg')
-    expect((await git.dangerousConfig()).map((r) => r.key)).toEqual(['diff.x.textconv'])
-  })
-
-  test('reading the config runs nothing', async () => {
-    await gitRaw('config', 'core.fsmonitor', evil)
-    expect((await git.dangerousConfig()).map((r) => r.key)).toEqual(['core.fsmonitor'])
+    expect(await git.isClean()).toBe(true)
+    expect(await git.changedFiles()).toEqual([])
+    expect(await git.diff()).toBe('')
     expect(existsSync(marker)).toBe(false)
   })
 })

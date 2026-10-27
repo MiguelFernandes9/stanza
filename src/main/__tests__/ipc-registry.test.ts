@@ -424,6 +424,19 @@ describe('document:open on a repo with a hostile .git/config', () => {
     expect(existsSync(marker)).toBe(false) // the filter never ran
   })
 
+  test('a .git with no HEAD (not "a repo" to rev-parse) still warns; Cancel runs nothing', async () => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', makeClaudeStub(`echo '{"result":"primed"}'`))
+    const { root, marker } = await makeHostileRepo()
+    writeFileSync(join(root, '.gitattributes'), '* filter=evil\n')
+    rmSync(join(root, '.git/HEAD')) // rev-parse fails → the old isRepo() gate skipped the check
+    h.messageBoxResponse = 0 // Cancel
+
+    expect(await invoke('document:open', root)).toBeNull()
+    expect(h.messageBoxes).toHaveLength(1)
+    expect(h.messageBoxes[0]!.detail).toContain('filter.evil.clean')
+    expect(existsSync(marker)).toBe(false) // prime's git init + add -A never ran
+  })
+
   test('"Open anyway" proceeds with the open', async () => {
     vi.stubEnv('STANZA_CLAUDE_BIN', makeClaudeStub(`echo '{"result":"primed"}'`))
     const { root } = await makeHostileRepo()

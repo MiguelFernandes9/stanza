@@ -1,6 +1,6 @@
 import { realpathSync } from 'node:fs'
 import type { CommitInfo } from '../../shared/ipc/document'
-import { assertSha, findDangerousGitConfig, GIT_HARDENING_ARGS, NO_EXTERNAL_DIFF, type GitConfigRisk } from './gitSafety'
+import { assertSha, GIT_HARDENING_ARGS, IGNORE_SUBMODULES, NO_EXTERNAL_DIFF } from './gitSafety'
 import type { ProcessRunner, ProcResult } from './ProcessRunner'
 
 /** Marks the end of options before a ref operand, so a ref can never be parsed
@@ -45,13 +45,13 @@ export class GitClient {
   }
 
   async isClean(): Promise<boolean> {
-    const res = await this.must(['status', '--porcelain', ...SCRATCH_EXCLUDE])
+    const res = await this.must(['status', '--porcelain', IGNORE_SUBMODULES, ...SCRATCH_EXCLUDE])
     return res.stdout.trim() === ''
   }
 
   /** Modified + staged + untracked, relative paths. */
   async changedFiles(): Promise<string[]> {
-    const res = await this.must(['status', '--porcelain', ...SCRATCH_EXCLUDE])
+    const res = await this.must(['status', '--porcelain', IGNORE_SUBMODULES, ...SCRATCH_EXCLUDE])
     return res.stdout
       .split('\n')
       .filter((line) => line.trim() !== '')
@@ -66,7 +66,7 @@ export class GitClient {
   async diff(): Promise<string> {
     const parts: string[] = []
     if (await this.hasHead()) {
-      parts.push((await this.must(['diff', ...NO_EXTERNAL_DIFF, 'HEAD'])).stdout)
+      parts.push((await this.must(['diff', ...NO_EXTERNAL_DIFF, IGNORE_SUBMODULES, 'HEAD'])).stdout)
     }
     for (const file of await this.untrackedFiles()) {
       // --no-index exits 1 when the files differ — that's the normal case
@@ -189,7 +189,7 @@ export class GitClient {
   async mergeNoFF(branch: string): Promise<{ ok: boolean; conflicts: string[] }> {
     const res = await this.run(['merge', '--no-ff', '--no-edit', EOO, branch])
     if (res.code === 0) return { ok: true, conflicts: [] }
-    const conflicts = (await this.must(['diff', '--name-only', '--diff-filter=U'])).stdout
+    const conflicts = (await this.must(['diff', IGNORE_SUBMODULES, '--name-only', '--diff-filter=U'])).stdout
       .split('\n')
       .filter((line) => line.trim() !== '')
     await this.run(['merge', '--abort'])
@@ -216,7 +216,7 @@ export class GitClient {
    *  (three-dot: merge-base diff), so later commits on `from` don't
    *  pollute a proposal's diff. */
   async diffRange(from: string, to: string): Promise<string> {
-    return (await this.must(['diff', ...NO_EXTERNAL_DIFF, EOO, `${from}...${to}`])).stdout
+    return (await this.must(['diff', ...NO_EXTERNAL_DIFF, IGNORE_SUBMODULES, EOO, `${from}...${to}`])).stdout
   }
 
   async subject(ref: string): Promise<string> {
@@ -261,20 +261,11 @@ export class GitClient {
     assertSha(sha) // renderer-supplied (HISTORY row)
     const hasParent = (await this.run(['rev-parse', '--verify', '--quiet', EOO, `${sha}^`])).code === 0
     const base = hasParent ? `${sha}^` : EMPTY_TREE
-    return (await this.must(['diff', ...NO_EXTERNAL_DIFF, EOO, base, sha])).stdout
-  }
-
-  /** Repo-local config keys that would make git run a repo-chosen program
-   *  (filter drivers, textconv, external diff, hooksPath, …) — read with
-   *  `--includes` so a key hidden behind `include.path` is still seen. Local
-   *  scope only: the user's own ~/.gitconfig is trusted. [] when unreadable. */
-  async dangerousConfig(): Promise<GitConfigRisk[]> {
-    const res = await this.run(['config', '--local', '--includes', '--null', '--list'])
-    return res.code === 0 ? findDangerousGitConfig(res.stdout) : []
+    return (await this.must(['diff', ...NO_EXTERNAL_DIFF, IGNORE_SUBMODULES, EOO, base, sha])).stdout
   }
 
   private async untrackedFiles(): Promise<string[]> {
-    const res = await this.must(['status', '--porcelain', ...SCRATCH_EXCLUDE])
+    const res = await this.must(['status', '--porcelain', IGNORE_SUBMODULES, ...SCRATCH_EXCLUDE])
     return res.stdout
       .split('\n')
       .filter((line) => line.startsWith('?? '))
