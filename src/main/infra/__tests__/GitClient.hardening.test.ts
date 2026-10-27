@@ -109,6 +109,29 @@ describe('GitClient argv injection guards', () => {
     expect(existsSync(join(root, '-n.tex'))).toBe(false)
   })
 
+  test('diffAt rejects anything that is not a hex sha', async () => {
+    const out = join(scratch, 'written-by-git')
+    await expect(git.diffAt(`--output=${out}`)).rejects.toThrow('INVALID_SHA')
+    await expect(git.diffAt('HEAD')).rejects.toThrow('INVALID_SHA')
+    expect(existsSync(out)).toBe(false)
+  })
+
+  test('readTreeReset rejects anything that is not a hex sha', async () => {
+    await expect(git.readTreeReset('--index-output=/tmp/x')).rejects.toThrow('INVALID_SHA')
+    await expect(git.readTreeReset('HEAD~1')).rejects.toThrow('INVALID_SHA')
+  })
+
+  test('ref-taking calls treat an option-looking ref as a ref, never an option', async () => {
+    const out = join(scratch, 'written-by-git')
+    // --end-of-options: git rejects these as unknown revisions instead of
+    // honouring --output (which would write an arbitrary file).
+    await expect(git.subject(`--output=${out}`)).rejects.toThrow()
+    expect(await git.show(`--output=${out}`, 'main.tex')).toBe('')
+    await expect(git.diffRange(`--output=${out}`, 'HEAD')).rejects.toThrow()
+    expect(await git.branchExists(`--output=${out}`)).toBe(false)
+    expect(existsSync(out)).toBe(false)
+  })
+
   test('a valid sha still works end to end', async () => {
     const sha = (await git.log(1))[0]!.hash
     expect(await git.diffAt(sha.slice(0, 12))).toContain('+hello')

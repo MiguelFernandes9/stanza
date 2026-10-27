@@ -383,6 +383,18 @@ describe('IPC sender validation', () => {
   })
 })
 
+describe('history channels validate renderer-supplied shas', () => {
+  test.each([['document:diffAt'], ['document:revertTo']])('%s rejects a non-sha', async (channel) => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', makeClaudeStub(`echo '{"result":"primed"}'`))
+    const root = makeProject()
+    await invoke('document:open', root)
+    const out = join(makeDir('stanza-reg-out-'), 'written')
+    await expect(invoke(channel, `--output=${out}`)).rejects.toThrow('INVALID_SHA')
+    await expect(invoke(channel, 'HEAD')).rejects.toThrow('INVALID_SHA')
+    expect(existsSync(out)).toBe(false)
+  })
+})
+
 describe('document:open on a repo with a hostile .git/config', () => {
   // A pre-existing repo whose local config makes git run a planted program.
   const makeHostileRepo = async (): Promise<{ root: string; marker: string }> => {

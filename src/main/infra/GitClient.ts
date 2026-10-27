@@ -1,7 +1,11 @@
 import { realpathSync } from 'node:fs'
 import type { CommitInfo } from '../../shared/ipc/document'
-import { findDangerousGitConfig, GIT_HARDENING_ARGS, NO_EXTERNAL_DIFF, type GitConfigRisk } from './gitSafety'
+import { assertSha, findDangerousGitConfig, GIT_HARDENING_ARGS, NO_EXTERNAL_DIFF, type GitConfigRisk } from './gitSafety'
 import type { ProcessRunner, ProcResult } from './ProcessRunner'
+
+/** Marks the end of options before a ref operand, so a ref can never be parsed
+ *  as an option (`--output=…`) even if one slips past validation. */
+const EOO = '--end-of-options'
 
 /** Git's canonical empty tree — the diff base for a root commit (no parent). */
 const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
@@ -162,13 +166,13 @@ export class GitClient {
   /** Hard-reset this (worktree) tree to `ref` — syncs the op worktree to the
    *  doc's latest HEAD and discards any leftover edits before the next op. */
   async resetHard(ref: string): Promise<void> {
-    await this.must(['reset', '--hard', ref])
+    await this.must(['reset', '--hard', EOO, ref])
   }
 
   /** Detach this worktree at `ref`, discarding local changes — frees the op
    *  branch (so Accept can merge it) and readies the worktree for reuse. */
   async checkoutDetach(ref: string): Promise<void> {
-    await this.must(['checkout', '--force', '--detach', ref])
+    await this.must(['checkout', '--force', '--detach', EOO, ref])
   }
 
   /** Set this (worktree) tree + index to `sha`'s content WITHOUT moving HEAD —
@@ -177,13 +181,13 @@ export class GitClient {
    *  every change since `sha`, including files added after it (the Restore-to-
    *  this-version flow). */
   async readTreeReset(sha: string): Promise<void> {
-    await this.must(['read-tree', '-u', '--reset', sha])
+    await this.must(['read-tree', '-u', '--reset', EOO, assertSha(sha)])
   }
 
   /** Merge a proposal branch. On conflict: collect the conflicted
    *  files, abort the merge, leave the tree as it was. */
   async mergeNoFF(branch: string): Promise<{ ok: boolean; conflicts: string[] }> {
-    const res = await this.run(['merge', '--no-ff', '--no-edit', branch])
+    const res = await this.run(['merge', '--no-ff', '--no-edit', EOO, branch])
     if (res.code === 0) return { ok: true, conflicts: [] }
     const conflicts = (await this.must(['diff', '--name-only', '--diff-filter=U'])).stdout
       .split('\n')
@@ -205,23 +209,23 @@ export class GitClient {
    *  internal HEAD check) so a caller can treat an already merged-and-deleted
    *  op branch as gone instead of crashing on a dead ref (BUG-18). */
   async branchExists(branch: string): Promise<boolean> {
-    return (await this.run(['rev-parse', '--verify', '--quiet', branch])).code === 0
+    return (await this.run(['rev-parse', '--verify', '--quiet', EOO, branch])).code === 0
   }
 
   /** Changes introduced by `to` since it diverged from `from`
    *  (three-dot: merge-base diff), so later commits on `from` don't
    *  pollute a proposal's diff. */
   async diffRange(from: string, to: string): Promise<string> {
-    return (await this.must(['diff', ...NO_EXTERNAL_DIFF, `${from}...${to}`])).stdout
+    return (await this.must(['diff', ...NO_EXTERNAL_DIFF, EOO, `${from}...${to}`])).stdout
   }
 
   async subject(ref: string): Promise<string> {
-    return (await this.must(['log', '-1', '--format=%s', ref])).stdout.trim()
+    return (await this.must(['log', '-1', '--format=%s', EOO, ref])).stdout.trim()
   }
 
   /** File content at a ref; empty string when the file is absent there. */
   async show(ref: string, file: string): Promise<string> {
-    const res = await this.run(['show', ...NO_EXTERNAL_DIFF, `${ref}:${file}`])
+    const res = await this.run(['show', ...NO_EXTERNAL_DIFF, EOO, `${ref}:${file}`])
     return res.code === 0 ? res.stdout : ''
   }
 
@@ -254,9 +258,10 @@ export class GitClient {
    *  against the empty tree (everything it added). For a merge commit `^` is
    *  the first parent, yielding the change the merge brought into mainline. */
   async diffAt(sha: string): Promise<string> {
-    const hasParent = (await this.run(['rev-parse', '--verify', '--quiet', `${sha}^`])).code === 0
+    assertSha(sha) // renderer-supplied (HISTORY row)
+    const hasParent = (await this.run(['rev-parse', '--verify', '--quiet', EOO, `${sha}^`])).code === 0
     const base = hasParent ? `${sha}^` : EMPTY_TREE
-    return (await this.must(['diff', ...NO_EXTERNAL_DIFF, base, sha])).stdout
+    return (await this.must(['diff', ...NO_EXTERNAL_DIFF, EOO, base, sha])).stdout
   }
 
   /** Repo-local config keys that would make git run a repo-chosen program
