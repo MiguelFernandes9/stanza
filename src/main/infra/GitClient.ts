@@ -1,5 +1,6 @@
 import { realpathSync } from 'node:fs'
 import type { CommitInfo } from '../../shared/ipc/document'
+import { findDangerousGitConfig, GIT_HARDENING_ARGS, NO_EXTERNAL_DIFF, type GitConfigRisk } from './gitSafety'
 import type { ProcessRunner, ProcResult } from './ProcessRunner'
 
 /** Git's canonical empty tree — the diff base for a root commit (no parent). */
@@ -61,11 +62,11 @@ export class GitClient {
   async diff(): Promise<string> {
     const parts: string[] = []
     if (await this.hasHead()) {
-      parts.push((await this.must(['diff', 'HEAD'])).stdout)
+      parts.push((await this.must(['diff', ...NO_EXTERNAL_DIFF, 'HEAD'])).stdout)
     }
     for (const file of await this.untrackedFiles()) {
       // --no-index exits 1 when the files differ — that's the normal case
-      const res = await this.run(['diff', '--no-index', '--', '/dev/null', file])
+      const res = await this.run(['diff', ...NO_EXTERNAL_DIFF, '--no-index', '--', '/dev/null', file])
       parts.push(res.stdout)
     }
     return parts.join('')
@@ -90,7 +91,7 @@ export class GitClient {
 
   /** Move/rename a tracked path (file or directory) in tree + index. */
   async mv(from: string, to: string): Promise<void> {
-    await this.must(['mv', from, to])
+    await this.must(['mv', '--', from, to])
   }
 
   /** Remove a tracked path (recursive for directories) from tree + index. */
@@ -211,7 +212,7 @@ export class GitClient {
    *  (three-dot: merge-base diff), so later commits on `from` don't
    *  pollute a proposal's diff. */
   async diffRange(from: string, to: string): Promise<string> {
-    return (await this.must(['diff', `${from}...${to}`])).stdout
+    return (await this.must(['diff', ...NO_EXTERNAL_DIFF, `${from}...${to}`])).stdout
   }
 
   async subject(ref: string): Promise<string> {
@@ -220,7 +221,7 @@ export class GitClient {
 
   /** File content at a ref; empty string when the file is absent there. */
   async show(ref: string, file: string): Promise<string> {
-    const res = await this.run(['show', `${ref}:${file}`])
+    const res = await this.run(['show', ...NO_EXTERNAL_DIFF, `${ref}:${file}`])
     return res.code === 0 ? res.stdout : ''
   }
 
@@ -255,7 +256,16 @@ export class GitClient {
   async diffAt(sha: string): Promise<string> {
     const hasParent = (await this.run(['rev-parse', '--verify', '--quiet', `${sha}^`])).code === 0
     const base = hasParent ? `${sha}^` : EMPTY_TREE
-    return (await this.must(['diff', base, sha])).stdout
+    return (await this.must(['diff', ...NO_EXTERNAL_DIFF, base, sha])).stdout
+  }
+
+  /** Repo-local config keys that would make git run a repo-chosen program
+   *  (filter drivers, textconv, external diff, hooksPath, …) — read with
+   *  `--includes` so a key hidden behind `include.path` is still seen. Local
+   *  scope only: the user's own ~/.gitconfig is trusted. [] when unreadable. */
+  async dangerousConfig(): Promise<GitConfigRisk[]> {
+    const res = await this.run(['config', '--local', '--includes', '--null', '--list'])
+    return res.code === 0 ? findDangerousGitConfig(res.stdout) : []
   }
 
   private async untrackedFiles(): Promise<string[]> {
@@ -270,8 +280,10 @@ export class GitClient {
     return (await this.run(['rev-parse', '--verify', '--quiet', 'HEAD'])).code === 0
   }
 
+  /** Every git call goes through here, hardened against a hostile repo: no
+   *  fsmonitor hook, no repo hooks (see GIT_HARDENING_ARGS). */
   private run(args: string[]): Promise<ProcResult> {
-    return this.runner.run({ cmd: 'git', args, cwd: this.cwd })
+    return this.runner.run({ cmd: 'git', args: [...GIT_HARDENING_ARGS, ...args], cwd: this.cwd })
   }
 
   private async must(args: string[]): Promise<ProcResult> {

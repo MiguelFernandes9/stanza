@@ -38,6 +38,9 @@ const h = vi.hoisted(() => ({
   nextId: 1,
   userData: '',
   openDialog: { canceled: true, filePaths: [] as string[] },
+  /** The button index showMessageBox answers with (the repo-trust warning). */
+  messageBoxResponse: 0,
+  messageBoxes: [] as { message?: string; detail?: string; buttons?: string[] }[],
   closed: false,
   makeWindow(): FakeWindow {
     const id = h.nextId++
@@ -69,7 +72,14 @@ vi.mock('electron', () => ({
     getAllWindows: () => h.windows,
     getFocusedWindow: () => h.windows[h.windows.length - 1] ?? null,
   },
-  dialog: { showOpenDialog: async () => h.openDialog },
+  dialog: {
+    showOpenDialog: async () => h.openDialog,
+    // (options) or (parentWindow, options) — record the options either way.
+    showMessageBox: async (a: unknown, b?: unknown) => {
+      h.messageBoxes.push((b ?? a) as { message?: string; detail?: string; buttons?: string[] })
+      return { response: h.messageBoxResponse, checkboxChecked: false }
+    },
+  },
 }))
 
 import { dropSession, registerIpcHandlers, setWindowSpawner } from '../ipc-registry'
@@ -119,6 +129,8 @@ beforeEach(() => {
   h.sent = []
   h.windows = []
   h.openDialog = { canceled: true, filePaths: [] }
+  h.messageBoxResponse = 0
+  h.messageBoxes = []
   h.closed = false
   registerIpcHandlers()
   // The fake window stands in for a real BrowserWindow (only the bits the
@@ -339,6 +351,55 @@ esac`),
     expect(elapsed).toBeLessThan(900) // merged immediately — did NOT queue behind B's 1.5s op
     expect(readFileSync(join(root, 'main.tex'), 'utf8')).toContain('a') // A's edit merged in
     await bRunning.catch(() => {})
+  }, 20_000)
+})
+
+describe('document:open on a repo with a hostile .git/config', () => {
+  // A pre-existing repo whose local config makes git run a planted program.
+  const makeHostileRepo = async (): Promise<{ root: string; marker: string }> => {
+    const root = makeProject()
+    const marker = join(makeDir('stanza-reg-evil-'), 'pwned')
+    const evil = makeClaudeStub(`touch '${marker}'; cat`)
+    const g = (...args: string[]) => runner.run({ cmd: 'git', args, cwd: root })
+    await g('init', '-q')
+    writeFileSync(join(root, '.gitattributes'), '*.tex filter=evil\n')
+    await g('config', 'filter.evil.clean', evil)
+    await g('config', 'filter.evil.smudge', evil)
+    return { root, marker }
+  }
+
+  test('warns before any git op; Cancel opens nothing and runs nothing', async () => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', makeClaudeStub(`echo '{"result":"primed"}'`))
+    const { root, marker } = await makeHostileRepo()
+    h.messageBoxResponse = 0 // Cancel
+
+    expect(await invoke('document:open', root)).toBeNull()
+
+    expect(h.messageBoxes).toHaveLength(1)
+    expect(h.messageBoxes[0]!.buttons).toEqual(['Cancel', 'Open anyway'])
+    expect(h.messageBoxes[0]!.detail).toContain('filter.evil.clean')
+    expect(h.messageBoxes[0]!.detail).toContain('filter.evil.smudge')
+    expect(await invoke('document:current')).toBeNull() // no session bound
+    expect(existsSync(marker)).toBe(false) // the filter never ran
+  })
+
+  test('"Open anyway" proceeds with the open', async () => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', makeClaudeStub(`echo '{"result":"primed"}'`))
+    const { root } = await makeHostileRepo()
+    h.messageBoxResponse = 1 // Open anyway
+
+    const info = (await invoke('document:open', root)) as { root: string } | null
+    expect(info?.root).toBe(root)
+    expect(h.messageBoxes).toHaveLength(1)
+  }, 20_000)
+
+  test('a clean pre-existing repo opens with no warning', async () => {
+    vi.stubEnv('STANZA_CLAUDE_BIN', makeClaudeStub(`echo '{"result":"primed"}'`))
+    const root = makeProject()
+    await runner.run({ cmd: 'git', args: ['init', '-q'], cwd: root })
+
+    expect(((await invoke('document:open', root)) as { root: string }).root).toBe(root)
+    expect(h.messageBoxes).toHaveLength(0)
   }, 20_000)
 })
 

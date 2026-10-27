@@ -6,6 +6,7 @@ import { isHiddenInSidebar } from '../../shared/files/artifacts'
 import { watchSettled } from '../infra/FileWatcher'
 import { DocumentSession } from '../session'
 import { outputPdfRel } from './files'
+import { confirmRepoTrust } from './repoTrust'
 import { activeOps, documents, globalSettings, runner, store } from './services'
 import { sendTo } from './send'
 
@@ -87,7 +88,9 @@ export function sessionFor(event: IpcMainInvokeEvent): DocumentSession {
 /** Open `folder` for the calling window. A launcher (no session) opens in place
  *  and returns the DocumentInfo (renderer setDoc); a window already showing a
  *  document spawns the open into a NEW window (mac doc-app convention) and
- *  returns null. Opening a document already open elsewhere focuses that window. */
+ *  returns null. Opening a document already open elsewhere focuses that window.
+ *  A pre-existing repo whose .git/config runs programs is confirmed with the
+ *  user BEFORE any git op touches it (repoTrust); declining returns null. */
 export async function openDocument(
   event: IpcMainInvokeEvent,
   folder: string,
@@ -99,6 +102,7 @@ export async function openDocument(
       existing.focus() // duplicate open → focus the window that already holds it
       return null
     }
+    if (!(await confirmRepoTrust(folder, event.sender))) return null
     const info = await loadDoc(folder, kind, undefined) // spawn primes silently
     if (!info) return null
     if (!spawnWindow) throw new Error('NO_WINDOW_SPAWNER')
@@ -109,6 +113,7 @@ export async function openDocument(
     return null // the new window shows it — the caller must NOT setDoc
   }
 
+  if (!(await confirmRepoTrust(folder, event.sender))) return null
   const info = await loadDoc(folder, kind, event.sender) // overlay → calling window
   if (!info) return null
   bindSession(event.sender, info)
