@@ -465,7 +465,7 @@ esac`)
     // Pre-fix / relocated thread: its session was primed at the user checkout,
     // which the op worktree doesn't grant — resuming it fails "Permission denied".
     seedThread(root, {
-      threadId: 'T1',
+      threadId: '11111111-1111-4111-8111-111111111111',
       sessionId: 'poison-session-id',
       primedWorkdir: root, // ≠ the op worktree
       blockIds: ['main.tex#h'],
@@ -475,7 +475,7 @@ esac`)
     await invoke('document:open', root)
 
     const res = (await invoke('claude:runTurn', {
-      threadId: 'T1',
+      threadId: '11111111-1111-4111-8111-111111111111',
       sessionId: 'poison-session-id', // renderer's stale hint — must be ignored
       instruction: 'elaborate more',
       spans: [{ file: 'main.tex', startLine: 3, endLine: 3 }],
@@ -485,8 +485,8 @@ esac`)
     expect(readFileSync(argvLog, 'utf8')).not.toContain('poison-session-id') // never resumed
     expect(res.proposal).not.toBeNull() // the fresh session did the edit
     expect(res.sessionId).not.toBe('poison-session-id') // a new id took over
-    const rec = readThread(root, 'T1')
-    expect(rec.primedWorkdir).toBe(worktreeFor(root, 'T1')) // re-primed in the fork worktree
+    const rec = readThread(root, '11111111-1111-4111-8111-111111111111')
+    expect(rec.primedWorkdir).toBe(worktreeFor(root, '11111111-1111-4111-8111-111111111111')) // re-primed in the fork worktree
     expect(rec.sessionId).toBe(res.sessionId)
   }, 20_000)
 
@@ -495,9 +495,9 @@ esac`)
     const argvLog = join(makeDir('stanza-thread-argv-'), 'argv.log')
     vi.stubEnv('STANZA_CLAUDE_BIN', threadStub(argvLog))
     seedThread(root, {
-      threadId: 'T2',
+      threadId: '22222222-2222-4222-8222-222222222222',
       sessionId: 'good-session-id',
-      primedWorkdir: worktreeFor(root, 'T2'), // already primed in THIS fork worktree
+      primedWorkdir: worktreeFor(root, '22222222-2222-4222-8222-222222222222'), // already primed in THIS fork worktree
       blockIds: ['main.tex#h'],
       turns: [],
       ts: '2026-01-01',
@@ -505,7 +505,7 @@ esac`)
     await invoke('document:open', root)
 
     const res = (await invoke('claude:runTurn', {
-      threadId: 'T2',
+      threadId: '22222222-2222-4222-8222-222222222222',
       sessionId: 'good-session-id',
       instruction: 'continue',
       spans: [{ file: 'main.tex', startLine: 3, endLine: 3 }],
@@ -523,9 +523,9 @@ esac`)
     const argvLog = join(makeDir('stanza-thread-argv-'), 'argv.log')
     vi.stubEnv('STANZA_CLAUDE_BIN', threadStub(argvLog))
     seedThread(root, {
-      threadId: 'T3',
+      threadId: '33333333-3333-4333-8333-333333333333',
       sessionId: 'shot-session-id',
-      primedWorkdir: worktreeFor(root, 'T3'),
+      primedWorkdir: worktreeFor(root, '33333333-3333-4333-8333-333333333333'),
       blockIds: ['main.tex#h'],
       turns: [],
       ts: '2026-01-01',
@@ -533,7 +533,7 @@ esac`)
     await invoke('document:open', root)
 
     await invoke('claude:runTurn', {
-      threadId: 'T3',
+      threadId: '33333333-3333-4333-8333-333333333333',
       sessionId: 'shot-session-id',
       instruction: 'explain this rendering',
       spans: [{ file: 'main.tex', startLine: 3, endLine: 3 }],

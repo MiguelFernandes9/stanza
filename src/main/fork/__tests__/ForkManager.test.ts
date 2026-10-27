@@ -102,11 +102,48 @@ describe('ForkManager — fork allocation', () => {
 
   test('getOrCreate returns the same fork for a stable id (a persistent chat)', () => {
     const fm = new ForkManager(new FakeGit(), base, 4)
-    const first = fm.getOrCreate('thread-7', { kind: 'doc' }, 'persistent')
-    const again = fm.getOrCreate('thread-7', { kind: 'blocks', spans: [] }, 'persistent')
+    const threadId = randomUUID()
+    const first = fm.getOrCreate(threadId, { kind: 'doc' }, 'persistent')
+    const again = fm.getOrCreate(threadId, { kind: 'blocks', spans: [] }, 'persistent')
     expect(again).toBe(first) // same worktree across turns
-    expect(first.worktreeDir).toBe(join(base, 'thread-7'))
+    expect(first.worktreeDir).toBe(join(base, threadId))
     expect(fm.list()).toHaveLength(1)
+  })
+})
+
+describe('ForkManager — renderer-supplied fork ids', () => {
+  // A thread id arrives over IPC and becomes a path segment that is later
+  // rmSync'd — it must be a UUID, never a path.
+  test.each([
+    ['a parent traversal', '../../../../Users/me'],
+    ['a nested traversal', `${'a'.repeat(8)}/../..`],
+    ['an absolute path', '/Users/me/Documents'],
+    ['a non-UUID name', 'thread-7'],
+    ['a UUID with a suffix', `${'0'.repeat(8)}-0000-0000-0000-${'0'.repeat(12)}/x`],
+    ['empty', ''],
+  ])('getOrCreate rejects %s', (_label, id) => {
+    const fm = new ForkManager(new FakeGit(), base, 4)
+    expect(() => fm.getOrCreate(id, { kind: 'doc' }, 'persistent')).toThrow('INVALID_FORK_ID')
+    expect(fm.list()).toHaveLength(0)
+  })
+
+  test('an uppercase UUID is accepted (crypto.randomUUID shape, any case)', () => {
+    const fm = new ForkManager(new FakeGit(), base, 4)
+    const id = randomUUID().toUpperCase()
+    expect(fm.getOrCreate(id, { kind: 'doc' }, 'persistent').worktreeDir).toBe(join(base, id))
+  })
+
+  test('a traversal id never reaches rmSync: the victim dir survives', async () => {
+    const victim = mkdtempSync(join(tmpdir(), 'stanza-fm-victim-'))
+    try {
+      const fm = new ForkManager(new FakeGit(), base, 4)
+      const rel = join('..', victim.slice(victim.lastIndexOf('/') + 1))
+      expect(() => fm.getOrCreate(rel, { kind: 'doc' }, 'persistent')).toThrow('INVALID_FORK_ID')
+      await fm.close(rel)
+      expect(existsSync(victim)).toBe(true)
+    } finally {
+      rmSync(victim, { recursive: true, force: true })
+    }
   })
 })
 
