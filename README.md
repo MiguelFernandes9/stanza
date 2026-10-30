@@ -2,6 +2,7 @@
   <img src="build/icon.png" width="96" alt="Stanza" />
 </p>
 <h1 align="center">Stanza</h1>
+<p align="center"><a href="https://github.com/MiguelFernandes9/stanza/actions/workflows/ci.yml"><img src="https://github.com/MiguelFernandes9/stanza/actions/workflows/ci.yml/badge.svg" alt="CI" /></a></p>
 <p align="center"><strong>Overleaf, with Claude.</strong> A macOS desktop app for writing LaTeX the way you read it — edit in the rendered PDF, with Claude as a block-level editing partner.</p>
 
 A LaTeX project is parsed into addressable blocks. You select a block — a
